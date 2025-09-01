@@ -15,8 +15,8 @@ import os
 from pathlib import Path
 import json
 
-# Path to MLDP main project
-MLDP_ROOT = Path(__file__).parent.parent.parent / "mldp"
+# Path to MLDP main project (mldp_cli is now a submodule inside mldp)
+MLDP_ROOT = Path(__file__).parent.parent.parent
 
 
 @click.group()

@@ -25,8 +25,8 @@ import json
 from datetime import datetime
 import shlex
 
-# Path to MLDP main project
-MLDP_ROOT = Path(__file__).parent.parent.parent / "mldp"
+# Path to MLDP main project (mldp_cli is now a submodule inside mldp)
+MLDP_ROOT = Path(__file__).parent.parent.parent
 
 # Define style for the prompt
 style = Style.from_dict({

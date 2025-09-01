@@ -37,4 +37,5 @@ setup(
             "mldp-basic-shell=interactive_cli:main",
         ],
     },
+    py_modules=["mldp", "cli", "mldp_shell", "interactive_cli"],
 )
