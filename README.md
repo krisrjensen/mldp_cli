@@ -1,6 +1,6 @@
 # MLDP CLI
 
-Master command-line interface for orchestrating all MLDP (Machine Learning Data Processing) tools.
+Master command-line interface for orchestrating all MLDP (Machine Learning Data Processing) tools with both traditional CLI and interactive shell modes.
 
 ## Purpose
 
@@ -11,6 +11,16 @@ MLDP CLI provides a unified interface to all existing MLDP tools, including:
 - Experiment management
 - Data processing pipelines
 
+## Features
+
+✨ **NEW: Interactive Shell Mode**
+- Tab completion for commands and arguments
+- Command history with arrow keys
+- Persistent session state
+- Dynamic prompt showing current settings
+- Built-in SQL query interface
+- Export results to CSV/JSON
+
 ## Installation
 
 ```bash
@@ -20,6 +30,60 @@ pip install -e .
 This will install the `mldp` command globally.
 
 ## Usage
+
+### Interactive Shell Mode (Recommended)
+
+Launch the interactive MLDP shell for a full CLI experience:
+
+```bash
+# Launch interactive shell
+mldp
+
+# Or explicitly request shell mode
+mldp shell
+```
+
+The shell provides a persistent session with:
+- **Tab Completion**: Press Tab to complete commands
+- **Command History**: Use ↑/↓ arrows for previous commands
+- **Session State**: Maintains database connection and settings
+- **Dynamic Prompt**: Shows `mldp[exp18:l2]>` with current config
+
+#### Shell Commands
+```bash
+# Database
+mldp> connect                      # Connect to PostgreSQL
+mldp> query SELECT * FROM segments LIMIT 10
+mldp> tables experiment*           # List matching tables
+mldp> stats                        # Show distance statistics
+
+# Distance Operations
+mldp> calculate --segment-size 8192 --distance-type euclidean
+mldp> insert_distances --distance-type l2
+mldp> closest 20                   # Find 20 closest pairs
+
+# Visualization
+mldp> heatmap --version 7
+mldp> histogram --bins 100
+mldp> visualize --segment-id 12345
+mldp> browser                      # Launch database browser
+
+# Settings
+mldp> set experiment 18            # Change experiment ID
+mldp> set distance l2              # Change distance type
+mldp> show                         # Display current settings
+
+# Utilities
+mldp> verify                       # Check tool availability
+mldp> export results.csv           # Export last query
+mldp> clear                        # Clear screen
+mldp> help                         # Show all commands
+mldp> exit                         # Leave shell
+```
+
+### Command-Line Mode
+
+For scripting and automation, use traditional command-line syntax:
 
 ### List Available Tools
 ```bash

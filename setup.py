@@ -25,10 +25,16 @@ setup(
     install_requires=[
         "click>=8.1.0",
         "python-dotenv>=1.0.0",
+        "psycopg2-binary>=2.9.0",
+        "tabulate>=0.9.0",
+        "prompt-toolkit>=3.0.0",
     ],
     entry_points={
         "console_scripts": [
-            "mldp=mldp_cli.cli:main",
+            "mldp=mldp:main",
+            "mldp-cli=cli:cli",
+            "mldp-shell=mldp_shell:main",
+            "mldp-basic-shell=interactive_cli:main",
         ],
     },
 )
