@@ -521,6 +521,191 @@ def segment_distribution(segment_size, output_format):
 
 
 @cli.group()
+def servers():
+    """Server management (start, stop, status, restart)"""
+    pass
+
+
+@servers.command()
+@click.pass_context
+def start(ctx):
+    """Start all MLDP servers"""
+    scripts_path = ctx.obj['mldp_root'] / "scripts" / "start_services.sh"
+    
+    if not scripts_path.exists():
+        click.echo(f"Error: start_services.sh not found at {scripts_path}")
+        sys.exit(1)
+    
+    click.echo("Starting all MLDP servers...")
+    click.echo("=" * 60)
+    
+    try:
+        result = subprocess.run(
+            ["bash", str(scripts_path)],
+            capture_output=False,
+            text=True,
+            cwd=str(ctx.obj['mldp_root'])
+        )
+        if result.returncode == 0:
+            click.echo("\n✅ All servers started successfully!")
+        else:
+            click.echo("\n⚠️  Some servers may have failed to start")
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error starting servers: {e}")
+        sys.exit(1)
+
+
+@servers.command()
+@click.pass_context
+def stop(ctx):
+    """Stop all MLDP servers"""
+    scripts_path = ctx.obj['mldp_root'] / "scripts" / "stop_services.sh"
+    
+    if not scripts_path.exists():
+        click.echo(f"Error: stop_services.sh not found at {scripts_path}")
+        sys.exit(1)
+    
+    click.echo("Stopping all MLDP servers...")
+    
+    try:
+        result = subprocess.run(
+            ["bash", str(scripts_path)],
+            capture_output=True,
+            text=True,
+            cwd=str(ctx.obj['mldp_root'])
+        )
+        click.echo(result.stdout)
+        if result.returncode == 0:
+            click.echo("✅ All servers stopped successfully!")
+        else:
+            click.echo("⚠️  Some servers may still be running")
+    except Exception as e:
+        click.echo(f"Error stopping servers: {e}")
+        sys.exit(1)
+
+
+@servers.command()
+@click.pass_context
+def status(ctx):
+    """Check status of all MLDP servers"""
+    operation_pid_path = ctx.obj['mldp_root'] / "operation" / "pid"
+    
+    services = [
+        ("real_time_sync_hub", 5035, "Real-Time Sync Hub"),
+        ("database_browser", 5020, "Database Browser"),
+        ("data_cleaning_tool", 5030, "Data Cleaning Tool"),
+        ("transient_viewer", 5031, "Transient Viewer"),
+        ("segment_visualizer", 5032, "Segment Visualizer"),
+        ("distance_visualizer", 5037, "Distance Visualizer"),
+        ("experiment_generator", 5040, "ML Experiment Generator"),
+        ("jupyter_integration", 5041, "Jupyter Integration"),
+        ("segment_verifier", 5034, "Segment Verifier"),
+    ]
+    
+    click.echo("\n📊 MLDP Server Status")
+    click.echo("=" * 60)
+    click.echo(f"{'Service':<30} {'Port':<8} {'PID':<10} {'Status'}")
+    click.echo("-" * 60)
+    
+    running_count = 0
+    total_count = len(services)
+    
+    for service_name, port, display_name in services:
+        pid_file = operation_pid_path / f"{service_name}.pid"
+        
+        status = "❓ Unknown"
+        pid = "-"
+        
+        if pid_file.exists():
+            try:
+                with open(pid_file, 'r') as f:
+                    pid = f.read().strip()
+                
+                # Check if process is running
+                import psutil
+                try:
+                    process = psutil.Process(int(pid))
+                    if process.is_running():
+                        status = "✅ Running"
+                        running_count += 1
+                    else:
+                        status = "❌ Not Running"
+                except (psutil.NoSuchProcess, ValueError):
+                    status = "❌ Stale PID"
+            except Exception:
+                status = "❌ Error"
+        else:
+            status = "⏹️  Stopped"
+        
+        click.echo(f"{display_name:<30} {port:<8} {pid:<10} {status}")
+    
+    click.echo("-" * 60)
+    click.echo(f"Summary: {running_count}/{total_count} services running")
+    
+    if running_count == total_count:
+        click.echo("\n🎉 All services are running!")
+    elif running_count == 0:
+        click.echo("\n⚠️  No services are running. Use 'mldp servers start' to start them.")
+    else:
+        click.echo(f"\n⚠️  Only {running_count}/{total_count} services are running.")
+
+
+@servers.command()
+@click.pass_context
+def restart(ctx):
+    """Restart all MLDP servers"""
+    click.echo("Restarting all MLDP servers...")
+    click.echo("=" * 60)
+    
+    # Stop servers
+    ctx.invoke(stop)
+    
+    # Wait a moment
+    import time
+    click.echo("\n⏳ Waiting for services to shut down...")
+    time.sleep(3)
+    
+    # Start servers
+    ctx.invoke(start)
+
+
+@servers.command()
+@click.option('--service', help='Specific service to show logs for')
+@click.option('--lines', default=50, help='Number of lines to show')
+@click.pass_context
+def logs(ctx, service, lines):
+    """View server logs"""
+    logs_path = ctx.obj['mldp_root'] / "operation" / "logs"
+    
+    if service:
+        log_file = logs_path / f"{service}.log"
+        if log_file.exists():
+            click.echo(f"\n📋 Last {lines} lines of {service}.log:")
+            click.echo("=" * 60)
+            result = subprocess.run(
+                ["tail", f"-{lines}", str(log_file)],
+                capture_output=True,
+                text=True
+            )
+            click.echo(result.stdout)
+        else:
+            click.echo(f"Log file not found: {log_file}")
+    else:
+        # Show available log files
+        click.echo("\n📁 Available log files:")
+        click.echo("=" * 60)
+        if logs_path.exists():
+            for log_file in sorted(logs_path.glob("*.log")):
+                size = log_file.stat().st_size
+                size_str = f"{size / 1024:.1f}K" if size < 1024*1024 else f"{size / (1024*1024):.1f}M"
+                click.echo(f"  {log_file.name:<40} {size_str:>10}")
+            click.echo("\nUse 'mldp servers logs --service <name>' to view specific logs")
+        else:
+            click.echo("No logs directory found")
+
+
+@cli.group()
 def experiment():
     """Experiment generation and management"""
     pass
@@ -639,6 +824,180 @@ def list_tools(ctx):
     click.echo("\n" + "=" * 60)
     click.echo("Use 'mldp <group> <command> --help' for detailed help")
     click.echo("Example: mldp distance calculate --help")
+
+
+@cli.group(name='segment-fileset')
+def segment_fileset():
+    """Generate and manage segment filesets with decimation and data types"""
+    pass
+
+
+@segment_fileset.command()
+@click.option('--experiment-id', type=int, default=18, help='Experiment ID')
+@click.option('--segment-size', type=int, default=262144, help='Segment size (must be 2^N)')
+@click.option('--decimation', type=int, multiple=True, default=[0], 
+              help='Decimation factors (0=none, or use 2^n-1 values like 1,3,7,15,31,63,127,255...)')
+@click.option('--data-type', type=click.Choice(['RAW', 'ADC8', 'ADC6', 'ADC4', 'INT8', 'INT16']), 
+              multiple=True, default=['RAW'], help='Data types to generate')
+@click.option('--file-range', help='File ID range from experiment_018_file_training_data (e.g., 200-500)')
+@click.option('--workers', type=int, default=16, help='Number of parallel workers')
+@click.option('--output-path', default='/Volumes/ArcData/V3_database/experiment18/segment_files',
+              help='Output directory for segment files (experiment-specific)')
+@click.pass_context
+def generate(ctx, experiment_id, segment_size, decimation, data_type, file_range, workers, output_path):
+    """Generate segment fileset from experiment files with 2^N preservation"""
+    import math
+    from pathlib import Path
+    import psycopg2
+    
+    # Validate segment size is 2^N
+    if segment_size & (segment_size - 1) != 0:
+        click.echo(f"Error: Segment size {segment_size} is not a power of 2")
+        sys.exit(1)
+    
+    # Validate decimation factors preserve 2^N segments
+    for dec_factor in decimation:
+        if dec_factor > 0:
+            # For 2^n-1 decimation (e.g., keep every nth sample)
+            decimated_size = segment_size // (dec_factor + 1)
+            if decimated_size * (dec_factor + 1) != segment_size:
+                click.echo(f"Warning: Decimation factor {dec_factor} doesn't evenly divide {segment_size}")
+                click.echo(f"  Would produce {decimated_size} samples, losing {segment_size - decimated_size * (dec_factor + 1)} samples")
+                # Check if result is still power of 2
+                if decimated_size & (decimated_size - 1) != 0:
+                    click.echo(f"  ERROR: Result {decimated_size} is not a power of 2!")
+                    sys.exit(1)
+    
+    click.echo(f"Generating segment fileset for experiment {experiment_id}")
+    click.echo(f"  Segment size: {segment_size} (2^{int(math.log2(segment_size))})")
+    click.echo(f"  Decimation factors: {list(decimation)}")
+    click.echo(f"  Data types: {list(data_type)}")
+    click.echo(f"  Output path: {output_path}")
+    
+    # Get files from experiment_018_file_training_data
+    conn = psycopg2.connect(
+        host='localhost',
+        port=5432,
+        database='arc_detection',
+        user='kjensen'
+    )
+    cursor = conn.cursor()
+    
+    try:
+        # Build query for files
+        if file_range:
+            parts = file_range.split('-')
+            if len(parts) == 2:
+                min_id, max_id = int(parts[0]), int(parts[1])
+                cursor.execute("""
+                    SELECT DISTINCT file_id, assigned_label 
+                    FROM experiment_018_file_training_data 
+                    WHERE experiment_id = %s AND file_id BETWEEN %s AND %s
+                    ORDER BY file_id
+                """, (experiment_id, min_id, max_id))
+            else:
+                click.echo(f"Invalid file range format: {file_range}")
+                sys.exit(1)
+        else:
+            cursor.execute("""
+                SELECT DISTINCT file_id, assigned_label 
+                FROM experiment_018_file_training_data 
+                WHERE experiment_id = %s
+                ORDER BY file_id
+            """, (experiment_id,))
+        
+        files = cursor.fetchall()
+        click.echo(f"\nFound {len(files)} files in experiment {experiment_id}")
+        
+        if len(files) > 0:
+            click.echo("\nSample files:")
+            for file_id, label in files[:5]:
+                click.echo(f"  File {file_id}: {label}")
+            
+            # Check segments for these files
+            cursor.execute("""
+                SELECT COUNT(DISTINCT segment_id) 
+                FROM experiment_018_segment_training_data 
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            segment_count = cursor.fetchone()[0]
+            click.echo(f"\nTotal segments in experiment: {segment_count}")
+            
+    except Exception as e:
+        click.echo(f"Database error: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    
+    click.echo("\n⚠️  Full segment generation implementation pending")
+    click.echo("Next steps:")
+    click.echo("  1. Load raw files from /Volumes/ArcData/V3_database/fileset/")
+    click.echo("  2. Create segments matching experiment_018_segment_training_data")
+    click.echo("  3. Apply decimation preserving 2^N samples")
+    click.echo("  4. Apply data type conversions")
+    click.echo("  5. Save to segment_fileset with proper naming")
+
+
+@segment_fileset.command()
+@click.option('--experiment-id', type=int, default=18, help='Experiment ID')
+@click.pass_context
+def status(ctx, experiment_id):
+    """Check segment fileset generation status"""
+    import psycopg2
+    from pathlib import Path
+    
+    output_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/segment_files')
+    
+    # Check database status
+    conn = psycopg2.connect(
+        host='localhost',
+        port=5432,
+        database='arc_detection',
+        user='kjensen'
+    )
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT COUNT(DISTINCT file_id) as file_count,
+                   COUNT(DISTINCT segment_id) as segment_count,
+                   COUNT(*) as total_training_segments
+            FROM experiment_018_segment_training_data
+            WHERE experiment_id = %s
+        """, (experiment_id,))
+        
+        result = cursor.fetchone()
+        if result:
+            click.echo(f"Experiment {experiment_id} Database Status:")
+            click.echo(f"  Files in training: {result[0]}")
+            click.echo(f"  Unique segments: {result[1]}")
+            click.echo(f"  Total training entries: {result[2]}")
+            
+    except Exception as e:
+        click.echo(f"Database error: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # Check filesystem status
+    if not output_path.exists():
+        click.echo(f"\nSegment fileset directory does not exist: {output_path}")
+        return
+    
+    segment_files = list(output_path.glob("*.npy"))
+    click.echo(f"\nFilesystem Status:")
+    click.echo(f"  Found {len(segment_files)} segment files in {output_path}")
+    
+    if segment_files:
+        # Analyze file patterns
+        decimations = set()
+        for f in segment_files[:100]:  # Sample first 100
+            if '_D' in f.name:
+                dec_part = f.name.split('_D')[1].split('.')[0]
+                decimations.add(int(dec_part))
+        
+        if decimations:
+            click.echo(f"  Decimation factors found: {sorted(decimations)}")
 
 
 @cli.command()

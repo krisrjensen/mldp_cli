@@ -65,6 +65,16 @@ class MLDPCompleter(Completer):
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
             'show': [],
             
+            # Server Management
+            'servers': ['start', 'stop', 'restart', 'status', 'logs'],
+            'start': [],
+            'stop': [],
+            'restart': [],
+            'status': [],
+            'logs': ['real_time_sync_hub', 'database_browser', 'data_cleaning_tool', 
+                    'transient_viewer', 'segment_visualizer', 'distance_visualizer',
+                    'experiment_generator', 'jupyter_integration', 'segment_verifier'],
+            
             # Utilities
             'verify': [],
             'clear': [],
@@ -145,6 +155,18 @@ class MLDPShell:
             'help': self.cmd_help,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
+            # Server management commands
+            'servers': self.cmd_servers,
+            'start': self.cmd_servers_start,
+            'stop': self.cmd_servers_stop,
+            'restart': self.cmd_servers_restart,
+            'status': self.cmd_servers_status,
+            'logs': self.cmd_servers_logs,
+            # Segment generation commands
+            'segment-generate': self.cmd_segment_generate,
+            'segment-status': self.cmd_segment_status,
+            'segment-test': self.cmd_segment_test,
+            'segment-validate': self.cmd_segment_validate,
         }
     
     def get_prompt(self):
@@ -764,6 +786,14 @@ class MLDPShell:
   set <param> <value>                 Set configuration (experiment, distance)
   show                                Show current settings
 
+🖥️  SERVER MANAGEMENT:
+  start                               Start all MLDP servers
+  stop                                Stop all MLDP servers
+  restart                             Restart all MLDP servers
+  status                              Check status of all servers
+  logs [service] [lines]              View server logs
+  servers <command>                   Server management (start/stop/status/etc)
+
 🛠️  UTILITIES:
   verify                              Verify MLDP tools
   clear                               Clear screen
@@ -786,6 +816,432 @@ class MLDPShell:
             self.db_conn.close()
         print("\n👋 Goodbye! Thank you for using MLDP.")
         self.running = False
+    
+    # ========== Server Management Commands ==========
+    
+    def cmd_servers(self, args):
+        """Server management - show help for server commands"""
+        if args and args[0] in ['start', 'stop', 'restart', 'status', 'logs']:
+            # Handle subcommands
+            if args[0] == 'start':
+                self.cmd_servers_start([])
+            elif args[0] == 'stop':
+                self.cmd_servers_stop([])
+            elif args[0] == 'restart':
+                self.cmd_servers_restart([])
+            elif args[0] == 'status':
+                self.cmd_servers_status([])
+            elif args[0] == 'logs':
+                self.cmd_servers_logs(args[1:])
+        else:
+            print("""
+🖥️  Server Management Commands:
+────────────────────────────────
+  servers start    - Start all MLDP servers
+  servers stop     - Stop all MLDP servers
+  servers restart  - Restart all MLDP servers
+  servers status   - Check status of all servers
+  servers logs     - View server logs
+  
+  Shortcuts:
+  start            - Start all servers
+  stop             - Stop all servers
+  restart          - Restart all servers
+  status           - Check server status
+  logs [service]   - View logs
+""")
+    
+    def cmd_servers_start(self, args):
+        """Start all MLDP servers"""
+        scripts_path = MLDP_ROOT / "scripts" / "start_services.sh"
+        
+        if not scripts_path.exists():
+            print(f"❌ start_services.sh not found at {scripts_path}")
+            return
+        
+        print("🚀 Starting all MLDP servers...")
+        print("This may take a moment...")
+        print("─" * 60)
+        
+        try:
+            result = subprocess.run(
+                ["bash", str(scripts_path)],
+                capture_output=False,
+                text=True,
+                cwd=str(MLDP_ROOT)
+            )
+            if result.returncode == 0:
+                print("\n✅ All servers started successfully!")
+                print("\nUse 'status' to check server status")
+            else:
+                print("\n⚠️  Some servers may have failed to start")
+                print("Use 'status' to check which services are running")
+        except Exception as e:
+            print(f"❌ Error starting servers: {e}")
+    
+    def cmd_servers_stop(self, args):
+        """Stop all MLDP servers"""
+        scripts_path = MLDP_ROOT / "scripts" / "stop_services.sh"
+        
+        if not scripts_path.exists():
+            print(f"❌ stop_services.sh not found at {scripts_path}")
+            return
+        
+        print("🛑 Stopping all MLDP servers...")
+        
+        try:
+            result = subprocess.run(
+                ["bash", str(scripts_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(MLDP_ROOT)
+            )
+            print(result.stdout)
+            if result.returncode == 0:
+                print("✅ All servers stopped successfully!")
+            else:
+                print("⚠️  Some servers may still be running")
+                print("Use 'status' to check")
+        except Exception as e:
+            print(f"❌ Error stopping servers: {e}")
+    
+    def cmd_servers_restart(self, args):
+        """Restart all MLDP servers"""
+        print("🔄 Restarting all MLDP servers...")
+        print("─" * 60)
+        
+        # Stop servers
+        self.cmd_servers_stop([])
+        
+        # Wait
+        import time
+        print("\n⏳ Waiting for services to shut down...")
+        time.sleep(3)
+        
+        # Start servers
+        self.cmd_servers_start([])
+    
+    def cmd_servers_status(self, args):
+        """Check status of all MLDP servers"""
+        operation_pid_path = MLDP_ROOT / "operation" / "pid"
+        
+        services = [
+            ("real_time_sync_hub", 5035, "Real-Time Sync Hub"),
+            ("database_browser", 5020, "Database Browser"),
+            ("data_cleaning_tool", 5030, "Data Cleaning Tool"),
+            ("transient_viewer", 5031, "Transient Viewer"),
+            ("segment_visualizer", 5032, "Segment Visualizer"),
+            ("distance_visualizer", 5037, "Distance Visualizer"),
+            ("experiment_generator", 5040, "ML Experiment Generator"),
+            ("jupyter_integration", 5041, "Jupyter Integration"),
+            ("segment_verifier", 5034, "Segment Verifier"),
+        ]
+        
+        print("\n📊 MLDP Server Status")
+        print("=" * 70)
+        print(f"{'Service':<30} {'Port':<8} {'PID':<10} {'Status':<15} {'URL'}")
+        print("-" * 70)
+        
+        running_count = 0
+        total_count = len(services)
+        
+        for service_name, port, display_name in services:
+            pid_file = operation_pid_path / f"{service_name}.pid"
+            
+            status = "❓ Unknown"
+            pid_str = "-"
+            url = f"http://localhost:{port}"
+            
+            if pid_file.exists():
+                try:
+                    with open(pid_file, 'r') as f:
+                        pid_str = f.read().strip()
+                    
+                    # Check if process is running using ps command
+                    result = subprocess.run(
+                        ["ps", "-p", pid_str],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode == 0:
+                        status = "✅ Running"
+                        running_count += 1
+                    else:
+                        status = "❌ Not Running"
+                        url = "-"
+                except Exception:
+                    status = "❌ Error"
+                    url = "-"
+            else:
+                status = "⏹️  Stopped"
+                url = "-"
+            
+            print(f"{display_name:<30} {port:<8} {pid_str:<10} {status:<15} {url}")
+        
+        print("-" * 70)
+        print(f"Summary: {running_count}/{total_count} services running")
+        
+        if running_count == total_count:
+            print("\n🎉 All services are running!")
+        elif running_count == 0:
+            print("\n⚠️  No services are running. Use 'start' to start them.")
+        else:
+            print(f"\n⚠️  Only {running_count}/{total_count} services are running.")
+            print("Use 'restart' to restart all services.")
+    
+    def cmd_servers_logs(self, args):
+        """View server logs"""
+        logs_path = MLDP_ROOT / "operation" / "logs"
+        
+        if args and len(args) > 0:
+            service = args[0]
+            lines = int(args[1]) if len(args) > 1 else 50
+            
+            log_file = logs_path / f"{service}.log"
+            if log_file.exists():
+                print(f"\n📋 Last {lines} lines of {service}.log:")
+                print("=" * 60)
+                result = subprocess.run(
+                    ["tail", f"-{lines}", str(log_file)],
+                    capture_output=True,
+                    text=True
+                )
+                print(result.stdout)
+            else:
+                print(f"❌ Log file not found: {log_file}")
+                print("\nAvailable services:")
+                for log_file in sorted(logs_path.glob("*.log")):
+                    print(f"  • {log_file.stem}")
+        else:
+            # Show available log files
+            print("\n📁 Available log files:")
+            print("=" * 60)
+            if logs_path.exists():
+                log_files = list(logs_path.glob("*.log"))
+                if log_files:
+                    for log_file in sorted(log_files):
+                        size = log_file.stat().st_size
+                        size_str = f"{size / 1024:.1f}K" if size < 1024*1024 else f"{size / (1024*1024):.1f}M"
+                        print(f"  {log_file.stem:<30} {size_str:>10}")
+                    print("\nUsage: logs <service> [lines]")
+                    print("Example: logs real_time_sync_hub 100")
+                else:
+                    print("No log files found")
+            else:
+                print("❌ Logs directory not found")
+    
+    def cmd_segment_generate(self, args):
+        """Generate segment fileset for experiment"""
+        try:
+            from .segment_processor import SegmentFilesetProcessor
+        except ImportError:
+            # Fallback for when running as script
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(__file__))
+            from segment_processor import SegmentFilesetProcessor
+        
+        # Parse arguments
+        # args is already a list from the shell parser
+        parts = args if isinstance(args, list) else args.split()
+        if not parts or parts[0] != 'exp18':
+            print("Usage: segment-generate exp18 [options]")
+            print("Options:")
+            print("  --files <range>   File range (e.g., 200-210)")
+            print("  --types <list>    Data types (comma-separated)")
+            print("  --decimations <list>  Decimation factors (comma-separated)")
+            print("  --sizes <list>    Segment sizes to process (comma-separated)")
+            print("                    Available: 8192,32768,65536,262144,524288")
+            return
+        
+        # Check for options
+        file_range = None
+        data_types = None
+        decimations = None
+        sizes = None
+        
+        for i, part in enumerate(parts):
+            if part == '--files' and i + 1 < len(parts):
+                file_range = parts[i + 1]
+            elif part == '--types' and i + 1 < len(parts):
+                data_types = parts[i + 1].split(',')
+            elif part == '--decimations' and i + 1 < len(parts):
+                decimations = [int(d) for d in parts[i + 1].split(',')]
+            elif part == '--sizes' and i + 1 < len(parts):
+                sizes = [int(s) for s in parts[i + 1].split(',')]
+        
+        # Use defaults for experiment 18
+        if decimations is None:
+            decimations = [1, 3, 7, 15, 31, 63, 127, 255, 511]
+        if data_types is None:
+            data_types = ['ADC14', 'ADC12', 'ADC10', 'ADC8', 'ADC6']
+        
+        # Note: decimation 0 means no decimation (keep all samples)
+        
+        print("\n" + "="*70)
+        print("Starting Experiment 18 Segment Generation")
+        print("="*70)
+        print(f"Decimations: {decimations}")
+        print(f"Data Types: {data_types}")
+        print(f"File Range: {file_range if file_range else 'all files'}")
+        print(f"Segment Sizes: {sizes if sizes else 'all available (8192,32768,65536,262144,524288)'}")
+        
+        # Estimate file count
+        if file_range:
+            parts = file_range.split('-')
+            if len(parts) == 2:
+                num_files = int(parts[1]) - int(parts[0]) + 1
+            else:
+                num_files = 1
+        else:
+            num_files = 750  # Approximate total files in experiment 18
+        
+        # Estimate segments per file based on sizes filter
+        if sizes:
+            # Rough estimate based on typical distribution when filtering by size
+            segments_per_file = len(sizes) * 2  # ~2 segments per size per file on average
+        else:
+            segments_per_file = 13  # Average when processing all sizes
+        
+        estimated_files = num_files * segments_per_file * len(decimations) * len(data_types)
+        print(f"\nEstimated files to generate: ~{estimated_files:,}")
+        
+        # Confirm
+        response = input("\nProceed? (y/n): ")
+        if response.lower() != 'y':
+            print("Generation cancelled.")
+            return
+        
+        # Create processor and run
+        print("\nInitializing processor...")
+        processor = SegmentFilesetProcessor(experiment_id=18)
+        
+        print("Starting generation (this may take several hours)...")
+        stats = processor.generate(
+            decimations=decimations,
+            data_types=data_types,
+            file_range=file_range,
+            sizes=sizes,
+            workers=16
+        )
+        
+        print("\n✅ Generation complete!")
+    
+    def cmd_segment_status(self, args):
+        """Check segment generation status"""
+        from pathlib import Path
+        import json
+        
+        base_path = Path('/Volumes/ArcData/V3_database/experiment018/segment_files')
+        progress_file = base_path / 'generation_progress.json'
+        
+        print("\n📊 Segment Generation Status")
+        print("="*60)
+        
+        # Check progress file
+        if progress_file.exists():
+            with open(progress_file, 'r') as f:
+                progress = json.load(f)
+                completed = progress.get('completed', [])
+                print(f"Segments processed: {len(completed):,}")
+        else:
+            print("No generation in progress")
+        
+        # Count existing files
+        total_files = 0
+        for pattern in ['S*/T*/D*/*.npy']:
+            files = list(base_path.glob(pattern))
+            total_files += len(files)
+        
+        print(f"Total segment files: {total_files:,}")
+        
+        # Show breakdown by size
+        print("\nBreakdown by segment size:")
+        for size in [8192, 32768, 65536, 131072, 262144, 524288]:
+            size_files = list(base_path.glob(f"S{size:06d}/*/*/*.npy"))
+            if size_files:
+                print(f"  {size:7d} samples: {len(size_files):,} files")
+        
+        # Show breakdown by type
+        print("\nBreakdown by data type:")
+        for data_type in ['TRAW', 'TADC14', 'TADC12', 'TADC10', 'TADC8', 'TADC6']:
+            type_files = list(base_path.glob(f"*/T{data_type}/*/*.npy"))
+            if type_files:
+                print(f"  {data_type}: {len(type_files):,} files")
+    
+    def cmd_segment_test(self, args):
+        """Test segment generation with small dataset"""
+        try:
+            from .segment_processor import SegmentFilesetProcessor
+        except ImportError:
+            # Fallback for when running as script
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(__file__))
+            from segment_processor import SegmentFilesetProcessor
+        
+        print("\n🧪 Testing Segment Generation")
+        print("="*60)
+        print("Test parameters:")
+        print("  Files: 200-201 (2 files)")
+        print("  Decimations: [1, 3]")
+        print("  Data Types: [ADC12, ADC8]")
+        print("  Expected files: ~104 (2 files × 13 segments × 2 decimations × 2 types)")
+        
+        response = input("\nRun test? (y/n): ")
+        if response.lower() != 'y':
+            print("Test cancelled.")
+            return
+        
+        print("\nRunning test...")
+        processor = SegmentFilesetProcessor(experiment_id=18)
+        
+        stats = processor.generate(
+            decimations=[1, 3],
+            data_types=['ADC12', 'ADC8'],
+            file_range='200-201',
+            workers=2
+        )
+        
+        print("\n✅ Test complete!")
+    
+    def cmd_segment_validate(self, args):
+        """Validate generated segment files"""
+        import numpy as np
+        from pathlib import Path
+        
+        base_path = Path('/Volumes/ArcData/V3_database/experiment018/segment_files')
+        
+        print("\n🔍 Validating Segment Files")
+        print("="*60)
+        
+        # Sample some files
+        sample_files = list(base_path.glob("*/T*/*/*.npy"))[:10]
+        
+        if not sample_files:
+            print("No segment files found to validate")
+            return
+        
+        print(f"Validating {len(sample_files)} sample files...")
+        
+        for filepath in sample_files:
+            try:
+                data = np.load(filepath)
+                size = data.shape[0]
+                is_power_of_2 = (size & (size - 1)) == 0
+                
+                # Parse filename
+                filename = filepath.name
+                parts = filename.split('_')
+                segment_id = parts[0]
+                file_id = parts[1]
+                data_type = parts[3]
+                
+                status = "✅" if is_power_of_2 else "❌"
+                print(f"{status} {filename[:40]:<40} Shape: {data.shape}, 2^N: {is_power_of_2}")
+                
+            except Exception as e:
+                print(f"❌ Error validating {filepath.name}: {e}")
 
 
 def main():
