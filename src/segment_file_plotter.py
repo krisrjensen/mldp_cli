@@ -263,45 +263,56 @@ class EnhancedSegmentPlotter:
                                        current: np.ndarray, plot_options: Dict[str, Any],
                                        title: str = None) -> plt.Figure:
         """
-        Create plot in data_cleaning_tool style (dual y-axis)
-        Exact copy from tool 5030
+        Create plot in data_cleaning_tool style with separate subplots for voltage and current
         """
         data_cleaning_tool_apply_publication_settings()
         
-        fig, ax1 = plt.subplots(figsize=(16, 10))
+        # Check if we have actual current data
+        has_current = not np.allclose(current, 0)
         
-        # Plot voltage on left axis
-        color = 'tab:blue'
-        ax1.set_xlabel('Time (s)', fontsize=plt.rcParams.get('axes.labelsize', 12))
-        ax1.set_ylabel('Voltage (V)', color=color, fontsize=plt.rcParams.get('axes.labelsize', 12))
-        
-        # Use statistical plotting for voltage
-        self.plot_with_statistics(ax1, time, voltage, plot_options, "Voltage ")
-        ax1.tick_params(axis='y', labelcolor=color)
-        
-        # Create second y-axis for current
-        ax2 = ax1.twinx()
-        color = 'tab:red'
-        ax2.set_ylabel('Current (A)', color=color, fontsize=plt.rcParams.get('axes.labelsize', 12))
-        
-        # Sample current data same as voltage
-        num_points = plot_options.get('num_points', 1000)
-        if len(current) > num_points:
-            sampled = self.sample_data(current, num_points, plot_options.get('peak_detect', False))
-            sampled_time = time[sampled['indices']]
-            sampled_current = sampled['sampled']
+        if has_current:
+            # Create two subplots for voltage and current
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True, 
+                                          constrained_layout=True)
+            
+            # Plot voltage
+            ax1.set_ylabel('Voltage (V)', fontsize=11)
+            self.plot_with_statistics(ax1, time, voltage, plot_options)
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot current
+            ax2.set_ylabel('Current (A)', fontsize=11)
+            # Use statistical plotting for current if enabled
+            if any([plot_options.get(k) for k in ['plot_minimums', 'plot_maximums', 
+                                                   'plot_average', 'plot_variance', 'plot_stddev']]):
+                self.plot_with_statistics(ax2, time, current, plot_options)
+            else:
+                # Simple plot for current
+                num_points = plot_options.get('num_points', 1000)
+                if len(current) > num_points:
+                    sampled = self.sample_data(current, num_points, plot_options.get('peak_detect', False))
+                    sampled_time = time[sampled['indices']]
+                    sampled_current = sampled['sampled']
+                else:
+                    sampled_time = time
+                    sampled_current = current
+                ax2.plot(sampled_time, sampled_current, 'r-', linewidth=1)
+            
+            ax2.set_xlabel('Time (s)', fontsize=11)
+            ax2.grid(True, alpha=0.3)
         else:
-            sampled_time = time
-            sampled_current = current
-        
-        ax2.plot(sampled_time, sampled_current, color=color, 
-                linewidth=plt.rcParams.get('lines.linewidth', 1))
-        ax2.tick_params(axis='y', labelcolor=color)
+            # Single plot for voltage only
+            fig, ax1 = plt.subplots(figsize=(14, 8), constrained_layout=True)
+            
+            # Plot voltage
+            ax1.set_ylabel('Voltage (V)', fontsize=11)
+            ax1.set_xlabel('Time (s)', fontsize=11)
+            self.plot_with_statistics(ax1, time, voltage, plot_options)
+            ax1.grid(True, alpha=0.3)
         
         if title:
-            fig.suptitle(title, fontsize=plt.rcParams.get('axes.titlesize', 14))
+            fig.suptitle(title, fontsize=14, y=0.99)
         
-        plt.tight_layout()
         return fig
     
     def find_segment_files(self, original_segment: Optional[int] = None,
@@ -453,6 +464,12 @@ class EnhancedSegmentPlotter:
         """
         data = np.load(file_path)
         
+        # Parse filename to get decimation factor
+        # Format: {segment_id}_{file_id}_D{dec}_T{type}_S{size}.npy
+        filename = file_path.stem
+        parts = filename.split('_')
+        decimation = int(parts[2][1:])  # Remove 'D' prefix
+        
         # Assume data format: [voltage, current] or single channel
         if data.ndim == 2 and data.shape[1] == 2:
             voltage = data[:, 0]
@@ -461,8 +478,17 @@ class EnhancedSegmentPlotter:
             voltage = data.flatten()
             current = np.zeros_like(voltage)  # No current data
         
-        # Generate time array (assuming 40MHz sampling)
-        time = np.arange(len(voltage)) / 40e6
+        # Calculate effective sample rate after decimation
+        # Original sample rate is 40MHz, decimation reduces this
+        # Decimation factor is 2^n - 1, so we keep every (decimation+1)th sample
+        if decimation == 0:
+            effective_sample_rate = 40e6
+        else:
+            effective_sample_rate = 40e6 / (decimation + 1)
+        
+        # Generate time array with correct sample rate
+        # This preserves the total time span of the original segment
+        time = np.arange(len(voltage)) / effective_sample_rate
         
         return time, voltage, current
     
@@ -564,9 +590,9 @@ class EnhancedSegmentPlotter:
                 
                 # Set overall title with better spacing
                 if plot_options.get('title'):
-                    fig.suptitle(plot_options.get('title'), fontsize=14, y=1.02)
+                    fig.suptitle(plot_options.get('title'), fontsize=14, y=0.98)
                 else:
-                    fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=14, y=1.02)
+                    fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=14, y=0.98)
                 
                 # Save plot
                 output_file = output_folder / f"{page['key']}_page{page_idx+1}.{plot_options.get('format', 'png')}"
