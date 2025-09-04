@@ -243,19 +243,21 @@ class EnhancedSegmentPlotter:
                     ax2.plot(stats_time, stats['stddev'], 'c*',
                             markersize=4, label='Std Dev')
             
-            ax2.set_ylabel('Variance/StdDev', color='m', fontsize=10)
-            ax2.tick_params(axis='y', labelcolor='m')
+            ax2.set_ylabel('Variance/StdDev', color='m', fontsize=11)
+            ax2.tick_params(axis='y', labelcolor='m', labelsize=10)
             
             # Combine legends with better positioning
             lines1, labels1 = ax.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
-            ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=8, framealpha=0.8)
+            ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right', 
+                     fontsize=9, framealpha=0.9, ncol=2)
         else:
-            ax.legend(loc='upper right', fontsize=8, framealpha=0.8)
+            ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
         
         ax.grid(True, alpha=0.3)
-        ax.set_xlabel('Time (s)', fontsize=10)
-        ax.set_ylabel('Signal', fontsize=10)
+        ax.set_xlabel('Time (s)', fontsize=11)
+        ax.set_ylabel('Signal', fontsize=11)
+        ax.tick_params(axis='both', which='major', labelsize=10)
     
     def create_data_cleaning_style_plot(self, time: np.ndarray, voltage: np.ndarray, 
                                        current: np.ndarray, plot_options: Dict[str, Any],
@@ -552,20 +554,19 @@ class EnhancedSegmentPlotter:
                     
                     # Plot based on grouping type
                     self.plot_with_statistics(ax, time, voltage, plot_options)
-                    ax.set_xlabel('Time (s)', fontsize=9)
-                    ax.set_ylabel('Signal', fontsize=9)
-                    ax.set_title(f"Seg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}", fontsize=10)
-                    ax.tick_params(axis='both', which='major', labelsize=8)
+                    # Title will be set in plot_with_statistics for consistency
+                    ax.set_title(f"Seg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}", 
+                                fontsize=11, pad=10)
                 
                 # Hide unused subplots
                 for idx in range(len(page['configs']), len(axes)):
                     axes[idx].set_visible(False)
                 
-                # Set overall title
+                # Set overall title with better spacing
                 if plot_options.get('title'):
-                    fig.suptitle(plot_options.get('title'), fontsize=12, y=0.98)
+                    fig.suptitle(plot_options.get('title'), fontsize=14, y=1.02)
                 else:
-                    fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=12, y=0.98)
+                    fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=14, y=1.02)
                 
                 # Save plot
                 output_file = output_folder / f"{page['key']}_page{page_idx+1}.{plot_options.get('format', 'png')}"
