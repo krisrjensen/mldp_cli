@@ -479,12 +479,12 @@ class EnhancedSegmentPlotter:
             current = np.zeros_like(voltage)  # No current data
         
         # Calculate effective sample rate after decimation
-        # Original sample rate is 40MHz, decimation reduces this
+        # Original sample rate is 5 MSPS (5MHz), decimation reduces this
         # Decimation factor is 2^n - 1, so we keep every (decimation+1)th sample
         if decimation == 0:
-            effective_sample_rate = 40e6
+            effective_sample_rate = 5e6  # 5 MSPS
         else:
-            effective_sample_rate = 40e6 / (decimation + 1)
+            effective_sample_rate = 5e6 / (decimation + 1)
         
         # Generate time array with correct sample rate
         # This preserves the total time span of the original segment
