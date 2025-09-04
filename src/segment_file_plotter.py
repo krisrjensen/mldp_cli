@@ -400,8 +400,8 @@ class EnhancedSegmentPlotter:
         Returns:
             List of page configurations
         """
-        grouped = {}
-        
+        # Parse all files first
+        all_configs = []
         for file_path in file_paths:
             # Parse filename to get metadata
             parts = file_path.stem.split('_')
@@ -410,50 +410,69 @@ class EnhancedSegmentPlotter:
             dec_value = int(parts[2][1:])  # Remove 'D' prefix
             type_name = parts[3][1:]       # Remove 'T' prefix
             
-            # Determine grouping key
-            if grouping == 'file':
-                key = f"File_{file_id}"
-            elif grouping == 'decimations':
-                key = f"Dec_{dec_value}"
-            elif grouping == 'type':
-                key = type_name
-            else:
-                key = 'all'
-            
-            if key not in grouped:
-                grouped[key] = []
-            grouped[key].append({
+            all_configs.append({
                 'path': file_path,
                 'segment_id': seg_id,
                 'file_id': file_id,
                 'decimation': dec_value,
-                'type': type_name
+                'type': type_name,
+                'group_key': self._get_group_key(grouping, file_id, dec_value, type_name)
             })
         
-        # Split into pages if exceeds max_subplot
+        # Sort configs by their group key for consistent ordering
+        all_configs.sort(key=lambda x: (x['group_key'], x['decimation'], x['file_id']))
+        
+        # Split into pages based on max_subplot
         max_plots_per_page = max_subplot[0] * max_subplot[1]
         pages = []
         
-        for key, configs in grouped.items():
-            for i in range(0, len(configs), max_plots_per_page):
-                page_configs = configs[i:i+max_plots_per_page]
-                n_plots = len(page_configs)
-                
-                # Calculate optimal grid
+        for i in range(0, len(all_configs), max_plots_per_page):
+            page_configs = all_configs[i:i+max_plots_per_page]
+            n_plots = len(page_configs)
+            
+            # Use the specified grid directly
+            if n_plots <= max_plots_per_page:
+                # Use actual needed size up to max
                 if n_plots <= max_subplot[1]:
+                    # Single row
                     grid = (1, n_plots)
+                elif n_plots <= max_subplot[0]:
+                    # Single column
+                    grid = (n_plots, 1)
                 else:
-                    cols = min(n_plots, max_subplot[1])
-                    rows = min((n_plots + cols - 1) // cols, max_subplot[0])
-                    grid = (rows, cols)
-                
-                pages.append({
-                    'key': key,
-                    'configs': page_configs,
-                    'grid': grid
-                })
+                    # Use the specified max_subplot
+                    grid = max_subplot
+            else:
+                grid = max_subplot
+            
+            # Determine page key from configs
+            if grouping == 'decimations':
+                page_key = f"Decimations"
+            elif grouping == 'file':
+                page_key = f"Files"
+            elif grouping == 'type':
+                page_key = f"Types"
+            else:
+                page_key = "All"
+            
+            pages.append({
+                'key': page_key,
+                'configs': page_configs,
+                'grid': grid
+            })
         
         return pages
+    
+    def _get_group_key(self, grouping: str, file_id: int, dec_value: int, type_name: str) -> str:
+        """Get grouping key for sorting"""
+        if grouping == 'file':
+            return f"File_{file_id}"
+        elif grouping == 'decimations':
+            return f"Dec_{dec_value:06d}"  # Pad for proper sorting
+        elif grouping == 'type':
+            return type_name
+        else:
+            return 'all'
     
     def load_segment_data(self, file_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
