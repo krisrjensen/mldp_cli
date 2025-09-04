@@ -167,6 +167,7 @@ class MLDPShell:
             'segment-status': self.cmd_segment_status,
             'segment-test': self.cmd_segment_test,
             'segment-validate': self.cmd_segment_validate,
+            'segment-plot': self.cmd_segment_plot,
         }
     
     def get_prompt(self):
@@ -1242,6 +1243,218 @@ class MLDPShell:
                 
             except Exception as e:
                 print(f"❌ Error validating {filepath.name}: {e}")
+    
+    def cmd_segment_plot(self, args):
+        """Plot segment files with statistical analysis
+        
+        Usage: segment-plot [options]
+        
+        Examples:
+            segment-plot --original-segment 104075 --decimations 0 --output-folder ~/plots/
+            segment-plot --result-segment-size 131072 --types RAW --output-folder ~/plots/
+            segment-plot --file-labels 200,201 --num-points 500 --peak-detect --output-folder ~/plots/
+        """
+        try:
+            from segment_file_plotter import plot_segment_files
+        except ImportError:
+            import segment_file_plotter
+            plot_segment_files = segment_file_plotter.plot_segment_files
+        
+        # Parse arguments
+        parts = args if isinstance(args, list) else args.split()
+        
+        # Initialize parameters
+        params = {
+            'experiment_id': self.current_experiment,
+            'original_segment': None,
+            'result_segment_size': None,
+            'segment_labels': None,
+            'file_labels': None,
+            'decimations': None,
+            'types': None,
+            'num_points': 1000,
+            'peak_detect': False,
+            'plot_actual': True,
+            'plot_minimums': False,
+            'plot_maximums': False,
+            'plot_average': False,
+            'plot_variance': False,
+            'plot_stddev': False,
+            'minimums_point': False,
+            'minimums_line': False,
+            'maximums_point': False,
+            'maximums_line': False,
+            'average_point': False,
+            'average_line': True,
+            'variance_point': False,
+            'variance_line': True,
+            'stddev_point': False,
+            'stddev_line': True,
+            'no_subplots': False,
+            'subplots': 'file',
+            'max_subplot': (3, 3),
+            'dpi': 300,
+            'format': 'png',
+            'title': None,
+            'plot_style': 'cleaning',
+            'output_folder': None
+        }
+        
+        # Parse command line arguments
+        i = 0
+        while i < len(parts):
+            if parts[i] == '--original-segment' and i + 1 < len(parts):
+                params['original_segment'] = int(parts[i + 1])
+                i += 2
+            elif parts[i] == '--result-segment-size' and i + 1 < len(parts):
+                params['result_segment_size'] = int(parts[i + 1])
+                i += 2
+            elif parts[i] == '--segment-labels' and i + 1 < len(parts):
+                if parts[i + 1].lower() == 'all':
+                    params['segment_labels'] = None
+                else:
+                    params['segment_labels'] = [int(x) for x in parts[i + 1].split(',')]
+                i += 2
+            elif parts[i] == '--file-labels' and i + 1 < len(parts):
+                if parts[i + 1].lower() == 'all':
+                    params['file_labels'] = None
+                else:
+                    params['file_labels'] = [int(x) for x in parts[i + 1].split(',')]
+                i += 2
+            elif parts[i] == '--decimations' and i + 1 < len(parts):
+                if parts[i + 1].lower() == 'all':
+                    params['decimations'] = [0, 1, 3, 7, 15, 31, 63, 127, 255, 511]
+                else:
+                    params['decimations'] = [int(x) for x in parts[i + 1].split(',')]
+                i += 2
+            elif parts[i] == '--types' and i + 1 < len(parts):
+                if parts[i + 1].lower() == 'all':
+                    params['types'] = ['RAW', 'ADC14', 'ADC12', 'ADC10', 'ADC8', 'ADC6']
+                else:
+                    params['types'] = parts[i + 1].split(',')
+                i += 2
+            elif parts[i] == '--num-points' and i + 1 < len(parts):
+                params['num_points'] = int(parts[i + 1])
+                i += 2
+            elif parts[i] == '--peak-detect':
+                params['peak_detect'] = True
+                i += 1
+            elif parts[i] == '--plot-actual':
+                params['plot_actual'] = True
+                i += 1
+            elif parts[i] == '--plot-minimums':
+                params['plot_minimums'] = True
+                i += 1
+            elif parts[i] == '--plot-minimums-point':
+                params['plot_minimums'] = True
+                params['minimums_point'] = True
+                i += 1
+            elif parts[i] == '--plot-minimums-line':
+                params['plot_minimums'] = True
+                params['minimums_line'] = True
+                i += 1
+            elif parts[i] == '--plot-maximums':
+                params['plot_maximums'] = True
+                i += 1
+            elif parts[i] == '--plot-maximums-point':
+                params['plot_maximums'] = True
+                params['maximums_point'] = True
+                i += 1
+            elif parts[i] == '--plot-maximums-line':
+                params['plot_maximums'] = True
+                params['maximums_line'] = True
+                i += 1
+            elif parts[i] == '--plot-average':
+                params['plot_average'] = True
+                i += 1
+            elif parts[i] == '--plot-average-point':
+                params['plot_average'] = True
+                params['average_point'] = True
+                i += 1
+            elif parts[i] == '--plot-average-line':
+                params['plot_average'] = True
+                params['average_line'] = True
+                i += 1
+            elif parts[i] == '--plot-variance':
+                params['plot_variance'] = True
+                i += 1
+            elif parts[i] == '--plot-variance-point':
+                params['plot_variance'] = True
+                params['variance_point'] = True
+                i += 1
+            elif parts[i] == '--plot-variance-line':
+                params['plot_variance'] = True
+                params['variance_line'] = True
+                i += 1
+            elif parts[i] == '--plot-stddev':
+                params['plot_stddev'] = True
+                i += 1
+            elif parts[i] == '--plot-stddev-point':
+                params['plot_stddev'] = True
+                params['stddev_point'] = True
+                i += 1
+            elif parts[i] == '--plot-stddev-line':
+                params['plot_stddev'] = True
+                params['stddev_line'] = True
+                i += 1
+            elif parts[i] == '--no-subplots':
+                params['no_subplots'] = True
+                i += 1
+            elif parts[i] == '--subplots' and i + 1 < len(parts):
+                params['subplots'] = parts[i + 1]
+                i += 2
+            elif parts[i] == '--max-subplot' and i + 1 < len(parts):
+                rows, cols = parts[i + 1].split(',')
+                params['max_subplot'] = (int(rows), int(cols))
+                i += 2
+            elif parts[i] == '--dpi' and i + 1 < len(parts):
+                params['dpi'] = int(parts[i + 1])
+                i += 2
+            elif parts[i] == '--format' and i + 1 < len(parts):
+                params['format'] = parts[i + 1]
+                i += 2
+            elif parts[i] == '--title' and i + 1 < len(parts):
+                params['title'] = parts[i + 1]
+                i += 2
+            elif parts[i] == '--plot-style' and i + 1 < len(parts):
+                params['plot_style'] = parts[i + 1]
+                i += 2
+            elif parts[i] == '--output-folder' and i + 1 < len(parts):
+                params['output_folder'] = parts[i + 1]
+                i += 2
+            else:
+                i += 1
+        
+        # Check required parameters
+        if not params['output_folder']:
+            print("❌ Error: --output-folder is required")
+            print("\nUsage: segment-plot --output-folder <path> [options]")
+            print("\nExample:")
+            print("  segment-plot --original-segment 104075 --decimations 0 --output-folder ~/plots/")
+            return
+        
+        # Set defaults if nothing specified
+        if params['decimations'] is None:
+            params['decimations'] = [0]
+        if params['types'] is None:
+            params['types'] = ['RAW']
+        
+        print(f"\n📊 Starting Segment Plot Generation")
+        print(f"Output folder: {params['output_folder']}")
+        print(f"Experiment: {params['experiment_id']}")
+        print(f"Decimations: {params['decimations']}")
+        print(f"Types: {params['types']}")
+        print(f"Num points: {params['num_points']}")
+        print(f"Peak detect: {params['peak_detect']}")
+        
+        # Call the plotting function
+        try:
+            plot_segment_files(**params)
+            print("\n✅ Plotting complete!")
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def main():
