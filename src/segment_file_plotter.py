@@ -580,19 +580,31 @@ class EnhancedSegmentPlotter:
                     
                     # Plot based on grouping type
                     self.plot_with_statistics(ax, time, voltage, plot_options)
-                    # Title will be set in plot_with_statistics for consistency
-                    ax.set_title(f"Seg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}", 
-                                fontsize=11, pad=10)
+                    
+                    # For single subplot or small grids, include segment info in title
+                    if len(page['configs']) == 1:
+                        # Single plot - combine main title with segment info
+                        if plot_options.get('title'):
+                            combined_title = f"{plot_options.get('title')}\nSeg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}"
+                            ax.set_title(combined_title, fontsize=12, pad=8)
+                        else:
+                            ax.set_title(f"Seg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}", 
+                                       fontsize=11, pad=8)
+                    else:
+                        # Multiple subplots - individual titles
+                        ax.set_title(f"Seg {config['segment_id']} File {config['file_id']} Dec {config['decimation']}", 
+                                   fontsize=10, pad=5)
                 
                 # Hide unused subplots
                 for idx in range(len(page['configs']), len(axes)):
                     axes[idx].set_visible(False)
                 
-                # Set overall title with better spacing
-                if plot_options.get('title'):
-                    fig.suptitle(plot_options.get('title'), fontsize=14, y=0.98)
-                else:
-                    fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=14, y=0.98)
+                # Set overall title only for multiple subplots
+                if len(page['configs']) > 1:
+                    if plot_options.get('title'):
+                        fig.suptitle(plot_options.get('title'), fontsize=13, y=0.99)
+                    else:
+                        fig.suptitle(f"{page['key']} - Page {page_idx + 1}", fontsize=13, y=0.99)
                 
                 # Save plot
                 output_file = output_folder / f"{page['key']}_page{page_idx+1}.{plot_options.get('format', 'png')}"
