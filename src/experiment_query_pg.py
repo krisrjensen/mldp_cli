@@ -203,6 +203,13 @@ class ExperimentQueryPG:
                 logger.debug(f"Error getting segment_labels: {e}")
                 details['segment_labels'] = []
             
+            # Get pipeline associations
+            try:
+                details['pipelines'] = self._get_pipelines(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting pipelines: {e}")
+                details['pipelines'] = []
+            
             return details
             
         finally:
@@ -277,7 +284,7 @@ class ExperimentQueryPG:
                     al.method_name,
                     al.description,
                     al.is_active
-                FROM ml_experiment_amplitude_methods eam
+                FROM ml_experiments_amplitude_methods eam
                 JOIN ml_amplitude_normalization_lut al ON eam.method_id = al.method_id
                 WHERE eam.experiment_id = %s
                 ORDER BY al.method_id
@@ -503,6 +510,37 @@ class ExperimentQueryPG:
             logger.debug(f"Error getting segment labels: {e}")
             return []
     
+    def _get_pipelines(self, cursor, experiment_id: int) -> List[Dict]:
+        """Get pipeline associations for experiment"""
+        try:
+            cursor.execute("""
+                SELECT 
+                    ep.pipeline_id,
+                    p.pipeline_name,
+                    p.description,
+                    p.status,
+                    ep.created_at
+                FROM ml_experiment_pipelines ep
+                JOIN ml_pipelines p ON ep.pipeline_id = p.pipeline_id
+                WHERE ep.experiment_id = %s
+                ORDER BY ep.created_at DESC
+            """, (experiment_id,))
+            
+            pipelines = []
+            for row in cursor.fetchall():
+                pipelines.append({
+                    'pipeline_id': row[0],
+                    'pipeline_name': row[1],
+                    'description': row[2],
+                    'status': row[3],
+                    'created_at': row[4].isoformat() if row[4] else None
+                })
+            
+            return pipelines
+        except Exception as e:
+            logger.debug(f"Error getting pipelines: {e}")
+            return []
+    
     def get_experiment_configuration(self, experiment_id: int) -> Dict[str, Any]:
         """
         Get complete configuration including all junction table relationships
@@ -610,6 +648,14 @@ class ExperimentQueryPG:
             print(f"\n📏 DISTANCE CALCULATIONS")
             for metric, count in distances.items():
                 print(f"{metric}: {count:,}")
+        
+        # Pipelines
+        pipelines = details.get('pipelines', [])
+        if pipelines:
+            print(f"\n🔧 PIPELINES")
+            for pipeline in pipelines:
+                status_icon = '✅' if pipeline['status'] == 'completed' else '❌' if pipeline['status'] == 'failed' else '🔄'
+                print(f"  {status_icon} {pipeline['pipeline_name']} (ID: {pipeline['pipeline_id']}, Status: {pipeline['status']})")
         
         print(f"\n{'='*70}\n")
     
