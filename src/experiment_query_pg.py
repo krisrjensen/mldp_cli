@@ -63,6 +63,8 @@ class ExperimentQueryPG:
         Returns:
             List of experiment dictionaries with basic info
         """
+        # Ensure connection is clean
+        self.conn.rollback()  # Clear any failed transactions
         cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         try:
@@ -120,7 +122,9 @@ class ExperimentQueryPG:
         Returns:
             Dictionary with complete experiment details
         """
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        # Create a new connection for this query to avoid transaction issues
+        conn = psycopg2.connect(**self.connection_params)
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         try:
             # Get basic experiment info
@@ -136,86 +140,192 @@ class ExperimentQueryPG:
             details = dict(row)
             
             # Get decimation factors from junction table
-            details['decimations'] = self._get_decimations(cursor, experiment_id)
+            try:
+                details['decimations'] = self._get_decimations(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting decimations: {e}")
+                details['decimations'] = []
             
             # Get segment sizes from junction table
-            details['segment_sizes'] = self._get_segment_sizes(cursor, experiment_id)
+            try:
+                details['segment_sizes'] = self._get_segment_sizes(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting segment_sizes: {e}")
+                details['segment_sizes'] = []
             
             # Get amplitude normalization methods
-            details['amplitude_methods'] = self._get_amplitude_methods(cursor, experiment_id)
+            try:
+                details['amplitude_methods'] = self._get_amplitude_methods(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting amplitude_methods: {e}")
+                details['amplitude_methods'] = []
             
             # Get data types
-            details['data_types'] = self._get_data_types(cursor, experiment_id)
+            try:
+                details['data_types'] = self._get_data_types(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting data_types: {e}")
+                details['data_types'] = []
             
             # Get segment statistics
-            details['segments'] = self._get_segment_statistics(cursor, experiment_id)
+            try:
+                # Reset connection state if needed
+                conn.rollback()
+                details['segments'] = self._get_segment_statistics(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting segments: {e}")
+                details['segments'] = {'total': 0, 'by_size': [], 'by_label': []}
             
             # Get distance table info
-            details['distances'] = self._get_distance_info(cursor, experiment_id)
+            try:
+                details['distances'] = self._get_distance_info(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting distances: {e}")
+                details['distances'] = {}
+            
+            # Get distance functions from junction table
+            try:
+                details['distance_functions'] = self._get_distance_functions(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting distance_functions: {e}")
+                details['distance_functions'] = []
+            
+            # Get file/segment labels from junction tables
+            try:
+                details['file_labels'] = self._get_file_labels(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting file_labels: {e}")
+                details['file_labels'] = []
+                
+            try:
+                details['segment_labels'] = self._get_segment_labels(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting segment_labels: {e}")
+                details['segment_labels'] = []
             
             return details
             
         finally:
             cursor.close()
+            conn.close()
     
     def _get_decimations(self, cursor, experiment_id: int) -> List[Dict]:
         """Get decimation factors for experiment from junction table"""
-        # Check if junction table exists and has data
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables 
-                WHERE table_name = 'ml_experiment_decimation_junction'
-            )
-        """)
-        
-        if not cursor.fetchone()[0]:
-            return []
-        
-        # First check what columns exist
-        cursor.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'ml_experiment_decimation_junction'
-            ORDER BY ordinal_position
-        """)
-        
-        columns = [row[0] for row in cursor.fetchall()]
-        
-        # If table has columns, query it
-        if columns:
-            # Use * to get all columns since we don't know the exact names
+        try:
+            # Query junction table with LUT join for decimation factors
             cursor.execute("""
-                SELECT * 
-                FROM ml_experiment_decimation_junction
-                WHERE experiment_id = %s
+                SELECT 
+                    dl.decimation_id,
+                    dl.decimation_factor,
+                    dl.description,
+                    dl.is_active
+                FROM ml_experiment_decimation_junction dj
+                JOIN ml_experiment_decimation_lut dl ON dj.decimation_id = dl.decimation_id
+                WHERE dj.experiment_id = %s
+                ORDER BY dl.decimation_factor
             """, (experiment_id,))
-        
-        decimations = []
-        for row in cursor.fetchall():
-            decimations.append({
-                'decimation_factor': row[0],
-                'experiment_id': row[1]
-            })
-        
-        return decimations
+            
+            decimations = []
+            for row in cursor.fetchall():
+                decimations.append({
+                    'decimation_id': row[0],
+                    'decimation_factor': row[1],
+                    'description': row[2],
+                    'is_active': row[3]
+                })
+            
+            return decimations
+        except Exception as e:
+            logger.debug(f"Error getting decimations: {e}")
+            return []
     
     def _get_segment_sizes(self, cursor, experiment_id: int) -> List[Dict]:
         """Get segment sizes from junction table"""
-        # For now, return empty list as junction tables may not exist
-        # TODO: Check actual junction table names once database is properly documented
-        return []
+        try:
+            # Query junction table with segment sizes (note: ml_segment_sizes should be ml_segment_sizes_lut)
+            cursor.execute("""
+                SELECT 
+                    ss.segment_size_id,
+                    ss.segment_size,
+                    ss.description
+                FROM ml_experiments_segment_sizes ess
+                JOIN ml_segment_sizes ss ON ess.segment_size_id = ss.segment_size_id
+                WHERE ess.experiment_id = %s
+                ORDER BY ss.segment_size
+            """, (experiment_id,))
+            
+            segment_sizes = []
+            for row in cursor.fetchall():
+                segment_sizes.append({
+                    'segment_size_id': row[0],
+                    'segment_size': row[1],
+                    'description': row[2] if len(row) > 2 else None
+                })
+            
+            return segment_sizes
+        except Exception as e:
+            logger.debug(f"Error getting segment sizes: {e}")
+            return []
     
     def _get_amplitude_methods(self, cursor, experiment_id: int) -> List[Dict]:
         """Get amplitude normalization methods from junction table"""
-        # For now, return empty list as junction tables may not exist
-        # TODO: Check actual junction table names once database is properly documented
-        return []
+        try:
+            # Query junction table with amplitude normalization LUT
+            cursor.execute("""
+                SELECT 
+                    al.method_id,
+                    al.method_name,
+                    al.description,
+                    al.is_active
+                FROM ml_experiment_amplitude_methods eam
+                JOIN ml_amplitude_normalization_lut al ON eam.method_id = al.method_id
+                WHERE eam.experiment_id = %s
+                ORDER BY al.method_id
+            """, (experiment_id,))
+            
+            amplitude_methods = []
+            for row in cursor.fetchall():
+                amplitude_methods.append({
+                    'method_id': row[0],
+                    'method_name': row[1],
+                    'description': row[2],
+                    'is_active': row[3]
+                })
+            
+            return amplitude_methods
+        except Exception as e:
+            logger.debug(f"Error getting amplitude methods: {e}")
+            return []
     
     def _get_data_types(self, cursor, experiment_id: int) -> List[Dict]:
         """Get data types from junction table"""  
-        # For now, return empty list as junction tables may not exist
-        # TODO: Check actual junction table names once database is properly documented
-        return []
+        try:
+            # Query junction table with data types LUT
+            cursor.execute("""
+                SELECT 
+                    dt.data_type_id,
+                    dt.data_type_name,
+                    dt.bit_depth,
+                    dt.is_active
+                FROM ml_experiments_data_types edt
+                JOIN ml_data_types_lut dt ON edt.data_type_id = dt.data_type_id
+                WHERE edt.experiment_id = %s
+                ORDER BY dt.data_type_id
+            """, (experiment_id,))
+            
+            data_types = []
+            for row in cursor.fetchall():
+                data_types.append({
+                    'data_type_id': row[0],
+                    'data_type_name': row[1],
+                    'bit_depth': row[2],
+                    'is_active': row[3]
+                })
+            
+            return data_types
+        except Exception as e:
+            logger.debug(f"Error getting data types: {e}")
+            return []
     
     def _get_segment_statistics(self, cursor, experiment_id: int) -> Dict[str, Any]:
         """Get segment statistics for experiment"""
@@ -306,6 +416,93 @@ class ExperimentQueryPG:
         
         return distances
     
+    def _get_distance_functions(self, cursor, experiment_id: int) -> List[Dict]:
+        """Get distance functions from junction table"""
+        try:
+            cursor.execute("""
+                SELECT 
+                    df.distance_function_id,
+                    df.function_name,
+                    df.description,
+                    df.is_active
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+                ORDER BY df.function_name
+            """, (experiment_id,))
+            
+            distance_functions = []
+            for row in cursor.fetchall():
+                distance_functions.append({
+                    'distance_function_id': row[0],
+                    'function_name': row[1],
+                    'description': row[2] if len(row) > 2 else None,
+                    'is_active': row[3] if len(row) > 3 else True
+                })
+            
+            return distance_functions
+        except Exception as e:
+            logger.debug(f"Error getting distance functions: {e}")
+            return []
+    
+    def _get_file_labels(self, cursor, experiment_id: int) -> List[Dict]:
+        """Get file labels from junction table"""
+        try:
+            cursor.execute("""
+                SELECT 
+                    el.label_id,
+                    el.experiment_label,
+                    el.short_name,
+                    el.description
+                FROM ml_experiments_file_labels_junction flj
+                JOIN experiment_labels el ON flj.experiment_label_id = el.label_id
+                WHERE flj.experiment_id = %s
+                ORDER BY el.label_id
+            """, (experiment_id,))
+            
+            file_labels = []
+            for row in cursor.fetchall():
+                file_labels.append({
+                    'label_id': row[0],
+                    'experiment_label': row[1],
+                    'short_name': row[2],
+                    'description': row[3]
+                })
+            
+            return file_labels
+        except Exception as e:
+            logger.debug(f"Error getting file labels: {e}")
+            return []
+    
+    def _get_segment_labels(self, cursor, experiment_id: int) -> List[Dict]:
+        """Get segment labels from junction table"""
+        try:
+            cursor.execute("""
+                SELECT 
+                    sl.label_id,
+                    sl.label_name,
+                    sl.display_name,
+                    sl.description
+                FROM ml_experiments_segment_labels_junction slj
+                JOIN segment_labels sl ON slj.segment_label_id = sl.label_id
+                WHERE slj.experiment_id = %s
+                ORDER BY sl.label_id
+            """, (experiment_id,))
+            
+            segment_labels = []
+            for row in cursor.fetchall():
+                segment_labels.append({
+                    'label_id': row[0],
+                    'label_name': row[1],
+                    'display_name': row[2],
+                    'description': row[3]
+                })
+            
+            return segment_labels
+        except Exception as e:
+            logger.debug(f"Error getting segment labels: {e}")
+            return []
+    
     def get_experiment_configuration(self, experiment_id: int) -> Dict[str, Any]:
         """
         Get complete configuration including all junction table relationships
@@ -316,13 +513,27 @@ class ExperimentQueryPG:
         
         config = {
             'experiment_id': experiment_id,
-            'name': details['experiment_name'],
-            'decimations': [d['decimation_factor'] for d in details['decimations']],
-            'segment_sizes': [s['segment_size'] for s in details['segment_sizes']],
-            'data_types': [dt['data_type_name'] for dt in details['data_types']],
-            'amplitude_methods': [am['method_name'] for am in details['amplitude_methods']],
-            'total_segments': details['segments']['total'],
-            'segment_distribution': details['segments']['by_size']
+            'name': details.get('experiment_name', f'Experiment {experiment_id}'),
+            'description': details.get('description', ''),
+            'status': details.get('status', 'unknown'),
+            'experiment_type': details.get('experiment_type'),
+            'experiment_version': details.get('experiment_version'),
+            'data_granularity_id': details.get('data_granularity_id'),
+            'algorithm_type': details.get('algorithm_type'),
+            'segment_balance': details.get('segment_balance'),
+            'max_segments': details.get('max_segments'),
+            # Junction table data
+            'decimations': [d['decimation_factor'] for d in details.get('decimations', [])],
+            'segment_sizes': [s['segment_size'] for s in details.get('segment_sizes', [])],
+            'data_types': [dt['data_type_name'] for dt in details.get('data_types', [])],
+            'amplitude_methods': [am['method_name'] for am in details.get('amplitude_methods', [])],
+            'distance_functions': [df['function_name'] for df in details.get('distance_functions', [])],
+            'file_labels': [fl['experiment_label'] for fl in details.get('file_labels', [])],
+            'segment_labels': [sl['label_name'] for sl in details.get('segment_labels', [])],
+            # Statistics
+            'total_segments': details.get('segments', {}).get('total', 0),
+            'segment_distribution': details.get('segments', {}).get('by_size', []),
+            'distance_calculations': details.get('distances', {})
         }
         
         return config
@@ -337,25 +548,67 @@ class ExperimentQueryPG:
         print(f"Status: {details.get('status', 'unknown')}")
         print(f"Type: {details.get('experiment_type', 'N/A')}")
         print(f"Version: {details.get('experiment_version', 'N/A')}")
+        print(f"Algorithm: {details.get('algorithm_type', 'N/A')}")
         print(f"Description: {details.get('description', 'No description')}")
+        print(f"Segment Balance: {details.get('segment_balance', 'N/A')}")
+        print(f"Max Segments: {details.get('max_segments', 0)}")
         
-        print(f"\n📊 CONFIGURATION")
-        print(f"Decimations: {[d['decimation_factor'] for d in details['decimations']]}")
-        print(f"Segment Sizes: {[s['segment_size'] for s in details['segment_sizes']]}")
-        print(f"Data Types: {[dt['data_type_name'] for dt in details['data_types']]}")
-        print(f"Amplitude Methods: {[am['method_name'] for am in details['amplitude_methods']]}")
+        print(f"\n📊 CONFIGURATION (Junction Tables)")
         
-        print(f"\n📈 SEGMENTS")
-        print(f"Total: {details['segments']['total']:,}")
-        if details['segments']['by_size']:
-            print("\nBy Size:")
-            data = [(f"{item['size']:,}", f"{item['count']:,}") 
-                   for item in details['segments']['by_size']]
-            print(tabulate(data, headers=['Size', 'Count'], tablefmt='simple'))
+        # Decimations
+        decimations = details.get('decimations', [])
+        if decimations:
+            print(f"Decimation Factors: {[d['decimation_factor'] for d in decimations]}")
         
-        if details['distances']:
-            print(f"\n📏 DISTANCES")
-            for metric, count in details['distances'].items():
+        # Segment Sizes
+        segment_sizes = details.get('segment_sizes', [])
+        if segment_sizes:
+            print(f"Segment Sizes: {[s['segment_size'] for s in segment_sizes]}")
+        
+        # Data Types
+        data_types = details.get('data_types', [])
+        if data_types:
+            print(f"Data Types: {[dt['data_type_name'] for dt in data_types]}")
+        
+        # Amplitude Methods
+        amplitude_methods = details.get('amplitude_methods', [])
+        if amplitude_methods:
+            print(f"Amplitude Methods: {[am['method_name'] for am in amplitude_methods]}")
+        
+        # Distance Functions
+        distance_functions = details.get('distance_functions', [])
+        if distance_functions:
+            print(f"Distance Functions: {[df['function_name'] for df in distance_functions]}")
+        
+        # Labels
+        file_labels = details.get('file_labels', [])
+        if file_labels:
+            print(f"\n📁 File Labels:")
+            for fl in file_labels:
+                print(f"  - {fl['experiment_label']} (ID: {fl['label_id']})")
+        
+        segment_labels = details.get('segment_labels', [])
+        if segment_labels:
+            print(f"\n🏷️ Segment Labels:")
+            for sl in segment_labels:
+                print(f"  - {sl['label_name']} ({sl['display_name']}, ID: {sl['label_id']})")
+        
+        # Segments
+        segments = details.get('segments', {})
+        if segments.get('total'):
+            print(f"\n📈 SEGMENTS")
+            print(f"Total: {segments['total']:,}")
+            if segments.get('by_size'):
+                print("\nBy Size:")
+                data = [(f"{item['size']:,}", f"{item['count']:,}") 
+                       for item in segments['by_size']]
+                print(tabulate(data, headers=['Size', 'Count'], tablefmt='simple'))
+        
+        # Distance calculations
+        distances = details.get('distances', {})
+        if distances:
+            print(f"\n📏 DISTANCE CALCULATIONS")
+            for metric, count in distances.items():
                 print(f"{metric}: {count:,}")
         
         print(f"\n{'='*70}\n")

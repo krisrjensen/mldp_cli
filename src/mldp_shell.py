@@ -48,6 +48,12 @@ class MLDPCompleter(Completer):
             'tables': [],
             'browser': [],
             
+            # Experiment commands
+            'experiment-list': [],
+            'experiment-info': ['17', '18', '19', '20'],
+            'experiment-config': ['17', '18', '19', '20', '--json'],
+            'experiment-summary': ['17', '18', '19', '20'],
+            
             # Distance commands
             'calculate': ['--segment-size', '--distance-type', '--workers', '8192', '16384', '32768', 'euclidean', 'l1', 'l2', 'cosine'],
             'insert_distances': ['--input-folder', '--distance-type', 'l1', 'l2', 'cosine', 'pearson'],
@@ -139,6 +145,12 @@ class MLDPShell:
             'query': self.cmd_query,
             'tables': self.cmd_tables,
             'browser': self.cmd_browser,
+            # Experiment commands
+            'experiment-list': self.cmd_experiment_list,
+            'experiment-info': self.cmd_experiment_info,
+            'experiment-config': self.cmd_experiment_config,
+            'experiment-summary': self.cmd_experiment_summary,
+            # Distance commands
             'calculate': self.cmd_calculate,
             'insert_distances': self.cmd_insert_distances,
             'heatmap': self.cmd_heatmap,
@@ -346,6 +358,103 @@ class MLDPShell:
         print("🚀 Launching database browser...")
         subprocess.Popen([sys.executable, str(browser_path)])
         print("✅ Database browser launched in background")
+    
+    # ========== Experiment Commands ==========
+    
+    def cmd_experiment_list(self, args):
+        """List all experiments in the database"""
+        try:
+            from experiment_query_pg import ExperimentQueryPG
+            query = ExperimentQueryPG()
+            experiments = query.list_experiments()
+            
+            if not experiments:
+                print("No experiments found")
+                return
+            
+            print(f"\n📋 Available Experiments ({len(experiments)} total):")
+            print("-" * 80)
+            
+            for exp in experiments:
+                status_emoji = {
+                    'completed': '✅',
+                    'in_progress': '🔄',
+                    'failed': '❌',
+                    'initialized': '🆕'
+                }.get(exp.get('status', ''), '❓')
+                
+                print(f"{status_emoji} Experiment {exp['experiment_id']:3d}: {exp['name'][:50]}")
+                if exp.get('description'):
+                    print(f"   {exp['description'][:70]}")
+            
+            query.disconnect()
+            
+        except Exception as e:
+            print(f"❌ Error listing experiments: {e}")
+    
+    def cmd_experiment_info(self, args):
+        """Show detailed information about an experiment"""
+        if not args:
+            print("Usage: experiment-info <experiment_id>")
+            return
+        
+        try:
+            exp_id = int(args[0])
+            from experiment_query_pg import ExperimentQueryPG
+            
+            query = ExperimentQueryPG()
+            query.print_experiment_summary(exp_id)
+            query.disconnect()
+            
+        except ValueError:
+            print(f"❌ Invalid experiment ID: {args[0]}")
+        except Exception as e:
+            print(f"❌ Error getting experiment info: {e}")
+    
+    def cmd_experiment_config(self, args):
+        """Get experiment configuration as JSON"""
+        if not args:
+            print("Usage: experiment-config <experiment_id> [--json]")
+            return
+        
+        try:
+            exp_id = int(args[0])
+            output_json = '--json' in args
+            
+            from experiment_query_pg import ExperimentQueryPG
+            import json
+            
+            query = ExperimentQueryPG()
+            config = query.get_experiment_configuration(exp_id)
+            
+            if output_json:
+                print(json.dumps(config, indent=2))
+            else:
+                print(f"\n📊 Configuration for Experiment {exp_id}:")
+                print("-" * 60)
+                for key, value in config.items():
+                    if isinstance(value, list) and len(value) > 5:
+                        print(f"{key:20}: {value[:5]} ... ({len(value)} items)")
+                    elif isinstance(value, dict):
+                        print(f"{key:20}: {len(value)} entries")
+                    else:
+                        print(f"{key:20}: {value}")
+            
+            query.disconnect()
+            
+        except ValueError:
+            print(f"❌ Invalid experiment ID: {args[0]}")
+        except Exception as e:
+            print(f"❌ Error getting experiment config: {e}")
+    
+    def cmd_experiment_summary(self, args):
+        """Show experiment summary with junction table data"""
+        if not args:
+            # Show summary of all experiments
+            self.cmd_experiment_list([])
+        else:
+            # Show detailed summary of specific experiment
+            self.cmd_experiment_info(args)
     
     def cmd_calculate(self, args):
         """Calculate distances"""
@@ -771,6 +880,12 @@ class MLDPShell:
   query <SQL>                         Execute SQL query
   tables [pattern]                    List database tables
   browser                             Launch database browser GUI
+
+🧪 EXPERIMENT COMMANDS:
+  experiment-list                     List all experiments in database
+  experiment-info <id>                Show detailed experiment information
+  experiment-config <id> [--json]     Get experiment configuration
+  experiment-summary [id]             Show experiment summary
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
