@@ -477,7 +477,10 @@ class MLDPShell:
                 print("  balanced    - 18 classes × 750 instances each")
                 print("  small       - 3 classes × 100 instances (test)")
                 print("  large       - 18 classes × 1000 instances (unbalanced)")
+                print("  random50    - 50 random files, all positions (extended)")
                 print("  <file.json> - Load from JSON file")
+                print("\nOptions:")
+                print("  --dry-run   - Validate configuration without creating experiment")
                 return
             
             config_name = args[0]
@@ -490,6 +493,15 @@ class MLDPShell:
                 config = SMALL_TEST_CONFIG
             elif config_name == 'large':
                 config = LARGE_UNBALANCED_CONFIG
+            elif config_name == 'random50':
+                # Try to import extended configuration
+                try:
+                    from experiment_generation_config_extended import RANDOM_50FILES_CONFIG
+                    config = RANDOM_50FILES_CONFIG
+                except ImportError:
+                    print("❌ Extended configuration not available")
+                    print("   Please ensure experiment_generation_config_extended.py exists")
+                    return
             elif config_name.endswith('.json'):
                 try:
                     with open(config_name, 'r') as f:
@@ -550,12 +562,34 @@ class MLDPShell:
             if dry_run:
                 print("\n✅ Dry run completed successfully")
             else:
-                print("\n⚠️  Full experiment generation not yet implemented")
-                print("    Next steps:")
-                print("    1. Create experiment in ml_experiments table")
-                print("    2. Populate junction tables")
-                print("    3. Run segment selection with enhanced strategy")
-                print("    4. Generate training data tables")
+                # Create the experiment
+                try:
+                    from experiment_creator import ExperimentCreator
+                    
+                    creator = ExperimentCreator()
+                    experiment_id = creator.create_experiment(config)
+                    
+                    print(f"\n✅ Successfully created experiment {experiment_id}")
+                    print(f"📊 Experiment: {config.experiment_name}")
+                    
+                    # Show what was created
+                    info = creator.get_experiment_info(experiment_id)
+                    print(f"\nConfiguration applied:")
+                    print(f"  • Data Types: {len(info.get('data_types', []))}")
+                    print(f"  • Amplitude Methods: {len(info.get('amplitude_methods', []))}")
+                    print(f"  • Decimations: {len(info.get('decimations', []))}")
+                    print(f"  • Distance Functions: {len(info.get('distance_functions', []))}")
+                    
+                    print(f"\n📁 Next steps:")
+                    print(f"  1. Run segment selection: experiment-select {experiment_id}")
+                    print(f"  2. Generate segment files: experiment-generate-files {experiment_id}")
+                    print(f"  3. Calculate distances: experiment-calculate-distances {experiment_id}")
+                    print(f"  4. View progress: experiment-info {experiment_id}")
+                    
+                except ImportError as e:
+                    print(f"❌ Failed to import experiment creator: {e}")
+                except Exception as e:
+                    print(f"❌ Failed to create experiment: {e}")
             
         except ImportError as e:
             print(f"❌ Failed to import required modules: {e}")
