@@ -1,0 +1,95 @@
+{
+  "experiment_name": "random_50files_all_positions",
+  "experiment_type": "classification",
+  "experiment_version": "1.0.0",
+  "experiment_description": "Random selection of up to 50 files with minimum 1 segment per position type per file, all amplitude normalizations, multiple segment sizes and decimations",
+  
+  "file_selection": {
+    "strategy": "random",
+    "max_files": 50,
+    "random_seed": 42,
+    "criteria": {
+      "min_examples_per_class": 25,
+      "exclude_labels": ["trash", "current_only", "voltage_only", "other"]
+    }
+  },
+  
+  "target_labels": [1, 2, 3, 4, 5, 6, 7, 16],
+  "label_names": [
+    "arc", "weak_arc", "restriking_arc", "parallel_motor_arc",
+    "negative_transient", "steady_state", "restriking_arc_parallel_motor",
+    "parallel_motor_weak_arc"
+  ],
+  
+  "segment_selection": {
+    "strategy": "position_balanced_per_file",
+    "min_segments_per_position": 1,
+    "min_segments_per_file": 3,
+    "balanced_segments": true,
+    "position_balance_mode": "at_least_one",
+    "random_seed": 42
+  },
+  
+  "segment_sizes": [128, 1024, 8192],
+  
+  "decimation_factors": [0, 7, 15],
+  
+  "data_types": ["raw", "adc6", "adc8", "adc10", "adc12", "adc14"],
+  
+  "amplitude_methods": [
+    "minmax",
+    "zscore", 
+    "robust",
+    "unit_vector",
+    "power",
+    "chunk_4096_standardize",
+    "chunk_8192_standardize",
+    "chunk_16384_standardize"
+  ],
+  
+  "distance_functions": [
+    "manhattan",
+    "euclidean",
+    "cosine",
+    "pearson",
+    "additive_symmetric",
+    "braycurtis",
+    "canberra",
+    "chebyshev",
+    "jensenshannon",
+    "kullback_leibler",
+    "kumar_hassebrook",
+    "sqeuclidean",
+    "taneja",
+    "wasserstein",
+    "wavehedges",
+    "fidelity"
+  ],
+  
+  "pipeline_configuration": {
+    "pipeline_id": null,
+    "skip_existing": true,
+    "parallel_processing": true,
+    "max_workers": 16
+  },
+  
+  "quality_filters": {
+    "min_quality_score": 1.0,
+    "validation_status_filter": "all",
+    "exclude_edge_segments": false,
+    "require_full_transient": false
+  },
+  
+  "expected_combinations": {
+    "files": 50,
+    "labels": 8,
+    "segment_sizes": 3,
+    "decimations": 3,
+    "data_types": 6,
+    "amplitude_methods": 8,
+    "distance_functions": 16,
+    "min_segments_per_file": 3,
+    "total_parameter_combinations": 6912,
+    "estimated_total_segments": "~150 minimum (50 files × 3 segments)"
+  }
+}
