@@ -54,6 +54,7 @@ class MLDPCompleter(Completer):
             'experiment-config': ['17', '18', '19', '20', '--json'],
             'experiment-summary': ['17', '18', '19', '20'],
             'experiment-generate': ['balanced', 'small', 'large', '--dry-run'],
+            'experiment-create': ['--name', '--max-files', '--segment-sizes', '--data-types', '--help'],
             
             # Distance commands
             'calculate': ['--segment-size', '--distance-type', '--workers', '8192', '16384', '32768', 'euclidean', 'l1', 'l2', 'cosine'],
@@ -152,6 +153,7 @@ class MLDPShell:
             'experiment-config': self.cmd_experiment_config,
             'experiment-summary': self.cmd_experiment_summary,
             'experiment-generate': self.cmd_experiment_generate,
+            'experiment-create': self.cmd_experiment_create,
             # Distance commands
             'calculate': self.cmd_calculate,
             'insert_distances': self.cmd_insert_distances,
@@ -458,6 +460,92 @@ class MLDPShell:
             # Show detailed summary of specific experiment
             self.cmd_experiment_info(args)
     
+    def cmd_experiment_create(self, args):
+        """Create a new experiment with full CLI specification"""
+        try:
+            from experiment_cli_builder import ExperimentCLIBuilder
+            from experiment_creator import ExperimentCreator
+            
+            # Check for help
+            if not args or '--help' in args:
+                print("Usage: experiment-create --name <name> [options]")
+                print("\nRequired:")
+                print("  --name NAME                    Experiment name")
+                print("\nFile Selection:")
+                print("  --file-selection {random,all}  File selection strategy (default: random)")
+                print("  --max-files N                  Maximum files to select (default: 50)")
+                print("  --random-seed N                Random seed (default: 42)")
+                print("  --min-examples N               Min examples per class (default: 25)")
+                print("  --exclude-labels LABELS        Labels to exclude (default: trash current_only voltage_only other)")
+                print("  --target-labels IDS            Specific label IDs (auto-detect if not specified)")
+                print("\nSegment Configuration:")
+                print("  --segment-sizes SIZES          Segment sizes (default: 8192)")
+                print("  --decimations FACTORS          Decimation factors (default: 0)")
+                print("  --data-types TYPES             Data types: raw adc6 adc8 adc10 adc12 adc14")
+                print("\nProcessing Methods:")
+                print("  --amplitude-methods METHODS    Amplitude methods (use 'all' for all available)")
+                print("  --distance-functions FUNCS     Distance functions (use 'all' for all available)")
+                print("\nSegment Selection:")
+                print("  --min-segments-per-position N  Min segments per position (default: 1)")
+                print("  --min-segments-per-file N      Min segments per file (default: 3)")
+                print("  --position-balance-mode MODE   Balance mode: at_least_one, equal, proportional")
+                print("\nOptions:")
+                print("  --dry-run                      Validate without creating")
+                print("  --force                        Skip confirmation")
+                print("\nExample:")
+                print("  experiment-create --name random_50files \\")
+                print("    --max-files 50 --segment-sizes 128 1024 8192 \\")
+                print("    --decimations 0 7 15 --data-types raw adc6 adc8 adc10 adc12 adc14 \\")
+                print("    --amplitude-methods all --distance-functions all")
+                return
+            
+            # Build configuration from CLI arguments
+            builder = ExperimentCLIBuilder()
+            config = builder.create_from_cli(args)
+            
+            # Validate
+            if not config.validate():
+                print("❌ Configuration validation failed")
+                builder.close()
+                return
+            
+            # Check dry-run
+            if config.dry_run:
+                print("\n✅ Configuration validated (dry-run mode)")
+                builder.close()
+                return
+            
+            # Confirm creation
+            force = '--force' in args
+            if not force:
+                response = input("\nCreate experiment? (y/n): ")
+                if response.lower() != 'y':
+                    print("❌ Creation cancelled")
+                    builder.close()
+                    return
+            
+            # Create experiment
+            creator = ExperimentCreator()
+            experiment_id = creator.create_experiment(config)
+            
+            print(f"\n✅ Successfully created experiment {experiment_id}")
+            print(f"📊 Experiment: {config.experiment_name}")
+            
+            # Show what was created
+            info = creator.get_experiment_info(experiment_id)
+            print(f"\nConfiguration applied:")
+            print(f"  • Data Types: {len(info.get('data_types', []))}")
+            print(f"  • Amplitude Methods: {len(info.get('amplitude_methods', []))}")
+            print(f"  • Decimations: {len(info.get('decimations', []))}")
+            print(f"  • Distance Functions: {len(info.get('distance_functions', []))}")
+            
+            builder.close()
+            
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def cmd_experiment_generate(self, args):
         """Generate a new experiment with configurable parameters"""
         try:
@@ -477,8 +565,8 @@ class MLDPShell:
                 print("  balanced    - 18 classes × 750 instances each")
                 print("  small       - 3 classes × 100 instances (test)")
                 print("  large       - 18 classes × 1000 instances (unbalanced)")
-                print("  random50    - 50 random files, all positions (extended)")
                 print("  <file.json> - Load from JSON file")
+                print("\nFor dynamic configuration, use: experiment-create --help")
                 print("\nOptions:")
                 print("  --dry-run   - Validate configuration without creating experiment")
                 return
@@ -493,15 +581,6 @@ class MLDPShell:
                 config = SMALL_TEST_CONFIG
             elif config_name == 'large':
                 config = LARGE_UNBALANCED_CONFIG
-            elif config_name == 'random50':
-                # Try to import extended configuration
-                try:
-                    from experiment_generation_config_extended import RANDOM_50FILES_CONFIG
-                    config = RANDOM_50FILES_CONFIG
-                except ImportError:
-                    print("❌ Extended configuration not available")
-                    print("   Please ensure experiment_generation_config_extended.py exists")
-                    return
             elif config_name.endswith('.json'):
                 try:
                     with open(config_name, 'r') as f:
@@ -1027,6 +1106,7 @@ class MLDPShell:
   experiment-config <id> [--json]     Get experiment configuration
   experiment-summary [id]             Show experiment summary
   experiment-generate <config>        Generate new experiment (balanced|small|large)
+  experiment-create --name <name>     Create experiment with full CLI specification
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
