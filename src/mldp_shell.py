@@ -53,6 +53,7 @@ class MLDPCompleter(Completer):
             'experiment-info': ['17', '18', '19', '20'],
             'experiment-config': ['17', '18', '19', '20', '--json'],
             'experiment-summary': ['17', '18', '19', '20'],
+            'experiment-generate': ['balanced', 'small', 'large', '--dry-run'],
             
             # Distance commands
             'calculate': ['--segment-size', '--distance-type', '--workers', '8192', '16384', '32768', 'euclidean', 'l1', 'l2', 'cosine'],
@@ -150,6 +151,7 @@ class MLDPShell:
             'experiment-info': self.cmd_experiment_info,
             'experiment-config': self.cmd_experiment_config,
             'experiment-summary': self.cmd_experiment_summary,
+            'experiment-generate': self.cmd_experiment_generate,
             # Distance commands
             'calculate': self.cmd_calculate,
             'insert_distances': self.cmd_insert_distances,
@@ -455,6 +457,110 @@ class MLDPShell:
         else:
             # Show detailed summary of specific experiment
             self.cmd_experiment_info(args)
+    
+    def cmd_experiment_generate(self, args):
+        """Generate a new experiment with configurable parameters"""
+        try:
+            from experiment_generation_config import (
+                ExperimentGenerationConfig,
+                BALANCED_18CLASS_CONFIG,
+                SMALL_TEST_CONFIG,
+                LARGE_UNBALANCED_CONFIG
+            )
+            from experiment_query_pg import ExperimentQueryPG
+            import json
+            
+            # Parse arguments
+            if not args:
+                print("Usage: experiment-generate <config_name|config_file> [--dry-run]")
+                print("\nAvailable configs:")
+                print("  balanced    - 18 classes × 750 instances each")
+                print("  small       - 3 classes × 100 instances (test)")
+                print("  large       - 18 classes × 1000 instances (unbalanced)")
+                print("  <file.json> - Load from JSON file")
+                return
+            
+            config_name = args[0]
+            dry_run = '--dry-run' in args
+            
+            # Load configuration
+            if config_name == 'balanced':
+                config = BALANCED_18CLASS_CONFIG
+            elif config_name == 'small':
+                config = SMALL_TEST_CONFIG
+            elif config_name == 'large':
+                config = LARGE_UNBALANCED_CONFIG
+            elif config_name.endswith('.json'):
+                try:
+                    with open(config_name, 'r') as f:
+                        config_data = json.load(f)
+                    config = ExperimentGenerationConfig.from_dict(config_data)
+                except FileNotFoundError:
+                    print(f"❌ Configuration file not found: {config_name}")
+                    return
+                except json.JSONDecodeError:
+                    print(f"❌ Invalid JSON in configuration file: {config_name}")
+                    return
+            else:
+                print(f"❌ Unknown configuration: {config_name}")
+                return
+            
+            # Set dry run mode
+            config.dry_run = dry_run
+            
+            # Validate configuration
+            if not config.validate():
+                print("❌ Configuration validation failed")
+                return
+            
+            # Display configuration summary
+            print("\nExperiment Generation Configuration:")
+            print("=" * 60)
+            print(config.summary())
+            print("=" * 60)
+            
+            if dry_run:
+                print("\n🔍 DRY RUN MODE - No changes will be made")
+            
+            # Confirm generation
+            if not dry_run:
+                response = input("\nGenerate experiment? (y/n): ")
+                if response.lower() != 'y':
+                    print("❌ Generation cancelled")
+                    return
+            
+            # Connect to database
+            query_tool = ExperimentQueryPG()
+            
+            # Check if experiment name already exists
+            existing = query_tool.execute_query(
+                "SELECT experiment_id FROM ml_experiments WHERE experiment_name = %s",
+                (config.experiment_name,)
+            )
+            
+            if existing:
+                print(f"❌ Experiment '{config.experiment_name}' already exists (ID: {existing[0][0]})")
+                return
+            
+            print(f"\n✅ Configuration validated")
+            print(f"📊 Will create experiment: {config.experiment_name}")
+            print(f"📁 Target: {len(config.target_labels)} labels × {config.instances_per_label} instances")
+            print(f"🎲 Selection: {config.selection_strategy} (seed={config.random_seed})")
+            
+            if dry_run:
+                print("\n✅ Dry run completed successfully")
+            else:
+                print("\n⚠️  Full experiment generation not yet implemented")
+                print("    Next steps:")
+                print("    1. Create experiment in ml_experiments table")
+                print("    2. Populate junction tables")
+                print("    3. Run segment selection with enhanced strategy")
+                print("    4. Generate training data tables")
+            
+        except ImportError as e:
+            print(f"❌ Failed to import required modules: {e}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
     
     def cmd_calculate(self, args):
         """Calculate distances"""
@@ -886,6 +992,7 @@ class MLDPShell:
   experiment-info <id>                Show detailed experiment information
   experiment-config <id> [--json]     Get experiment configuration
   experiment-summary [id]             Show experiment summary
+  experiment-generate <config>        Generate new experiment (balanced|small|large)
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl

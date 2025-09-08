@@ -56,6 +56,18 @@ class ExperimentQueryPG:
             self.conn.close()
             logger.info("Disconnected from PostgreSQL")
     
+    def execute_query(self, query: str, params: tuple = None) -> List[tuple]:
+        """Execute a query and return results"""
+        self.connect()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            cursor.close()
+            return results
+        finally:
+            self.disconnect()
+    
     def list_experiments(self) -> List[Dict[str, Any]]:
         """
         List all experiments from ml_experiments table
