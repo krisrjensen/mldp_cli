@@ -133,6 +133,7 @@ class MLDPShell:
             style=style,
             message=self.get_prompt,
             vi_mode=False,  # Set to True if you prefer vi mode
+            multiline=True,  # Enable multi-line input with backslash continuations
         )
         
         self.db_conn = None
@@ -230,6 +231,10 @@ class MLDPShell:
                 
                 if not text.strip():
                     continue
+                
+                # Handle line continuations (backslash followed by newline)
+                # This fixes multi-line commands entered with backslash continuations
+                text = text.replace('\\\n', ' ')
                 
                 # Parse command
                 parts = shlex.split(text)
