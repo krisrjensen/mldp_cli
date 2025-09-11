@@ -310,7 +310,7 @@ class ExperimentCreator:
             cursor.execute('''
                 SELECT am.method_name, am.display_name
                 FROM ml_experiments_amplitude_methods eam
-                JOIN ml_amplitude_normalization_lut am ON eam.amplitude_method_id = am.method_id
+                JOIN ml_amplitude_normalization_lut am ON eam.method_id = am.method_id
                 WHERE eam.experiment_id = %s
                 ORDER BY am.method_id
             ''', (experiment_id,))
@@ -318,7 +318,7 @@ class ExperimentCreator:
             
             # Get decimations
             cursor.execute('''
-                SELECT d.decimation_factor, d.sampling_rate_hz
+                SELECT d.decimation_factor, d.equivalent_sample_rate_hz
                 FROM ml_experiment_decimation_junction edj
                 JOIN ml_experiment_decimation_lut d ON edj.decimation_id = d.decimation_id
                 WHERE edj.experiment_id = %s
