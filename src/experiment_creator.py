@@ -79,6 +79,10 @@ class ExperimentCreator:
     def _create_experiment_record(self, cursor, config) -> int:
         """Create the main experiment record"""
         
+        # Get next experiment_id (since there's no auto-increment)
+        cursor.execute('SELECT COALESCE(MAX(experiment_id), 0) + 1 FROM ml_experiments')
+        next_experiment_id = cursor.fetchone()[0]
+        
         # Prepare segment selection config
         if hasattr(config, 'get_segment_selection_config'):
             selection_config = json.dumps(config.get_segment_selection_config())
@@ -92,6 +96,7 @@ class ExperimentCreator:
         
         cursor.execute('''
             INSERT INTO ml_experiments (
+                experiment_id,
                 experiment_name, 
                 description, 
                 experiment_type,
@@ -99,9 +104,10 @@ class ExperimentCreator:
                 segment_selection_config,
                 created_at,
                 updated_at
-            ) VALUES (%s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+            ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
             RETURNING experiment_id
         ''', (
+            next_experiment_id,
             config.experiment_name,
             getattr(config, 'experiment_description', ''),
             config.experiment_type,
