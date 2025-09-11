@@ -101,10 +101,12 @@ class ExperimentCreator:
                 description, 
                 experiment_type,
                 experiment_version,
+                data_granularity_id,
+                algorithm_type,
                 segment_selection_config,
                 created_at,
                 updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
             RETURNING experiment_id
         ''', (
             next_experiment_id,
@@ -112,6 +114,8 @@ class ExperimentCreator:
             getattr(config, 'experiment_description', ''),
             config.experiment_type,
             config.experiment_version,
+            2,  # data_granularity_id: 2 for segment-level experiments
+            'TBD',  # algorithm_type: default value used by all experiments
             selection_config
         ))
         
