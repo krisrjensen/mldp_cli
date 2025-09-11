@@ -134,14 +134,19 @@ class ExperimentCreator:
         # Get data types from config
         data_types = config.data_types if hasattr(config, 'data_types') else ['raw']
         
+        # Get the next ID for this table
+        cursor.execute('SELECT COALESCE(MAX(experiment_data_type_id), 0) FROM ml_experiments_data_types')
+        next_id = cursor.fetchone()[0]
+        
         for data_type in data_types:
-            # Validate and insert
+            next_id += 1
+            # Validate and insert with explicit ID
             cursor.execute('''
-                INSERT INTO ml_experiments_data_types (experiment_id, data_type_id)
-                SELECT %s, data_type_id 
+                INSERT INTO ml_experiments_data_types (experiment_data_type_id, experiment_id, data_type_id)
+                SELECT %s, %s, data_type_id 
                 FROM ml_data_types_lut 
                 WHERE data_type_name = %s
-            ''', (experiment_id, data_type))
+            ''', (next_id, experiment_id, data_type))
         
         logger.info(f"Added {len(data_types)} data types to experiment {experiment_id}")
     
@@ -157,14 +162,19 @@ class ExperimentCreator:
         # Get amplitude methods from config
         amplitude_methods = config.amplitude_methods if hasattr(config, 'amplitude_methods') else ['none']
         
+        # Get the next ID for this table
+        cursor.execute('SELECT COALESCE(MAX(experiment_amplitude_id), 0) FROM ml_experiments_amplitude_methods')
+        next_id = cursor.fetchone()[0]
+        
         for method in amplitude_methods:
-            # Map method names to IDs
+            next_id += 1
+            # Map method names to IDs with explicit ID
             cursor.execute('''
-                INSERT INTO ml_experiments_amplitude_methods (experiment_id, amplitude_method_id)
-                SELECT %s, method_id 
+                INSERT INTO ml_experiments_amplitude_methods (experiment_amplitude_id, experiment_id, method_id)
+                SELECT %s, %s, method_id 
                 FROM ml_amplitude_normalization_lut 
                 WHERE method_name = %s
-            ''', (experiment_id, method))
+            ''', (next_id, experiment_id, method))
         
         logger.info(f"Added {len(amplitude_methods)} amplitude methods to experiment {experiment_id}")
     
@@ -180,14 +190,19 @@ class ExperimentCreator:
         # Get decimation factors from config
         decimation_factors = config.decimation_factors if hasattr(config, 'decimation_factors') else [0]
         
+        # Get the next ID for this table
+        cursor.execute('SELECT COALESCE(MAX(experiment_decimation_id), 0) FROM ml_experiment_decimation_junction')
+        next_id = cursor.fetchone()[0]
+        
         for decimation in decimation_factors:
-            # Validate and insert
+            next_id += 1
+            # Validate and insert with explicit ID
             cursor.execute('''
-                INSERT INTO ml_experiment_decimation_junction (experiment_id, decimation_id)
-                SELECT %s, decimation_id 
+                INSERT INTO ml_experiment_decimation_junction (experiment_decimation_id, experiment_id, decimation_id)
+                SELECT %s, %s, decimation_id 
                 FROM ml_experiment_decimation_lut 
                 WHERE decimation_factor = %s
-            ''', (experiment_id, decimation))
+            ''', (next_id, experiment_id, decimation))
         
         logger.info(f"Added {len(decimation_factors)} decimation factors to experiment {experiment_id}")
     
@@ -204,16 +219,21 @@ class ExperimentCreator:
         distance_functions = config.distance_functions if hasattr(config, 'distance_functions') else []
         
         if distance_functions:
+            # Get the next ID for this table
+            cursor.execute('SELECT COALESCE(MAX(experiment_distance_id), 0) FROM ml_experiments_distance_measurements')
+            next_id = cursor.fetchone()[0]
+            
             for function in distance_functions:
-                # Validate and insert
+                next_id += 1
+                # Validate and insert with explicit ID
                 cursor.execute('''
                     INSERT INTO ml_experiments_distance_measurements (
-                        experiment_id, distance_function_id
+                        experiment_distance_id, experiment_id, distance_function_id
                     )
-                    SELECT %s, distance_function_id 
+                    SELECT %s, %s, distance_function_id 
                     FROM ml_distance_functions_lut 
                     WHERE function_name = %s
-                ''', (experiment_id, function))
+                ''', (next_id, experiment_id, function))
             
             logger.info(f"Added {len(distance_functions)} distance functions to experiment {experiment_id}")
     
