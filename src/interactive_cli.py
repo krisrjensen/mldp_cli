@@ -29,8 +29,8 @@ except FileNotFoundError:
     pass
 atexit.register(readline.write_history_file, histfile)
 
-# Path to MLDP main project
-MLDP_ROOT = Path(__file__).parent.parent.parent / "mldp"
+# Path to MLDP main project (mldp_cli is now a submodule inside mldp)
+MLDP_ROOT = Path(__file__).parent.parent.parent
 
 
 class MLDPShell(cmd.Cmd):
