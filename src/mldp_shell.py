@@ -61,6 +61,9 @@ class MLDPCompleter(Completer):
             'stats': ['l1', 'l2', 'cosine', 'pearson'],
             'closest': ['10', '20', '50', '100'],
             
+            # Experiments
+            'experiment-select': ['41', '42', '43'],
+            
             # Settings
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
             'show': [],
@@ -142,6 +145,7 @@ class MLDPShell:
             'clear': self.cmd_clear,
             'export': self.cmd_export,
             'time': self.cmd_time,
+            'experiment-select': self.cmd_experiment_select,
             'help': self.cmd_help,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
@@ -760,6 +764,9 @@ class MLDPShell:
   histogram [--version] [--bins]      Generate distance histogram
   visualize --segment-id ID           Visualize segment data
 
+🔬 EXPERIMENTS:
+  experiment-select <id>              Run segment selection for experiment
+
 ⚙️  SETTINGS:
   set <param> <value>                 Set configuration (experiment, distance)
   show                                Show current settings
@@ -779,6 +786,57 @@ class MLDPShell:
   • SQL queries support all PostgreSQL syntax
   • Export supports .csv and .json formats
 """)
+    
+    def cmd_experiment_select(self, args):
+        """Run segment selection for an experiment"""
+        if not args:
+            print("Usage: experiment-select <experiment_id>")
+            print("Example: experiment-select 41")
+            return
+            
+        try:
+            experiment_id = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid experiment ID: {args[0]}")
+            return
+            
+        # Import and run the segment selector
+        try:
+            from experiment_segment_selector import ExperimentSegmentSelector
+            
+            # Use current database connection if available
+            if self.db_conn:
+                db_config = {
+                    'host': 'localhost',
+                    'database': 'arc_detection',
+                    'user': 'kjensen'
+                }
+            else:
+                print("⚠️ No database connection. Using default configuration.")
+                db_config = {
+                    'host': 'localhost',
+                    'database': 'arc_detection',
+                    'user': 'kjensen'
+                }
+            
+            print(f"🔄 Starting segment selection for experiment {experiment_id}...")
+            print("This may take several minutes...")
+            
+            selector = ExperimentSegmentSelector(experiment_id, db_config)
+            summary = selector.run_selection()
+            
+            print(f"\n✅ Segment Selection Complete!")
+            print(f"  Total labels: {summary['total_labels']}")
+            print(f"  Total files: {summary['total_files']}")
+            print(f"  Total segments: {summary['total_segments']}")
+            print(f"  Total pairs: {summary['total_pairs']:,}")
+            print(f"  Table: experiment_{experiment_id:03d}_segment_pairs")
+            
+        except ImportError as e:
+            print(f"❌ Could not import segment selector: {e}")
+            print("Make sure experiment_segment_selector.py is in the same directory")
+        except Exception as e:
+            print(f"❌ Error during segment selection: {e}")
     
     def cmd_exit(self, args):
         """Exit the shell"""
