@@ -38,9 +38,9 @@ class ExperimentConfigurator:
     def get_next_id(self, table_name: str, id_column: str) -> int:
         """Get next ID for tables without auto-increment."""
         self.cursor.execute(
-            f"SELECT COALESCE(MAX({id_column}), 0) + 1 FROM {table_name}"
+            f"SELECT COALESCE(MAX({id_column}), 0) + 1 AS next_id FROM {table_name}"
         )
-        return self.cursor.fetchone()['coalesce']
+        return self.cursor.fetchone()['next_id']
     
     def update_decimations(self, decimation_factors: List[int]) -> bool:
         """
