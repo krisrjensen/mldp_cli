@@ -71,6 +71,11 @@ class MLDPCompleter(Completer):
             
             # Experiments
             'experiment-select': ['41', '42', '43'],
+            'update-decimations': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
+            'update-segment-sizes': ['128', '256', '512', '1024', '2048', '4096', '8192', '16384', '32768', '65536', '131072', '262144'],
+            'update-amplitude-methods': ['minmax', 'zscore', 'maxabs', 'robust', 'TRAW', 'TADC14', 'TADC12', 'TADC10', 'TADC8', 'TADC6'],
+            'create-feature-set': ['--name', '--features', '--n-value', 'voltage', 'current', 'impedance', 'power'],
+            'select-files': ['--max-files', '--label', '--seed', '50', '100'],
             
             # Settings
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
@@ -172,6 +177,11 @@ class MLDPShell:
             'export': self.cmd_export,
             'time': self.cmd_time,
             'experiment-select': self.cmd_experiment_select,
+            'update-decimations': self.cmd_update_decimations,
+            'update-segment-sizes': self.cmd_update_segment_sizes,
+            'update-amplitude-methods': self.cmd_update_amplitude_methods,
+            'create-feature-set': self.cmd_create_feature_set,
+            'select-files': self.cmd_select_files,
             'help': self.cmd_help,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
@@ -420,25 +430,60 @@ class MLDPShell:
             print(f"❌ Error getting experiment info: {e}")
     
     def cmd_experiment_config(self, args):
-        """Get experiment configuration as JSON"""
+        """Get experiment configuration from database"""
         if not args:
-            print("Usage: experiment-config <experiment_id> [--json]")
-            return
+            # Use current experiment if no ID provided
+            exp_id = self.current_experiment
+        else:
+            try:
+                exp_id = int(args[0])
+            except ValueError:
+                print(f"❌ Invalid experiment ID: {args[0]}")
+                return
+        
+        output_json = '--json' in args
         
         try:
-            exp_id = int(args[0])
-            output_json = '--json' in args
+            # Try new configurator first for more detailed info
+            from experiment_configurator import ExperimentConfigurator
             
-            from experiment_query_pg import ExperimentQueryPG
-            import json
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
             
-            query = ExperimentQueryPG()
-            config = query.get_experiment_configuration(exp_id)
+            configurator = ExperimentConfigurator(exp_id, db_config)
+            config = configurator.get_current_config()
             
             if output_json:
+                import json
                 print(json.dumps(config, indent=2))
             else:
                 print(f"\n📊 Configuration for Experiment {exp_id}:")
+                print("-" * 60)
+                
+                # Show decimations
+                if config.get('decimations'):
+                    print(f"Decimations: {config['decimations']}")
+                
+                # Show segment sizes
+                if config.get('segment_sizes'):
+                    print(f"Segment sizes: {config['segment_sizes']}")
+                
+                # Show amplitude methods
+                if config.get('amplitude_methods'):
+                    print(f"Amplitude methods: {config['amplitude_methods']}")
+                
+                # Show feature sets
+                if config.get('feature_sets'):
+                    print(f"\nFeature Sets:")
+                    for fs in config['feature_sets']:
+                        print(f"  • {fs['name']}")
+                        print(f"    Features: {fs['features']}")
+                        if fs['n_values']:
+                            print(f"    N values: {fs['n_values']}")
+                
                 print("-" * 60)
                 for key, value in config.items():
                     if isinstance(value, list) and len(value) > 5:
@@ -1111,6 +1156,14 @@ class MLDPShell:
   experiment-summary [id]             Show experiment summary
   experiment-generate <config>        Generate new experiment (balanced|small|large)
   experiment-create --name <name>     Create experiment with full CLI specification
+  experiment-select <id>              Run segment selection for experiment
+
+🔧 EXPERIMENT CONFIGURATION:
+  update-decimations <d1> <d2>...     Update decimation factors
+  update-segment-sizes <s1> <s2>...   Update segment sizes
+  update-amplitude-methods <m1>...    Update amplitude/ADC methods
+  create-feature-set --name <n>       Create custom feature set
+  select-files [--max-files N]        Select files for training data
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
@@ -1122,9 +1175,6 @@ class MLDPShell:
   heatmap [--version N]               Generate distance heatmap
   histogram [--version] [--bins]      Generate distance histogram
   visualize --segment-id ID           Visualize segment data
-
-🔬 EXPERIMENTS:
-  experiment-select <id>              Run segment selection for experiment
 
 ⚙️  SETTINGS:
   set <param> <value>                 Set configuration (experiment, distance)
@@ -1204,6 +1254,197 @@ class MLDPShell:
             print("Make sure experiment_segment_selector.py is in the same directory")
         except Exception as e:
             print(f"❌ Error during segment selection: {e}")
+    
+    def cmd_update_decimations(self, args):
+        """Update decimation factors for current experiment"""
+        if not args:
+            print("Usage: update-decimations <decimation1> <decimation2> ...")
+            print("Example: update-decimations 0 7 15")
+            return
+        
+        try:
+            decimations = [int(arg) for arg in args]
+        except ValueError:
+            print(f"❌ Invalid decimation values. Must be integers.")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Updating decimations for experiment {self.current_experiment}...")
+            if configurator.update_decimations(decimations):
+                print(f"✅ Decimations updated: {decimations}")
+            else:
+                print(f"❌ Failed to update decimations")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error updating decimations: {e}")
+    
+    def cmd_update_segment_sizes(self, args):
+        """Update segment sizes for current experiment"""
+        if not args:
+            print("Usage: update-segment-sizes <size1> <size2> ...")
+            print("Example: update-segment-sizes 128 1024 8192")
+            return
+        
+        try:
+            sizes = [int(arg) for arg in args]
+        except ValueError:
+            print(f"❌ Invalid segment sizes. Must be integers.")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Updating segment sizes for experiment {self.current_experiment}...")
+            if configurator.update_segment_sizes(sizes):
+                print(f"✅ Segment sizes updated: {sizes}")
+            else:
+                print(f"❌ Failed to update segment sizes")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error updating segment sizes: {e}")
+    
+    def cmd_update_amplitude_methods(self, args):
+        """Update amplitude methods for current experiment"""
+        if not args:
+            print("Usage: update-amplitude-methods <method1> <method2> ...")
+            print("Example: update-amplitude-methods minmax zscore")
+            print("Available: minmax, zscore, maxabs, robust, TRAW, TADC14, TADC12, TADC10, TADC8, TADC6")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Updating amplitude methods for experiment {self.current_experiment}...")
+            if configurator.update_amplitude_methods(args):
+                print(f"✅ Amplitude methods updated: {args}")
+            else:
+                print(f"❌ Failed to update amplitude methods")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error updating amplitude methods: {e}")
+    
+    def cmd_create_feature_set(self, args):
+        """Create a custom feature set for current experiment"""
+        if not args or '--name' not in args or '--features' not in args:
+            print("Usage: create-feature-set --name <name> --features <feature1,feature2,...> [--n-value <n>]")
+            print("Example: create-feature-set --name voltage_variance --features voltage,variance(voltage) --n-value 128")
+            return
+        
+        try:
+            # Parse arguments
+            name = None
+            features = None
+            n_value = 128  # Default
+            
+            i = 0
+            while i < len(args):
+                if args[i] == '--name' and i + 1 < len(args):
+                    name = args[i + 1]
+                    i += 2
+                elif args[i] == '--features' and i + 1 < len(args):
+                    features = args[i + 1].split(',')
+                    i += 2
+                elif args[i] == '--n-value' and i + 1 < len(args):
+                    n_value = int(args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            
+            if not name or not features:
+                print("❌ Both --name and --features are required")
+                return
+            
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Creating feature set '{name}' for experiment {self.current_experiment}...")
+            feature_set_id = configurator.create_feature_set(name, features, n_value)
+            
+            if feature_set_id:
+                print(f"✅ Feature set created (ID: {feature_set_id})")
+                print(f"   Name: {name}")
+                print(f"   Features: {', '.join(features)}")
+                print(f"   N value: {n_value}")
+            else:
+                print(f"❌ Failed to create feature set")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error creating feature set: {e}")
+    
+    def cmd_select_files(self, args):
+        """Select files for experiment training data"""
+        # This will be implemented to populate experiment_041_file_training_data
+        max_files = 50  # Default
+        seed = 42  # Default
+        
+        # Parse arguments
+        i = 0
+        while i < len(args):
+            if args[i] == '--max-files' and i + 1 < len(args):
+                max_files = int(args[i + 1])
+                i += 2
+            elif args[i] == '--seed' and i + 1 < len(args):
+                seed = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+        
+        print(f"🔄 Selecting up to {max_files} files per label for experiment {self.current_experiment}...")
+        print(f"   Random seed: {seed}")
+        
+        try:
+            # Import file selector (to be implemented)
+            # from experiment_file_selector import ExperimentFileSelector
+            
+            # For now, provide instructions
+            print("\n⚠️ File selection not yet implemented.")
+            print("To select files, use:")
+            print("1. experiment-select <id> to generate segment pairs")
+            print("2. The file selection happens automatically during segment selection")
+            
+        except Exception as e:
+            print(f"❌ Error selecting files: {e}")
     
     def cmd_exit(self, args):
         """Exit the shell"""
