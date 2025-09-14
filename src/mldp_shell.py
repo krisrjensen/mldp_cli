@@ -75,6 +75,9 @@ class MLDPCompleter(Completer):
             'update-segment-sizes': ['128', '256', '512', '1024', '2048', '4096', '8192', '16384', '32768', '65536', '131072', '262144'],
             'update-amplitude-methods': ['minmax', 'zscore', 'maxabs', 'robust', 'TRAW', 'TADC14', 'TADC12', 'TADC10', 'TADC8', 'TADC6'],
             'create-feature-set': ['--name', '--features', '--n-value', 'voltage', 'current', 'impedance', 'power'],
+            'remove-feature-set': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+            'clear-feature-sets': [],
+            'list-feature-sets': [],
             'select-files': ['--max-files', '--label', '--seed', '50', '100'],
             
             # Settings
@@ -181,6 +184,9 @@ class MLDPShell:
             'update-segment-sizes': self.cmd_update_segment_sizes,
             'update-amplitude-methods': self.cmd_update_amplitude_methods,
             'create-feature-set': self.cmd_create_feature_set,
+            'remove-feature-set': self.cmd_remove_feature_set,
+            'clear-feature-sets': self.cmd_clear_feature_sets,
+            'list-feature-sets': self.cmd_list_feature_sets,
             'select-files': self.cmd_select_files,
             'help': self.cmd_help,
             'exit': self.cmd_exit,
@@ -1166,6 +1172,9 @@ class MLDPShell:
   update-segment-sizes <s1> <s2>...   Update segment sizes
   update-amplitude-methods <m1>...    Update amplitude/ADC methods
   create-feature-set --name <n>       Create custom feature set
+  list-feature-sets                   List feature sets for current experiment
+  remove-feature-set <id>              Remove a feature set from experiment
+  clear-feature-sets                   Remove ALL feature sets from experiment
   select-files [--max-files N]        Select files for training data
 
 📐 DISTANCE OPERATIONS:
@@ -1414,6 +1423,109 @@ class MLDPShell:
             print(f"❌ Could not import configurator: {e}")
         except Exception as e:
             print(f"❌ Error creating feature set: {e}")
+    
+    def cmd_remove_feature_set(self, args):
+        """Remove a feature set from current experiment"""
+        if not args:
+            print("Usage: remove-feature-set <feature_set_id>")
+            print("Use 'list-feature-sets' to see IDs")
+            return
+        
+        try:
+            feature_set_id = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid feature set ID: {args[0]}")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Removing feature set {feature_set_id} from experiment {self.current_experiment}...")
+            if configurator.remove_feature_set(feature_set_id):
+                print(f"✅ Feature set {feature_set_id} removed")
+            else:
+                print(f"❌ Failed to remove feature set")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error removing feature set: {e}")
+    
+    def cmd_clear_feature_sets(self, args):
+        """Remove all feature sets from current experiment"""
+        response = input(f"⚠️  Remove ALL feature sets from experiment {self.current_experiment}? (y/n): ")
+        if response.lower() != 'y':
+            print("Cancelled.")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Clearing all feature sets from experiment {self.current_experiment}...")
+            if configurator.clear_all_feature_sets():
+                print(f"✅ All feature sets cleared")
+            else:
+                print(f"❌ Failed to clear feature sets")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error clearing feature sets: {e}")
+    
+    def cmd_list_feature_sets(self, args):
+        """List feature sets for current experiment"""
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            config = configurator.get_current_config()
+            
+            feature_sets = config.get('feature_sets', [])
+            
+            if not feature_sets:
+                print(f"No feature sets linked to experiment {self.current_experiment}")
+                return
+            
+            print(f"\n🧬 Feature Sets for Experiment {self.current_experiment}:")
+            print("-" * 60)
+            
+            for fs in feature_sets:
+                print(f"• ID {fs.get('id', '?')}: {fs['name']}")
+                print(f"  Features: {fs['features']}")
+                if fs['n_values']:
+                    print(f"  N values: {fs['n_values']}")
+            
+            print("-" * 60)
+            print(f"Total: {len(feature_sets)} feature sets")
+            print("\nUse 'remove-feature-set <id>' to remove a specific set")
+            print("Use 'clear-feature-sets' to remove all")
+                
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error listing feature sets: {e}")
     
     def cmd_select_files(self, args):
         """Select files for experiment training data"""

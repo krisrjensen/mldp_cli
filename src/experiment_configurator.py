@@ -306,6 +306,73 @@ class ExperimentConfigurator:
         finally:
             self.disconnect()
     
+    def remove_feature_set(self, feature_set_id: int) -> bool:
+        """
+        Remove a feature set from the experiment.
+        
+        Args:
+            feature_set_id: ID of the feature set to remove
+            
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Remove from junction table
+            self.cursor.execute("""
+                DELETE FROM ml_experiments_feature_sets 
+                WHERE experiment_id = %s AND feature_set_id = %s
+            """, (self.experiment_id, feature_set_id))
+            
+            # Also remove N values for this feature set
+            self.cursor.execute("""
+                DELETE FROM ml_experiments_feature_n_values 
+                WHERE experiment_id = %s AND feature_set_id = %s
+            """, (self.experiment_id, feature_set_id))
+            
+            self.conn.commit()
+            self.logger.info(f"Removed feature set {feature_set_id} from experiment {self.experiment_id}")
+            return True
+            
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error removing feature set: {e}")
+            return False
+        finally:
+            self.disconnect()
+    
+    def clear_all_feature_sets(self) -> bool:
+        """
+        Remove all feature sets from the experiment.
+        
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Remove all from junction table
+            self.cursor.execute("""
+                DELETE FROM ml_experiments_feature_sets 
+                WHERE experiment_id = %s
+            """, (self.experiment_id,))
+            
+            # Also remove all N values
+            self.cursor.execute("""
+                DELETE FROM ml_experiments_feature_n_values 
+                WHERE experiment_id = %s
+            """, (self.experiment_id,))
+            
+            self.conn.commit()
+            self.logger.info(f"Cleared all feature sets from experiment {self.experiment_id}")
+            return True
+            
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error clearing feature sets: {e}")
+            return False
+        finally:
+            self.disconnect()
+    
     def get_current_config(self) -> Dict[str, Any]:
         """Get current experiment configuration."""
         self.connect()
@@ -342,9 +409,10 @@ class ExperimentConfigurator:
             """, (self.experiment_id,))
             config['amplitude_methods'] = [row['method_name'] for row in self.cursor.fetchall()]
             
-            # Get feature sets
+            # Get feature sets with IDs
             self.cursor.execute("""
                 SELECT 
+                    fsl.feature_set_id,
                     fsl.feature_set_name,
                     STRING_AGG(fl.feature_name, ', ' ORDER BY fsf.feature_order) as features,
                     ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values
@@ -356,13 +424,14 @@ class ExperimentConfigurator:
                     ON efs.experiment_id = efn.experiment_id 
                     AND efs.feature_set_id = efn.feature_set_id
                 WHERE efs.experiment_id = %s
-                GROUP BY fsl.feature_set_name
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name
                 ORDER BY MIN(efs.priority_order)
             """, (self.experiment_id,))
             
             config['feature_sets'] = []
             for row in self.cursor.fetchall():
                 config['feature_sets'].append({
+                    'id': row['feature_set_id'],
                     'name': row['feature_set_name'],
                     'features': row['features'],
                     'n_values': row['n_values']
