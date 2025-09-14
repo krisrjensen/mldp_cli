@@ -78,6 +78,7 @@ class MLDPCompleter(Completer):
             'remove-feature-set': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
             'clear-feature-sets': [],
             'list-feature-sets': [],
+            'update-selection-config': ['--max-files', '--seed', '--strategy', '--balanced', '10', '25', '50', '100'],
             'select-files': ['--max-files', '--label', '--seed', '50', '100'],
             
             # Settings
@@ -187,6 +188,7 @@ class MLDPShell:
             'remove-feature-set': self.cmd_remove_feature_set,
             'clear-feature-sets': self.cmd_clear_feature_sets,
             'list-feature-sets': self.cmd_list_feature_sets,
+            'update-selection-config': self.cmd_update_selection_config,
             'select-files': self.cmd_select_files,
             'help': self.cmd_help,
             'exit': self.cmd_exit,
@@ -1171,6 +1173,7 @@ class MLDPShell:
   update-decimations <d1> <d2>...     Update decimation factors
   update-segment-sizes <s1> <s2>...   Update segment sizes
   update-amplitude-methods <m1>...    Update amplitude/ADC methods
+  update-selection-config [options]   Update segment selection parameters
   create-feature-set --name <n>       Create custom feature set
   list-feature-sets                   List feature sets for current experiment
   remove-feature-set <id>              Remove a feature set from experiment
@@ -1526,6 +1529,67 @@ class MLDPShell:
             print(f"❌ Could not import configurator: {e}")
         except Exception as e:
             print(f"❌ Error listing feature sets: {e}")
+    
+    def cmd_update_selection_config(self, args):
+        """Update segment selection configuration"""
+        if not args or all(not arg.startswith('--') for arg in args):
+            print("Usage: update-selection-config [options]")
+            print("Options:")
+            print("  --max-files <n>    Max files per label (e.g., 50)")
+            print("  --seed <n>         Random seed for reproducibility")
+            print("  --strategy <s>     Selection strategy (e.g., position_balanced_per_file)")
+            print("  --balanced <bool>  Enable balanced segments (true/false)")
+            print("\nExample: update-selection-config --max-files 50 --seed 42")
+            return
+        
+        try:
+            # Parse arguments
+            config_updates = {}
+            i = 0
+            while i < len(args):
+                if args[i] == '--max-files' and i + 1 < len(args):
+                    config_updates['max_files_per_label'] = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--seed' and i + 1 < len(args):
+                    config_updates['random_seed'] = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--strategy' and i + 1 < len(args):
+                    config_updates['selection_strategy'] = args[i + 1]
+                    i += 2
+                elif args[i] == '--balanced' and i + 1 < len(args):
+                    config_updates['balanced_segments'] = args[i + 1].lower() == 'true'
+                    i += 2
+                else:
+                    i += 1
+            
+            if not config_updates:
+                print("❌ No valid parameters provided")
+                return
+            
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            print(f"🔄 Updating segment selection config for experiment {self.current_experiment}...")
+            if configurator.update_segment_selection_config(config_updates):
+                print(f"✅ Segment selection config updated:")
+                for key, value in config_updates.items():
+                    print(f"   {key}: {value}")
+            else:
+                print(f"❌ Failed to update segment selection config")
+                
+        except ValueError as e:
+            print(f"❌ Invalid value: {e}")
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error updating selection config: {e}")
     
     def cmd_select_files(self, args):
         """Select files for experiment training data"""

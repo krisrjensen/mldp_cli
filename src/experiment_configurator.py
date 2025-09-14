@@ -341,6 +341,52 @@ class ExperimentConfigurator:
         finally:
             self.disconnect()
     
+    def update_segment_selection_config(self, config_updates: Dict[str, Any]) -> bool:
+        """
+        Update segment selection configuration (JSONB field).
+        
+        Args:
+            config_updates: Dictionary of configuration updates to merge
+            
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Get current config
+            self.cursor.execute("""
+                SELECT segment_selection_config 
+                FROM ml_experiments 
+                WHERE experiment_id = %s
+            """, (self.experiment_id,))
+            
+            result = self.cursor.fetchone()
+            current_config = result['segment_selection_config'] if result else {}
+            
+            # Merge updates with current config
+            if current_config is None:
+                current_config = {}
+            current_config.update(config_updates)
+            
+            # Update in database - use Json wrapper for proper JSONB handling
+            from psycopg2.extras import Json
+            self.cursor.execute("""
+                UPDATE ml_experiments 
+                SET segment_selection_config = %s
+                WHERE experiment_id = %s
+            """, (Json(current_config), self.experiment_id))
+            
+            self.conn.commit()
+            self.logger.info(f"Updated segment selection config for experiment {self.experiment_id}: {config_updates}")
+            return True
+            
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error updating segment selection config: {e}")
+            return False
+        finally:
+            self.disconnect()
+    
     def clear_all_feature_sets(self) -> bool:
         """
         Remove all feature sets from the experiment.

@@ -683,6 +683,10 @@ class ExperimentQueryPG:
         # Segment selection config (JSONB field)
         seg_config = details.get('segment_selection_config')
         if seg_config:
+            # Show max_files_per_label prominently if it exists
+            if 'max_files_per_label' in seg_config:
+                print(f"Max Files Per Label: {seg_config['max_files_per_label']}")
+            
             print(f"\nSelection Strategy:")
             for key, value in seg_config.items():
                 key_display = key.replace('_', ' ').title()
