@@ -139,9 +139,29 @@ class ExperimentQueryPG:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         try:
-            # Get basic experiment info
+            # Get basic experiment info with all relevant fields
             cursor.execute("""
-                SELECT * FROM ml_experiments
+                SELECT 
+                    experiment_id,
+                    experiment_name,
+                    experiment_type,
+                    experiment_version,
+                    description,
+                    algorithm_type,
+                    segment_balance,
+                    max_segments,
+                    random_seed,
+                    segment_selection_config,
+                    feature_extraction_method,
+                    feature_configuration,
+                    status,
+                    training_batch_size,
+                    max_epochs,
+                    cross_validation_folds,
+                    data_granularity_id,
+                    created_at,
+                    updated_at
+                FROM ml_experiments
                 WHERE experiment_id = %s
             """, (experiment_id,))
             
@@ -214,6 +234,13 @@ class ExperimentQueryPG:
             except Exception as e:
                 logger.debug(f"Error getting segment_labels: {e}")
                 details['segment_labels'] = []
+            
+            # Get feature sets from junction table
+            try:
+                details['feature_sets'] = self._get_feature_sets(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting feature_sets: {e}")
+                details['feature_sets'] = []
             
             # Get pipeline associations
             try:
@@ -522,6 +549,47 @@ class ExperimentQueryPG:
             logger.debug(f"Error getting segment labels: {e}")
             return []
     
+    def _get_feature_sets(self, cursor, experiment_id: int) -> List[Dict]:
+        """Get feature sets from junction tables"""
+        try:
+            cursor.execute("""
+                SELECT 
+                    fsl.feature_set_id,
+                    fsl.feature_set_name,
+                    fsl.num_features,
+                    fsl.category,
+                    fsl.description,
+                    STRING_AGG(fl.feature_name || ' (' || fl.behavior_type || ')', ', ' ORDER BY fsf.feature_order) as features,
+                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values
+                FROM ml_experiments_feature_sets efs
+                JOIN ml_feature_sets_lut fsl ON efs.feature_set_id = fsl.feature_set_id
+                LEFT JOIN ml_feature_set_features fsf ON fsl.feature_set_id = fsf.feature_set_id
+                LEFT JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                LEFT JOIN ml_experiments_feature_n_values efn 
+                    ON efs.experiment_id = efn.experiment_id 
+                    AND efs.feature_set_id = efn.feature_set_id
+                WHERE efs.experiment_id = %s
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name, fsl.num_features, fsl.category, fsl.description
+                ORDER BY MIN(efs.priority_order)
+            """, (experiment_id,))
+            
+            feature_sets = []
+            for row in cursor.fetchall():
+                feature_sets.append({
+                    'feature_set_id': row[0],
+                    'feature_set_name': row[1],
+                    'num_features': row[2],
+                    'category': row[3],
+                    'description': row[4],
+                    'features': row[5],
+                    'n_values': row[6] if row[6] else []
+                })
+            
+            return feature_sets
+        except Exception as e:
+            logger.debug(f"Error getting feature sets: {e}")
+            return []
+    
     def _get_pipelines(self, cursor, experiment_id: int) -> List[Dict]:
         """Get pipeline associations for experiment"""
         try:
@@ -595,13 +663,30 @@ class ExperimentQueryPG:
         print(f"\n{'='*70}")
         print(f"EXPERIMENT {experiment_id}: {details.get('experiment_name', f'Experiment {experiment_id}')}")
         print(f"{'='*70}")
+        
+        # Basic Information
+        print(f"\n📋 BASIC INFORMATION")
         print(f"Status: {details.get('status', 'unknown')}")
         print(f"Type: {details.get('experiment_type', 'N/A')}")
         print(f"Version: {details.get('experiment_version', 'N/A')}")
         print(f"Algorithm: {details.get('algorithm_type', 'N/A')}")
         print(f"Description: {details.get('description', 'No description')}")
+        print(f"Created: {details.get('created_at', 'N/A')}")
+        print(f"Updated: {details.get('updated_at', 'N/A')}")
+        
+        # Segment Selection Configuration
+        print(f"\n📋 SEGMENT SELECTION")
         print(f"Segment Balance: {details.get('segment_balance', 'N/A')}")
-        print(f"Max Segments: {details.get('max_segments', 0)}")
+        print(f"Max Segments: {details.get('max_segments') or 'Unlimited'}")
+        print(f"Random Seed: {details.get('random_seed') or 'Not set'}")
+        
+        # Segment selection config (JSONB field)
+        seg_config = details.get('segment_selection_config')
+        if seg_config:
+            print(f"\nSelection Strategy:")
+            for key, value in seg_config.items():
+                key_display = key.replace('_', ' ').title()
+                print(f"  • {key_display}: {value}")
         
         print(f"\n📊 CONFIGURATION (Junction Tables)")
         
@@ -629,6 +714,29 @@ class ExperimentQueryPG:
         distance_functions = details.get('distance_functions', [])
         if distance_functions:
             print(f"Distance Functions: {[df['function_name'] for df in distance_functions]}")
+        
+        # Feature Sets
+        feature_sets = details.get('feature_sets', [])
+        if feature_sets:
+            print(f"\n🧬 FEATURE SETS ({len(feature_sets)} total)")
+            for fs in feature_sets:
+                print(f"\n  📦 {fs['feature_set_name']} (ID: {fs['feature_set_id']})")
+                if fs['description']:
+                    print(f"     Description: {fs['description']}")
+                print(f"     Category: {fs['category']}")
+                print(f"     Number of features: {fs['num_features']}")
+                if fs['n_values']:
+                    print(f"     N values (chunk sizes): {fs['n_values']}")
+                if fs['features']:
+                    # Split features for better display
+                    features_str = fs['features']
+                    if features_str and len(features_str) > 100:
+                        # Show first few features if too long
+                        feature_list = features_str.split(', ')[:5]
+                        print(f"     Features: {', '.join(feature_list)}...")
+                        print(f"               (and {len(features_str.split(', ')) - 5} more)")
+                    else:
+                        print(f"     Features: {features_str}")
         
         # Labels
         file_labels = details.get('file_labels', [])

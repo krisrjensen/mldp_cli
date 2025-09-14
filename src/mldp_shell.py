@@ -413,19 +413,22 @@ class MLDPShell:
     def cmd_experiment_info(self, args):
         """Show detailed information about an experiment"""
         if not args:
-            print("Usage: experiment-info <experiment_id>")
-            return
+            # Use current experiment if no ID provided
+            exp_id = self.current_experiment
+        else:
+            try:
+                exp_id = int(args[0])
+            except ValueError:
+                print(f"❌ Invalid experiment ID: {args[0]}")
+                return
         
         try:
-            exp_id = int(args[0])
             from experiment_query_pg import ExperimentQueryPG
             
             query = ExperimentQueryPG()
             query.print_experiment_summary(exp_id)
             query.disconnect()
             
-        except ValueError:
-            print(f"❌ Invalid experiment ID: {args[0]}")
         except Exception as e:
             print(f"❌ Error getting experiment info: {e}")
     
