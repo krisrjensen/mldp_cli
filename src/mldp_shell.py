@@ -78,6 +78,7 @@ class MLDPCompleter(Completer):
             'remove-feature-set': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
             'clear-feature-sets': [],
             'list-feature-sets': [],
+            'show-all-feature-sets': [],
             'update-selection-config': ['--max-files', '--seed', '--strategy', '--balanced', '10', '25', '50', '100'],
             'select-files': ['--max-files', '--label', '--seed', '50', '100'],
             
@@ -188,6 +189,7 @@ class MLDPShell:
             'remove-feature-set': self.cmd_remove_feature_set,
             'clear-feature-sets': self.cmd_clear_feature_sets,
             'list-feature-sets': self.cmd_list_feature_sets,
+            'show-all-feature-sets': self.cmd_show_all_feature_sets,
             'update-selection-config': self.cmd_update_selection_config,
             'select-files': self.cmd_select_files,
             'help': self.cmd_help,
@@ -1176,6 +1178,7 @@ class MLDPShell:
   update-selection-config [options]   Update segment selection parameters
   create-feature-set --name <n>       Create custom feature set
   list-feature-sets                   List feature sets for current experiment
+  show-all-feature-sets                Show ALL feature sets in database
   remove-feature-set <id>              Remove a feature set from experiment
   clear-feature-sets                   Remove ALL feature sets from experiment
   select-files [--max-files N]        Select files for training data
@@ -1529,6 +1532,84 @@ class MLDPShell:
             print(f"❌ Could not import configurator: {e}")
         except Exception as e:
             print(f"❌ Error listing feature sets: {e}")
+    
+    def cmd_show_all_feature_sets(self, args):
+        """Show all available feature sets in the database"""
+        try:
+            import psycopg2
+            import psycopg2.extras
+            
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            # Get all feature sets from the lookup table
+            cursor.execute("""
+                SELECT 
+                    fsl.feature_set_id,
+                    fsl.feature_set_name,
+                    fsl.num_features,
+                    fsl.category,
+                    fsl.description,
+                    STRING_AGG(fl.feature_name || ' (' || fl.behavior_type || ')', ', ' ORDER BY fsf.feature_order) as features
+                FROM ml_feature_sets_lut fsl
+                LEFT JOIN ml_feature_set_features fsf ON fsl.feature_set_id = fsf.feature_set_id
+                LEFT JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name, fsl.num_features, fsl.category, fsl.description
+                ORDER BY fsl.feature_set_id
+            """)
+            
+            results = cursor.fetchall()
+            
+            if not results:
+                print("No feature sets found in database")
+                return
+            
+            print(f"\n📚 ALL AVAILABLE FEATURE SETS IN DATABASE:")
+            print("=" * 70)
+            
+            for fs in results:
+                print(f"\n📦 ID {fs['feature_set_id']}: {fs['feature_set_name']}")
+                print(f"   Category: {fs['category']}")
+                if fs['description']:
+                    print(f"   Description: {fs['description']}")
+                print(f"   Number of features: {fs['num_features']}")
+                
+                if fs['features']:
+                    features_str = fs['features']
+                    if len(features_str) > 150:
+                        # Truncate long feature lists
+                        feature_list = features_str.split(', ')[:3]
+                        print(f"   Features: {', '.join(feature_list)}...")
+                        print(f"             (and {len(features_str.split(', ')) - 3} more)")
+                    else:
+                        print(f"   Features: {features_str}")
+                
+                # Check which experiments use this feature set
+                cursor.execute("""
+                    SELECT ARRAY_AGG(DISTINCT experiment_id ORDER BY experiment_id) as experiments
+                    FROM ml_experiments_feature_sets
+                    WHERE feature_set_id = %s
+                """, (fs['feature_set_id'],))
+                exp_result = cursor.fetchone()
+                if exp_result and exp_result['experiments']:
+                    print(f"   Used by experiments: {exp_result['experiments']}")
+            
+            print("\n" + "=" * 70)
+            print(f"Total: {len(results)} feature sets available")
+            print("\nTo link a feature set to current experiment, create it with:")
+            print("  create-feature-set --name <name> --features <f1,f2,...>")
+            
+            cursor.close()
+            conn.close()
+                
+        except psycopg2.Error as e:
+            print(f"❌ Database error: {e}")
+        except Exception as e:
+            print(f"❌ Error showing feature sets: {e}")
     
     def cmd_update_selection_config(self, args):
         """Update segment selection configuration"""
