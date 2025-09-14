@@ -279,21 +279,20 @@ class ExperimentConfigurator:
                     VALUES (%s, %s, %s, %s)
                 """, (junction_id, feature_set_id, feature_id, order))
             
-            # Link feature set to experiment
+            # Link feature set to experiment with N value
             exp_feature_id = self.get_next_id('ml_experiments_feature_sets', 'experiment_feature_set_id')
             self.cursor.execute("""
                 INSERT INTO ml_experiments_feature_sets 
-                (experiment_feature_set_id, experiment_id, feature_set_id, priority_order)
-                VALUES (%s, %s, %s, %s)
-            """, (exp_feature_id, self.experiment_id, feature_set_id, feature_set_id))
+                (experiment_feature_set_id, experiment_id, feature_set_id, priority_order, n_value)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (exp_feature_id, self.experiment_id, feature_set_id, feature_set_id, n_value))
             
-            # Add N value for this feature set
-            n_value_id = self.get_next_id('ml_experiments_feature_n_values', 'experiment_feature_n_id')
+            # Update with N value
             self.cursor.execute("""
-                INSERT INTO ml_experiments_feature_n_values 
-                (experiment_feature_n_id, experiment_id, feature_set_id, n_value)
-                VALUES (%s, %s, %s, %s)
-            """, (n_value_id, self.experiment_id, feature_set_id, n_value))
+                UPDATE ml_experiments_feature_sets 
+                SET n_value = %s
+                WHERE experiment_feature_set_id = %s
+            """, (n_value, exp_feature_id))
             
             self.conn.commit()
             self.logger.info(f"Created feature set '{name}' (ID: {feature_set_id}) with features: {features}")
@@ -324,11 +323,7 @@ class ExperimentConfigurator:
                 WHERE experiment_id = %s AND feature_set_id = %s
             """, (self.experiment_id, feature_set_id))
             
-            # Also remove N values for this feature set
-            self.cursor.execute("""
-                DELETE FROM ml_experiments_feature_n_values 
-                WHERE experiment_id = %s AND feature_set_id = %s
-            """, (self.experiment_id, feature_set_id))
+            # N values are now in ml_experiments_feature_sets, so no separate deletion needed
             
             self.conn.commit()
             self.logger.info(f"Removed feature set {feature_set_id} from experiment {self.experiment_id}")
@@ -402,11 +397,7 @@ class ExperimentConfigurator:
                 WHERE experiment_id = %s
             """, (self.experiment_id,))
             
-            # Also remove all N values
-            self.cursor.execute("""
-                DELETE FROM ml_experiments_feature_n_values 
-                WHERE experiment_id = %s
-            """, (self.experiment_id,))
+            # N values are now in ml_experiments_feature_sets, so no separate deletion needed
             
             self.conn.commit()
             self.logger.info(f"Cleared all feature sets from experiment {self.experiment_id}")
@@ -461,17 +452,14 @@ class ExperimentConfigurator:
                     fsl.feature_set_id,
                     fsl.feature_set_name,
                     STRING_AGG(fl.feature_name, ', ' ORDER BY fsf.feature_order) as features,
-                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values,
+                    efs.n_value,
                     COALESCE(efs.data_channel, 'load_voltage') as data_channel
                 FROM ml_experiments_feature_sets efs
                 JOIN ml_feature_sets_lut fsl ON efs.feature_set_id = fsl.feature_set_id
                 JOIN ml_feature_set_features fsf ON fsl.feature_set_id = fsf.feature_set_id
                 JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
-                LEFT JOIN ml_experiments_feature_n_values efn 
-                    ON efs.experiment_id = efn.experiment_id 
-                    AND efs.feature_set_id = efn.feature_set_id
                 WHERE efs.experiment_id = %s
-                GROUP BY fsl.feature_set_id, fsl.feature_set_name, efs.data_channel
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name, efs.data_channel, efs.n_value
                 ORDER BY MIN(efs.priority_order)
             """, (self.experiment_id,))
             
@@ -481,7 +469,7 @@ class ExperimentConfigurator:
                     'id': row['feature_set_id'],
                     'name': row['feature_set_name'],
                     'features': row['features'],
-                    'n_values': row['n_values'],
+                    'n_value': row['n_value'],
                     'data_channel': row.get('data_channel', 'load_voltage')
                 })
             
@@ -533,25 +521,11 @@ class ExperimentConfigurator:
             """)
             next_id = self.cursor.fetchone()['next_id']
             
-            # Add to junction table with data channel
+            # Add to junction table with data channel and n_value
             self.cursor.execute("""
-                INSERT INTO ml_experiments_feature_sets (experiment_feature_set_id, experiment_id, feature_set_id, priority_order, data_channel)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (next_id, self.experiment_id, feature_set_id, next_id, data_channel))
-            
-            # Add N value if specified
-            if n_value:
-                self.cursor.execute("""
-                    SELECT COALESCE(MAX(experiment_feature_n_id), 0) + 1 AS next_id 
-                    FROM ml_experiments_feature_n_values
-                """)
-                n_value_id = self.cursor.fetchone()['next_id']
-                
-                self.cursor.execute("""
-                    INSERT INTO ml_experiments_feature_n_values 
-                    (experiment_feature_n_id, experiment_id, feature_set_id, n_value)
-                    VALUES (%s, %s, %s, %s)
-                """, (n_value_id, self.experiment_id, feature_set_id, n_value))
+                INSERT INTO ml_experiments_feature_sets (experiment_feature_set_id, experiment_id, feature_set_id, priority_order, data_channel, n_value)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (next_id, self.experiment_id, feature_set_id, next_id, data_channel, n_value))
             
             self.conn.commit()
             self.logger.info(f"Added feature set {feature_set_id} to experiment {self.experiment_id}")
