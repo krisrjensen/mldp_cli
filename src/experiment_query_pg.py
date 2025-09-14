@@ -261,23 +261,23 @@ class ExperimentQueryPG:
     def _get_segment_sizes(self, cursor, experiment_id: int) -> List[Dict]:
         """Get segment sizes from junction table"""
         try:
-            # Query junction table with segment sizes (note: ml_segment_sizes should be ml_segment_sizes_lut)
+            # Query junction table with segment sizes lookup table
             cursor.execute("""
                 SELECT 
-                    ss.segment_size_id,
-                    ss.segment_size,
-                    ss.description
+                    ssl.segment_size_id,
+                    ssl.segment_size_n,
+                    ssl.description
                 FROM ml_experiments_segment_sizes ess
-                JOIN ml_segment_sizes ss ON ess.segment_size_id = ss.segment_size_id
+                JOIN ml_segment_sizes_lut ssl ON ess.segment_size_id = ssl.segment_size_id
                 WHERE ess.experiment_id = %s
-                ORDER BY ss.segment_size
+                ORDER BY ssl.segment_size_n
             """, (experiment_id,))
             
             segment_sizes = []
             for row in cursor.fetchall():
                 segment_sizes.append({
                     'segment_size_id': row[0],
-                    'segment_size': row[1],
+                    'segment_size': row[1],  # Keep as 'segment_size' for backward compatibility
                     'description': row[2] if len(row) > 2 else None
                 })
             
