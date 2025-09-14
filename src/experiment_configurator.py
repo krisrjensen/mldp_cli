@@ -455,13 +455,14 @@ class ExperimentConfigurator:
             """, (self.experiment_id,))
             config['amplitude_methods'] = [row['method_name'] for row in self.cursor.fetchall()]
             
-            # Get feature sets with IDs
+            # Get feature sets with IDs and data channels (if column exists)
             self.cursor.execute("""
                 SELECT 
                     fsl.feature_set_id,
                     fsl.feature_set_name,
                     STRING_AGG(fl.feature_name, ', ' ORDER BY fsf.feature_order) as features,
-                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values
+                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values,
+                    COALESCE(efs.data_channel, 'load_voltage') as data_channel
                 FROM ml_experiments_feature_sets efs
                 JOIN ml_feature_sets_lut fsl ON efs.feature_set_id = fsl.feature_set_id
                 JOIN ml_feature_set_features fsf ON fsl.feature_set_id = fsf.feature_set_id
@@ -470,7 +471,7 @@ class ExperimentConfigurator:
                     ON efs.experiment_id = efn.experiment_id 
                     AND efs.feature_set_id = efn.feature_set_id
                 WHERE efs.experiment_id = %s
-                GROUP BY fsl.feature_set_id, fsl.feature_set_name
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name, efs.data_channel
                 ORDER BY MIN(efs.priority_order)
             """, (self.experiment_id,))
             
@@ -480,7 +481,8 @@ class ExperimentConfigurator:
                     'id': row['feature_set_id'],
                     'name': row['feature_set_name'],
                     'features': row['features'],
-                    'n_values': row['n_values']
+                    'n_values': row['n_values'],
+                    'data_channel': row.get('data_channel', 'load_voltage')
                 })
             
             return config
@@ -490,3 +492,88 @@ class ExperimentConfigurator:
             return {}
         finally:
             self.disconnect()
+    
+    def add_feature_set(self, feature_set_id: int, n_value: int = None, data_channel: str = 'load_voltage') -> bool:
+        """Add an existing feature set to the experiment with specified data channel
+        
+        Args:
+            feature_set_id: ID of the feature set to add
+            n_value: Optional N value for chunk size
+            data_channel: Data channel ('source_current' or 'load_voltage', default 'load_voltage')
+        """
+        try:
+            self.connect()
+            
+            # Check if feature set exists
+            self.cursor.execute("""
+                SELECT feature_set_id, feature_set_name 
+                FROM ml_feature_sets_lut 
+                WHERE feature_set_id = %s
+            """, (feature_set_id,))
+            
+            result = self.cursor.fetchone()
+            if not result:
+                self.logger.warning(f"Feature set {feature_set_id} does not exist")
+                return False
+            
+            # Check if already linked
+            self.cursor.execute("""
+                SELECT experiment_feature_set_id FROM ml_experiments_feature_sets 
+                WHERE experiment_id = %s AND feature_set_id = %s
+            """, (self.experiment_id, feature_set_id))
+            
+            if self.cursor.fetchone():
+                self.logger.info(f"Feature set {feature_set_id} already linked to experiment {self.experiment_id}")
+                return False
+            
+            # Get next ID for junction table
+            self.cursor.execute("""
+                SELECT COALESCE(MAX(experiment_feature_set_id), 0) + 1 AS next_id 
+                FROM ml_experiments_feature_sets
+            """)
+            next_id = self.cursor.fetchone()['next_id']
+            
+            # Add to junction table with data channel
+            self.cursor.execute("""
+                INSERT INTO ml_experiments_feature_sets (experiment_feature_set_id, experiment_id, feature_set_id, priority_order, data_channel)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (next_id, self.experiment_id, feature_set_id, next_id, data_channel))
+            
+            # Add N value if specified
+            if n_value:
+                self.cursor.execute("""
+                    SELECT COALESCE(MAX(experiment_feature_n_id), 0) + 1 AS next_id 
+                    FROM ml_experiments_feature_n_values
+                """)
+                n_value_id = self.cursor.fetchone()['next_id']
+                
+                self.cursor.execute("""
+                    INSERT INTO ml_experiments_feature_n_values 
+                    (experiment_feature_n_id, experiment_id, feature_set_id, n_value)
+                    VALUES (%s, %s, %s, %s)
+                """, (n_value_id, self.experiment_id, feature_set_id, n_value))
+            
+            self.conn.commit()
+            self.logger.info(f"Added feature set {feature_set_id} to experiment {self.experiment_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error adding feature set: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            self.disconnect()
+    
+    def add_multiple_feature_sets(self, feature_set_ids: list, n_value: int = None, data_channel: str = 'load_voltage') -> dict:
+        """Add multiple existing feature sets to the experiment with specified data channel
+        
+        Args:
+            feature_set_ids: List of feature set IDs to add
+            n_value: Optional N value for chunk size
+            data_channel: Data channel ('source_current' or 'load_voltage', default 'load_voltage')
+        """
+        results = {}
+        for fs_id in feature_set_ids:
+            results[fs_id] = self.add_feature_set(fs_id, n_value, data_channel)
+        return results

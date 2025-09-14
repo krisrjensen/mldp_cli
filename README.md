@@ -57,6 +57,23 @@ mldp> query SELECT * FROM segments LIMIT 10
 mldp> tables experiment*           # List matching tables
 mldp> stats                        # Show distance statistics
 
+# Experiment Configuration
+mldp> set experiment 41            # Set current experiment
+mldp> update-decimations 0 7 15    # Update decimation factors
+mldp> update-segment-sizes 128 1024 8192  # Update segment sizes
+mldp> update-amplitude-methods minmax zscore  # Update amplitude methods
+mldp> create-feature-set --name voltage_variance --features voltage,variance(voltage) --n-value 128
+mldp> add-feature-set 3            # Add existing feature set
+mldp> add-feature-set 1,2,3,4 --n 8192 --channel source_current # Add multiple with options
+mldp> list-feature-sets            # List linked feature sets
+mldp> show-all-feature-sets        # Show all available feature sets
+mldp> remove-feature-set 5         # Remove feature set from experiment
+mldp> clear-feature-sets           # Remove all feature sets (with confirmation)
+mldp> update-selection-config --max-files 50 --seed 42  # Update selection parameters
+mldp> experiment-info 41           # Show detailed experiment information
+mldp> experiment-config 41         # Show experiment configuration
+mldp> experiment-select 41         # Run segment selection
+
 # Distance Operations
 mldp> calculate --segment-size 8192 --distance-type euclidean
 mldp> insert_distances --distance-type l2

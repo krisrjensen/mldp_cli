@@ -186,6 +186,7 @@ class MLDPShell:
             'update-segment-sizes': self.cmd_update_segment_sizes,
             'update-amplitude-methods': self.cmd_update_amplitude_methods,
             'create-feature-set': self.cmd_create_feature_set,
+            'add-feature-set': self.cmd_add_feature_set,
             'remove-feature-set': self.cmd_remove_feature_set,
             'clear-feature-sets': self.cmd_clear_feature_sets,
             'list-feature-sets': self.cmd_list_feature_sets,
@@ -1177,6 +1178,7 @@ class MLDPShell:
   update-amplitude-methods <m1>...    Update amplitude/ADC methods
   update-selection-config [options]   Update segment selection parameters
   create-feature-set --name <n>       Create custom feature set
+  add-feature-set <ids> [options]     Add feature sets (--n N --channel source_current|load_voltage)
   list-feature-sets                   List feature sets for current experiment
   show-all-feature-sets                Show ALL feature sets in database
   remove-feature-set <id>              Remove a feature set from experiment
@@ -1430,6 +1432,99 @@ class MLDPShell:
         except Exception as e:
             print(f"❌ Error creating feature set: {e}")
     
+    def cmd_add_feature_set(self, args):
+        """Add existing feature set(s) to current experiment"""
+        if not args or '--help' in args:
+            print("Usage: add-feature-set <feature_set_id> [options]")
+            print("   or: add-feature-set <id1,id2,id3,...> [options]")
+            print("\nOptions:")
+            print("  --n <value>          N value for chunk size")
+            print("  --channel <channel>  Data channel: source_current or load_voltage (default: load_voltage)")
+            print("\nExamples:")
+            print("  add-feature-set 3                              # Add with defaults")
+            print("  add-feature-set 3 --n 1024                     # With N=1024")
+            print("  add-feature-set 3 --channel source_current     # From source current")
+            print("  add-feature-set 1,2,3,4 --channel load_voltage --n 8192")
+            return
+        
+        try:
+            from experiment_configurator import ExperimentConfigurator
+            
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            config = ExperimentConfigurator(self.current_experiment, db_config)
+            
+            # Parse arguments
+            ids_arg = args[0]
+            n_value = None
+            data_channel = 'load_voltage'
+            
+            # Parse optional arguments
+            i = 1
+            while i < len(args):
+                if args[i] == '--n' and i + 1 < len(args):
+                    n_value = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--channel' and i + 1 < len(args):
+                    data_channel = args[i + 1]
+                    if data_channel not in ['source_current', 'load_voltage']:
+                        print(f"❌ Invalid channel: {data_channel}")
+                        print("   Must be 'source_current' or 'load_voltage'")
+                        return
+                    i += 2
+                else:
+                    # Legacy support for positional N value
+                    if i == 1 and args[i].isdigit():
+                        n_value = int(args[i])
+                    i += 1
+            
+            # Check if comma-separated list
+            if ',' in ids_arg:
+                # Multiple feature sets
+                feature_set_ids = [int(id.strip()) for id in ids_arg.split(',')]
+                
+                print(f"🔄 Adding {len(feature_set_ids)} feature sets to experiment {self.current_experiment}...")
+                print(f"   Data channel: {data_channel}")
+                if n_value:
+                    print(f"   Using N value: {n_value}")
+                
+                results = config.add_multiple_feature_sets(feature_set_ids, n_value, data_channel)
+                
+                # Report results
+                success_count = sum(1 for success in results.values() if success)
+                print(f"\n✅ Successfully added {success_count}/{len(feature_set_ids)} feature sets")
+                
+                for fs_id, success in results.items():
+                    if not success:
+                        print(f"   ⚠️  Feature set {fs_id} was already linked or doesn't exist")
+            else:
+                # Single feature set
+                feature_set_id = int(ids_arg)
+                
+                print(f"🔄 Adding feature set {feature_set_id} to experiment {self.current_experiment}...")
+                print(f"   Data channel: {data_channel}")
+                if n_value:
+                    print(f"   Using N value: {n_value}")
+                
+                if config.add_feature_set(feature_set_id, n_value, data_channel):
+                    print(f"✅ Feature set {feature_set_id} added successfully")
+                else:
+                    print(f"⚠️  Feature set {feature_set_id} is already linked or doesn't exist")
+            
+            config.disconnect()
+            
+        except ValueError as e:
+            print(f"❌ Invalid input: {e}")
+            print("Feature set IDs and N value must be integers")
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error adding feature set: {e}")
+    
     def cmd_remove_feature_set(self, args):
         """Remove a feature set from current experiment"""
         if not args:
@@ -1520,6 +1615,7 @@ class MLDPShell:
             for fs in feature_sets:
                 print(f"• ID {fs.get('id', '?')}: {fs['name']}")
                 print(f"  Features: {fs['features']}")
+                print(f"  Data channel: {fs.get('data_channel', 'load_voltage')}")
                 if fs['n_values']:
                     print(f"  N values: {fs['n_values']}")
             

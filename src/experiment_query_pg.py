@@ -560,7 +560,8 @@ class ExperimentQueryPG:
                     fsl.category,
                     fsl.description,
                     STRING_AGG(fl.feature_name || ' (' || fl.behavior_type || ')', ', ' ORDER BY fsf.feature_order) as features,
-                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values
+                    ARRAY_AGG(DISTINCT efn.n_value ORDER BY efn.n_value) as n_values,
+                    COALESCE(efs.data_channel, 'load_voltage') as data_channel
                 FROM ml_experiments_feature_sets efs
                 JOIN ml_feature_sets_lut fsl ON efs.feature_set_id = fsl.feature_set_id
                 LEFT JOIN ml_feature_set_features fsf ON fsl.feature_set_id = fsf.feature_set_id
@@ -569,7 +570,7 @@ class ExperimentQueryPG:
                     ON efs.experiment_id = efn.experiment_id 
                     AND efs.feature_set_id = efn.feature_set_id
                 WHERE efs.experiment_id = %s
-                GROUP BY fsl.feature_set_id, fsl.feature_set_name, fsl.num_features, fsl.category, fsl.description
+                GROUP BY fsl.feature_set_id, fsl.feature_set_name, fsl.num_features, fsl.category, fsl.description, efs.data_channel
                 ORDER BY MIN(efs.priority_order)
             """, (experiment_id,))
             
@@ -582,7 +583,8 @@ class ExperimentQueryPG:
                     'category': row[3],
                     'description': row[4],
                     'features': row[5],
-                    'n_values': row[6] if row[6] else []
+                    'n_values': row[6] if row[6] else [],
+                    'data_channel': row[7] if len(row) > 7 else 'load_voltage'
                 })
             
             return feature_sets
@@ -728,6 +730,7 @@ class ExperimentQueryPG:
                 if fs['description']:
                     print(f"     Description: {fs['description']}")
                 print(f"     Category: {fs['category']}")
+                print(f"     Data channel: {fs.get('data_channel', 'load_voltage')}")
                 print(f"     Number of features: {fs['num_features']}")
                 if fs['n_values']:
                     print(f"     N values (chunk sizes): {fs['n_values']}")
