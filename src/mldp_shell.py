@@ -193,6 +193,9 @@ class MLDPShell:
             'show-all-feature-sets': self.cmd_show_all_feature_sets,
             'update-selection-config': self.cmd_update_selection_config,
             'select-files': self.cmd_select_files,
+            'generate-segment-training-data': self.cmd_generate_segment_training_data,
+            'generate-segment-pairs': self.cmd_generate_segment_pairs,
+            'generate-feature-fileset': self.cmd_generate_feature_fileset,
             'help': self.cmd_help,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
@@ -1770,9 +1773,15 @@ class MLDPShell:
     
     def cmd_select_files(self, args):
         """Select files for experiment training data"""
-        # This will be implemented to populate experiment_041_file_training_data
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+            
         max_files = 50  # Default
-        seed = 42  # Default
+        seed = 42  # Default for experiment 41
+        strategy = 'random'  # Default strategy
+        min_quality = None
+        dry_run = False
         
         # Parse arguments
         i = 0
@@ -1783,24 +1792,363 @@ class MLDPShell:
             elif args[i] == '--seed' and i + 1 < len(args):
                 seed = int(args[i + 1])
                 i += 2
+            elif args[i] == '--strategy' and i + 1 < len(args):
+                strategy = args[i + 1]
+                i += 2
+            elif args[i] == '--min-quality' and i + 1 < len(args):
+                min_quality = float(args[i + 1])
+                i += 2
+            elif args[i] == '--dry-run':
+                dry_run = True
+                i += 1
+            elif args[i] == '--help':
+                print("\nUsage: select-files [options]")
+                print("\nOptions:")
+                print("  --strategy STRATEGY    Selection strategy: random|balanced|quality_first (default: random)")
+                print("  --max-files N         Maximum files per label (default: 50)")
+                print("  --seed N              Random seed for reproducibility (default: 42)")
+                print("  --min-quality N       Minimum quality score for quality_first strategy")
+                print("  --dry-run             Preview selection without saving to database")
+                print("\nExample:")
+                print("  select-files --strategy random --max-files 50 --seed 42")
+                return
             else:
                 i += 1
         
-        print(f"🔄 Selecting up to {max_files} files per label for experiment {self.current_experiment}...")
+        print(f"🔄 Selecting files for experiment {self.current_experiment}...")
+        print(f"   Strategy: {strategy}")
+        print(f"   Max files per label: {max_files}")
+        print(f"   Random seed: {seed}")
+        if min_quality:
+            print(f"   Minimum quality: {min_quality}")
+        
+        try:
+            from experiment_file_selector import ExperimentFileSelector
+            
+            selector = ExperimentFileSelector(self.current_experiment, self.db_conn)
+            
+            if dry_run:
+                # Preview available files
+                files_by_label = selector.get_available_files()
+                print(f"\n📊 Available files by label:")
+                total_available = 0
+                for label, files in files_by_label.items():
+                    print(f"   {label}: {len(files)} files")
+                    total_available += len(files)
+                print(f"   Total: {total_available} files")
+                print("\n💡 Run without --dry-run to save selection")
+                return
+            
+            # Perform selection
+            result = selector.select_files(
+                strategy=strategy,
+                max_files_per_label=max_files,
+                seed=seed,
+                min_quality=min_quality
+            )
+            
+            if result['success']:
+                print(f"\n✅ Successfully selected {result['total_selected']} files")
+                
+                # Display statistics
+                stats = result['statistics']
+                if stats and 'label_counts' in stats:
+                    print("\n📊 Files selected per label:")
+                    for label, count in stats['label_counts'].items():
+                        print(f"   {label}: {count} files")
+                    print(f"\n   Total unique files: {stats['unique_files']}")
+                    print(f"   Total unique labels: {stats['unique_labels']}")
+                
+                print(f"\n💾 Data saved to: experiment_{self.current_experiment:03d}_file_training_data")
+            else:
+                print(f"❌ Failed to select files: {result.get('error', 'Unknown error')}")
+            
+        except ImportError:
+            print("❌ ExperimentFileSelector module not found")
+        except Exception as e:
+            print(f"❌ Error selecting files: {e}")
+    
+    def cmd_generate_segment_training_data(self, args):
+        """Generate segment training data table"""
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+        
+        segments_per_file = 3  # Default
+        balance_strategy = 'balanced'  # Default
+        respect_position = True
+        max_total_segments = None
+        seed = 42
+        
+        # Parse arguments
+        i = 0
+        while i < len(args):
+            if args[i] == '--segments-per-file' and i + 1 < len(args):
+                segments_per_file = int(args[i + 1])
+                i += 2
+            elif args[i] == '--balance-strategy' and i + 1 < len(args):
+                balance_strategy = args[i + 1]
+                i += 2
+            elif args[i] == '--no-respect-position':
+                respect_position = False
+                i += 1
+            elif args[i] == '--max-segments' and i + 1 < len(args):
+                max_total_segments = int(args[i + 1])
+                i += 2
+            elif args[i] == '--seed' and i + 1 < len(args):
+                seed = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print("\nUsage: generate-segment-training-data [options]")
+                print("\nOptions:")
+                print("  --segments-per-file N      Target segments per file (default: 3)")
+                print("  --balance-strategy STRAT  balanced|proportional|all (default: balanced)")
+                print("  --no-respect-position      Don't maintain L/C/R position uniqueness")
+                print("  --max-segments N           Maximum total segments")
+                print("  --seed N                   Random seed (default: 42)")
+                print("\nExample:")
+                print("  generate-segment-training-data --segments-per-file 3 --balance-strategy balanced")
+                return
+            else:
+                i += 1
+        
+        print(f"🔄 Generating segment training data for experiment {self.current_experiment}...")
+        print(f"   Target segments per file: {segments_per_file}")
+        print(f"   Balance strategy: {balance_strategy}")
+        print(f"   Respect position uniqueness: {respect_position}")
+        if max_total_segments:
+            print(f"   Maximum total segments: {max_total_segments}")
+        
+        try:
+            from experiment_segment_selector import ExperimentSegmentSelector
+            
+            selector = ExperimentSegmentSelector(self.current_experiment, self.db_conn)
+            result = selector.select_segments(
+                segments_per_file=segments_per_file,
+                balance_strategy=balance_strategy,
+                respect_position=respect_position,
+                max_total_segments=max_total_segments,
+                seed=seed
+            )
+            
+            if result['success']:
+                print(f"\n✅ Successfully selected {result['total_selected']} segments")
+                
+                stats = result.get('statistics', {})
+                if stats:
+                    print(f"\n📊 Segment selection statistics:")
+                    print(f"   Files with segments: {stats.get('files_with_segments', 0)}")
+                    print(f"   Avg segments per file: {stats.get('avg_segments_per_file', 0):.1f}")
+                    
+                    if 'label_distribution' in stats:
+                        print("\n   Label distribution:")
+                        for label, count in stats['label_distribution'].items():
+                            print(f"     {label}: {count} segments")
+                    
+                    if 'position_distribution' in stats:
+                        print("\n   Position distribution:")
+                        pos_dist = stats['position_distribution']
+                        print(f"     L (left): {pos_dist.get('L', 0)}")
+                        print(f"     C (center): {pos_dist.get('C', 0)}")
+                        print(f"     R (right): {pos_dist.get('R', 0)}")
+                        if pos_dist.get('Other', 0) > 0:
+                            print(f"     Other: {pos_dist.get('Other', 0)}")
+                
+                print(f"\n💾 Data saved to: experiment_{self.current_experiment:03d}_segment_training_data")
+            else:
+                print(f"❌ Failed to select segments: {result.get('error', 'Unknown error')}")
+                
+        except ImportError:
+            print("❌ ExperimentSegmentSelector module not found")
+            # Create the module now
+            self._create_segment_selector_module()
+        except Exception as e:
+            print(f"❌ Error generating segment training data: {e}")
+    
+    def cmd_generate_segment_pairs(self, args):
+        """Generate segment pairs for distance calculations"""
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+        
+        pairing_strategy = 'all_combinations'  # Default
+        max_pairs_per_segment = None
+        same_label_ratio = 0.5
+        seed = 42
+        
+        # Parse arguments
+        i = 0
+        while i < len(args):
+            if args[i] == '--strategy' and i + 1 < len(args):
+                pairing_strategy = args[i + 1]
+                i += 2
+            elif args[i] == '--max-pairs-per-segment' and i + 1 < len(args):
+                max_pairs_per_segment = int(args[i + 1])
+                i += 2
+            elif args[i] == '--same-label-ratio' and i + 1 < len(args):
+                same_label_ratio = float(args[i + 1])
+                i += 2
+            elif args[i] == '--seed' and i + 1 < len(args):
+                seed = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print("\nUsage: generate-segment-pairs [options]")
+                print("\nOptions:")
+                print("  --strategy STRAT            all_combinations|balanced|random_sample (default: all_combinations)")
+                print("  --max-pairs-per-segment N   Maximum pairs per segment")
+                print("  --same-label-ratio RATIO    Ratio of same-label pairs for balanced strategy (0.0-1.0)")
+                print("  --seed N                    Random seed (default: 42)")
+                print("\nExample:")
+                print("  generate-segment-pairs --strategy all_combinations")
+                print("  generate-segment-pairs --strategy balanced --max-pairs-per-segment 50 --same-label-ratio 0.3")
+                return
+            else:
+                i += 1
+        
+        print(f"🔄 Generating segment pairs for experiment {self.current_experiment}...")
+        print(f"   Strategy: {pairing_strategy}")
+        if max_pairs_per_segment:
+            print(f"   Max pairs per segment: {max_pairs_per_segment}")
+        print(f"   Same label ratio: {same_label_ratio}")
         print(f"   Random seed: {seed}")
         
         try:
-            # Import file selector (to be implemented)
-            # from experiment_file_selector import ExperimentFileSelector
+            # Import the segment pair generator module
+            from experiment_segment_pair_generator import ExperimentSegmentPairGenerator
             
-            # For now, provide instructions
-            print("\n⚠️ File selection not yet implemented.")
-            print("To select files, use:")
-            print("1. experiment-select <id> to generate segment pairs")
-            print("2. The file selection happens automatically during segment selection")
+            # Create generator instance
+            generator = ExperimentSegmentPairGenerator(self.current_experiment, self.db_conn)
             
+            # Generate pairs
+            result = generator.generate_pairs(
+                strategy=pairing_strategy,
+                max_pairs_per_segment=max_pairs_per_segment,
+                same_label_ratio=same_label_ratio,
+                seed=seed
+            )
+            
+            if result['success']:
+                print(f"\n✅ Successfully generated segment pairs!")
+                print(f"   Total segments: {result['total_segments']}")
+                print(f"   Total pairs: {result['total_pairs']}")
+                
+                # Display statistics
+                if 'statistics' in result and result['statistics']:
+                    stats = result['statistics']
+                    print("\n📊 Pair Statistics:")
+                    print(f"   Same-label pairs: {stats.get('same_label_pairs', 0)}")
+                    print(f"   Different-label pairs: {stats.get('diff_label_pairs', 0)}")
+                    
+                    if 'type_distribution' in stats:
+                        print("\n   Type distribution:")
+                        for pair_type, count in stats['type_distribution'].items():
+                            print(f"     {pair_type}: {count}")
+            else:
+                print(f"\n❌ Failed to generate pairs: {result.get('error', 'Unknown error')}")
+                
+        except ImportError:
+            print("❌ ExperimentSegmentPairGenerator module not found")
+            print("   Make sure experiment_segment_pair_generator.py is in the same directory")
         except Exception as e:
-            print(f"❌ Error selecting files: {e}")
+            print(f"❌ Error generating segment pairs: {e}")
+    
+    def cmd_generate_feature_fileset(self, args):
+        """Generate feature files from segment data"""
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+        
+        feature_set_ids = None  # Default: all configured feature sets
+        max_segments = None
+        use_mpcctl = False  # Default to Python extraction for now
+        parallel_jobs = 4
+        
+        # Parse arguments
+        i = 0
+        while i < len(args):
+            if args[i] == '--feature-sets' and i + 1 < len(args):
+                feature_set_ids = [int(x) for x in args[i + 1].split(',')]
+                i += 2
+            elif args[i] == '--max-segments' and i + 1 < len(args):
+                max_segments = int(args[i + 1])
+                i += 2
+            elif args[i] == '--use-mpcctl':
+                use_mpcctl = True
+                i += 1
+            elif args[i] == '--parallel' and i + 1 < len(args):
+                parallel_jobs = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print("\nUsage: generate-feature-fileset [options]")
+                print("\nOptions:")
+                print("  --feature-sets IDS         Comma-separated feature set IDs (default: all)")
+                print("  --max-segments N           Maximum segments to process")
+                print("  --use-mpcctl               Use mpcctl for extraction (default: Python)")
+                print("  --parallel N               Number of parallel workers (default: 4)")
+                print("\nExample:")
+                print("  generate-feature-fileset --feature-sets 1,2,3 --max-segments 100")
+                print("  generate-feature-fileset --use-mpcctl --parallel 8")
+                print("\nNote: Feature sets include their configured N values for chunking")
+                return
+            else:
+                i += 1
+        
+        print(f"🔄 Generating feature files for experiment {self.current_experiment}...")
+        if feature_set_ids:
+            print(f"   Feature sets: {feature_set_ids}")
+        else:
+            print(f"   Feature sets: All configured sets")
+        if max_segments:
+            print(f"   Max segments: {max_segments}")
+        print(f"   Extraction method: {'mpcctl' if use_mpcctl else 'Python'}")
+        print(f"   Parallel jobs: {parallel_jobs}")
+        
+        try:
+            # Import the feature extractor module
+            from experiment_feature_extractor import ExperimentFeatureExtractor
+            
+            # Create extractor instance
+            extractor = ExperimentFeatureExtractor(self.current_experiment, self.db_conn)
+            
+            # Extract features
+            result = extractor.extract_features(
+                feature_set_ids=feature_set_ids,
+                max_segments=max_segments,
+                use_mpcctl=use_mpcctl,
+                parallel_jobs=parallel_jobs
+            )
+            
+            if result['success']:
+                print(f"\n✅ Successfully extracted features!")
+                print(f"   Total segments: {result['total_segments']}")
+                print(f"   Total feature sets: {result['total_feature_sets']}")
+                print(f"   Total extracted: {result['total_extracted']}")
+                
+                if result['failed_count'] > 0:
+                    print(f"\n⚠️  Failed extractions: {result['failed_count']}")
+                    if result.get('failed_extractions'):
+                        print("   First few failures:")
+                        for fail in result['failed_extractions'][:5]:
+                            print(f"     Segment {fail['segment_id']}, FS {fail['feature_set_id']}: {fail['error']}")
+                
+                if result.get('average_extraction_time'):
+                    print(f"\n⏱️  Performance:")
+                    print(f"   Average time per extraction: {result['average_extraction_time']:.2f}s")
+                    print(f"   Total extraction time: {result['total_extraction_time']:.2f}s")
+            else:
+                print(f"\n❌ Failed to extract features: {result.get('error', 'Unknown error')}")
+                
+        except ImportError:
+            print("❌ ExperimentFeatureExtractor module not found")
+            print("   Make sure experiment_feature_extractor.py is in the same directory")
+        except Exception as e:
+            print(f"❌ Error generating feature fileset: {e}")
+    
+    def _create_segment_selector_module(self):
+        """Create the segment selector module if it doesn't exist"""
+        print("\n📝 Creating ExperimentSegmentSelector module...")
+        # The module has been created separately
+        print("   Module should be available at: experiment_segment_selector.py")
     
     def cmd_exit(self, args):
         """Exit the shell"""
