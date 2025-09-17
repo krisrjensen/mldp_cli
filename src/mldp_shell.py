@@ -443,6 +443,100 @@ class MLDPShell:
             
             query = ExperimentQueryPG()
             query.print_experiment_summary(exp_id)
+            
+            # Also check for file training data
+            if self.db_conn:
+                table_name = f"experiment_{exp_id:03d}_file_training_data"
+                cursor = self.db_conn.cursor()
+                try:
+                    # Check if training data table exists
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.tables 
+                            WHERE table_name = %s
+                        )
+                    """, (table_name,))
+                    
+                    if cursor.fetchone()[0]:
+                        # Get file label statistics
+                        cursor.execute(f"""
+                            SELECT 
+                                file_label_name,
+                                COUNT(*) as count
+                            FROM {table_name}
+                            WHERE experiment_id = %s
+                            GROUP BY file_label_name
+                            ORDER BY count DESC, file_label_name
+                        """, (exp_id,))
+                        
+                        labels = cursor.fetchall()
+                        
+                        if labels:
+                            print("\n📁 FILE TRAINING DATA:")
+                            print("=" * 60)
+                            
+                            # Get total counts
+                            cursor.execute(f"""
+                                SELECT 
+                                    COUNT(DISTINCT file_id) as total_files,
+                                    COUNT(DISTINCT file_label_name) as unique_labels
+                                FROM {table_name}
+                                WHERE experiment_id = %s
+                            """, (exp_id,))
+                            
+                            stats = cursor.fetchone()
+                            print(f"Total files: {stats[0]}")
+                            print(f"Unique labels: {stats[1]}")
+                            
+                            # Show label distribution
+                            print("\nLabel Distribution:")
+                            for label_name, count in labels:
+                                bar_length = int(count / max(l[1] for l in labels) * 30)
+                                bar = '█' * bar_length
+                                print(f"  {label_name:30} {count:4} {bar}")
+                            
+                            # Check for segment training data too
+                            seg_table = f"experiment_{exp_id:03d}_segment_training_data"
+                            cursor.execute("""
+                                SELECT EXISTS (
+                                    SELECT 1 FROM information_schema.tables 
+                                    WHERE table_name = %s
+                                )
+                            """, (seg_table,))
+                            
+                            if cursor.fetchone()[0]:
+                                cursor.execute(f"""
+                                    SELECT COUNT(*) FROM {seg_table}
+                                    WHERE experiment_id = %s
+                                """, (exp_id,))
+                                seg_count = cursor.fetchone()[0]
+                                if seg_count > 0:
+                                    print(f"\n📊 Segment Training Data: {seg_count} segments selected")
+                            
+                            # Check for segment pairs too
+                            pairs_table = f"experiment_{exp_id:03d}_segment_pairs"
+                            cursor.execute("""
+                                SELECT EXISTS (
+                                    SELECT 1 FROM information_schema.tables 
+                                    WHERE table_name = %s
+                                )
+                            """, (pairs_table,))
+                            
+                            if cursor.fetchone()[0]:
+                                cursor.execute(f"""
+                                    SELECT COUNT(*) FROM {pairs_table}
+                                    WHERE experiment_id = %s
+                                """, (exp_id,))
+                                pairs_count = cursor.fetchone()[0]
+                                if pairs_count > 0:
+                                    print(f"🔗 Segment Pairs: {pairs_count} pairs generated")
+                            
+                except Exception as e:
+                    # Silently continue if there's an error (table might not exist)
+                    pass
+                finally:
+                    cursor.close()
+            
             query.disconnect()
             
         except Exception as e:
