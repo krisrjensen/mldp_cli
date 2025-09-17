@@ -81,6 +81,7 @@ class MLDPCompleter(Completer):
             'show-all-feature-sets': [],
             'update-selection-config': ['--max-files', '--seed', '--strategy', '--balanced', '10', '25', '50', '100'],
             'select-files': ['--max-files', '--label', '--seed', '50', '100'],
+            'remove-file-labels': ['trash', 'voltage_only', 'arc_short_gap', 'arc_extinguish', 'other'],
             
             # Settings
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
@@ -193,6 +194,7 @@ class MLDPShell:
             'show-all-feature-sets': self.cmd_show_all_feature_sets,
             'update-selection-config': self.cmd_update_selection_config,
             'select-files': self.cmd_select_files,
+            'remove-file-labels': self.cmd_remove_file_labels,
             'generate-segment-training-data': self.cmd_generate_segment_training_data,
             'generate-segment-pairs': self.cmd_generate_segment_pairs,
             'generate-feature-fileset': self.cmd_generate_feature_fileset,
@@ -1187,6 +1189,7 @@ class MLDPShell:
   remove-feature-set <id>              Remove a feature set from experiment
   clear-feature-sets                   Remove ALL feature sets from experiment
   select-files [--max-files N]        Select files for training data
+  remove-file-labels <label1>...      Remove files with specified labels from training data
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
@@ -1867,6 +1870,113 @@ class MLDPShell:
             print("❌ ExperimentFileSelector module not found")
         except Exception as e:
             print(f"❌ Error selecting files: {e}")
+    
+    def cmd_remove_file_labels(self, args):
+        """Remove specific file labels from experiment training data"""
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+        
+        if not args:
+            print("Usage: remove-file-labels <label1> [label2] [label3] ...")
+            print("\nExample:")
+            print("  remove-file-labels trash voltage_only arc_short_gap")
+            print("\nThis removes all files with the specified labels from the training data.")
+            return
+        
+        # Parse labels from arguments
+        labels_to_remove = args
+        
+        table_name = f"experiment_{self.current_experiment:03d}_file_training_data"
+        
+        print(f"🗑️  Removing file labels from experiment {self.current_experiment}...")
+        print(f"   Labels to remove: {', '.join(labels_to_remove)}")
+        
+        cursor = self.db_conn.cursor()
+        try:
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+            
+            if not cursor.fetchone()[0]:
+                print(f"❌ Table {table_name} does not exist")
+                return
+            
+            # Get counts before deletion
+            cursor.execute(f"""
+                SELECT file_label_name, COUNT(*) as count
+                FROM {table_name}
+                WHERE file_label_name = ANY(%s)
+                GROUP BY file_label_name
+            """, (labels_to_remove,))
+            
+            labels_found = {}
+            for row in cursor:
+                labels_found[row[0]] = row[1]
+            
+            if not labels_found:
+                print("⚠️  No files found with the specified labels")
+                return
+            
+            print("\n📊 Files to be removed:")
+            total_to_remove = 0
+            for label, count in labels_found.items():
+                print(f"   {label}: {count} files")
+                total_to_remove += count
+            
+            # Ask for confirmation
+            response = input(f"\n⚠️  Remove {total_to_remove} files? (y/n): ")
+            if response.lower() != 'y':
+                print("❌ Removal cancelled")
+                return
+            
+            # Delete the files
+            cursor.execute(f"""
+                DELETE FROM {table_name}
+                WHERE file_label_name = ANY(%s)
+            """, (labels_to_remove,))
+            
+            deleted = cursor.rowcount
+            self.db_conn.commit()
+            
+            print(f"\n✅ Successfully removed {deleted} files")
+            
+            # Show remaining statistics
+            cursor.execute(f"""
+                SELECT 
+                    COUNT(DISTINCT file_id) as total_files,
+                    COUNT(DISTINCT file_label_name) as unique_labels
+                FROM {table_name}
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+            
+            stats = cursor.fetchone()
+            print(f"\n📊 Remaining in training data:")
+            print(f"   Total files: {stats[0]}")
+            print(f"   Unique labels: {stats[1]}")
+            
+            # Show remaining label distribution
+            cursor.execute(f"""
+                SELECT file_label_name, COUNT(*) as count
+                FROM {table_name}
+                WHERE experiment_id = %s
+                GROUP BY file_label_name
+                ORDER BY count DESC
+            """, (self.current_experiment,))
+            
+            print("\n📊 Remaining label distribution:")
+            for row in cursor:
+                print(f"   {row[0]}: {row[1]} files")
+            
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"❌ Error removing file labels: {e}")
+        finally:
+            cursor.close()
     
     def cmd_generate_segment_training_data(self, args):
         """Generate segment training data table"""
