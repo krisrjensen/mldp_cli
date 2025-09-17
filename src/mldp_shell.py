@@ -445,9 +445,27 @@ class MLDPShell:
             query.print_experiment_summary(exp_id)
             
             # Also check for file training data
-            if self.db_conn:
+            # Create connection if needed
+            db_conn = self.db_conn
+            if not db_conn:
+                try:
+                    import psycopg2
+                    db_conn = psycopg2.connect(
+                        host='localhost',
+                        port=5432,
+                        database='arc_detection',
+                        user='kjensen'
+                    )
+                    temp_conn = True
+                except:
+                    db_conn = None
+                    temp_conn = False
+            else:
+                temp_conn = False
+            
+            if db_conn:
                 table_name = f"experiment_{exp_id:03d}_file_training_data"
-                cursor = self.db_conn.cursor()
+                cursor = db_conn.cursor()
                 try:
                     # Check if training data table exists
                     cursor.execute("""
@@ -536,6 +554,9 @@ class MLDPShell:
                     pass
                 finally:
                     cursor.close()
+                    # Close temporary connection if we created one
+                    if temp_conn and db_conn:
+                        db_conn.close()
             
             query.disconnect()
             
