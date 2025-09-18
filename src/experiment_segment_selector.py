@@ -195,9 +195,13 @@ class ExperimentSegmentSelector:
         """
         Select segments with position balance.
         
+        For balanced mode:
+        - Find the minimum count across all positions (L, C, R)
+        - Randomly select that number of segments from EACH position
+        
         Args:
             segments: Available segments
-            min_segments: Minimum segments to select
+            min_segments: Minimum segments per position (not used in balanced mode)
             
         Returns:
             Selected segments with position balance
@@ -215,21 +219,24 @@ class ExperimentSegmentSelector:
         
         selected = []
         
-        # First, select at least one from each position
+        # Find minimum count across all positions
+        position_counts = {pos: len(segs) for pos, segs in by_position.items()}
+        
+        if not position_counts:
+            return []
+        
+        # Find the minimum count across positions
+        min_count = min(position_counts.values())
+        
+        # Select min_count segments from EACH position
         for position, position_segments in by_position.items():
             if position_segments:
-                selected.append(random.choice(position_segments))
+                # Randomly select min_count segments from this position
+                num_to_select = min(min_count, len(position_segments))
+                selected_from_position = random.sample(position_segments, num_to_select)
+                selected.extend(selected_from_position)
         
-        # If we need more segments, add randomly from all positions
-        remaining_segments = [s for s in segments if s not in selected]
-        additional_needed = max(0, min_segments - len(selected))
-        
-        if additional_needed > 0 and remaining_segments:
-            additional = random.sample(
-                remaining_segments,
-                min(additional_needed, len(remaining_segments))
-            )
-            selected.extend(additional)
+        logger.info(f"Balanced selection: {min_count} segments × {len(by_position)} positions = {len(selected)} total")
         
         return selected
     

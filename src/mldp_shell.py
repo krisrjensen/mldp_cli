@@ -2126,11 +2126,18 @@ class MLDPShell:
             elif args[i] == '--help':
                 print("\nUsage: generate-segment-training-data [options]")
                 print("\nOptions:")
-                print("  --segments-per-file N      Target segments per file (default: 3)")
-                print("  --balance-strategy STRAT  balanced|proportional|all (default: balanced)")
+                print("  --segments-per-file N      Segments per file (default: 3)")
+                print("  --balance-strategy STRAT  Selection strategy (default: balanced)")
+                print("                             balanced: Find min count across positions (L/C/R),")
+                print("                                      select that number from EACH position")
+                print("                             random:   Select up to N segments randomly")
                 print("  --no-respect-position      Don't maintain L/C/R position uniqueness")
                 print("  --max-segments N           Maximum total segments")
                 print("  --seed N                   Random seed (default: 42)")
+                print("\nBalanced Mode Logic:")
+                print("  If a file has L=5, C=3, R=7 segments:")
+                print("  - Selects min(5,3,7)=3 from EACH position")
+                print("  - Total: 3L + 3C + 3R = 9 segments from this file")
                 print("\nExample:")
                 print("  generate-segment-training-data --segments-per-file 3 --balance-strategy balanced")
                 return
@@ -2147,41 +2154,81 @@ class MLDPShell:
         try:
             from experiment_segment_selector import ExperimentSegmentSelector
             
-            selector = ExperimentSegmentSelector(self.current_experiment, self.db_conn)
-            result = selector.select_segments(
-                segments_per_file=segments_per_file,
-                balance_strategy=balance_strategy,
-                respect_position=respect_position,
-                max_total_segments=max_total_segments,
-                seed=seed
+            # Create database configuration
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            
+            # First ensure the experiment config exists in database
+            cursor = self.db_conn.cursor()
+            
+            # Set segment_balance based on strategy
+            segment_balance = (balance_strategy == 'balanced')
+            
+            cursor.execute("""
+                INSERT INTO ml_experiments (
+                    experiment_id, experiment_name,
+                    segment_balance, min_segments_per_file, random_seed,
+                    selection_strategy
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (experiment_id) DO UPDATE SET
+                    segment_balance = EXCLUDED.segment_balance,
+                    min_segments_per_file = EXCLUDED.min_segments_per_file,
+                    random_seed = EXCLUDED.random_seed,
+                    selection_strategy = EXCLUDED.selection_strategy
+            """, (
+                self.current_experiment,
+                f'Experiment {self.current_experiment}',
+                segment_balance,
+                segments_per_file,
+                seed,
+                'position_balanced_per_file' if segment_balance else 'random_per_file'
+            ))
+            
+            self.db_conn.commit()
+            cursor.close()
+            
+            # Create selector and run selection
+            selector = ExperimentSegmentSelector(self.current_experiment, db_config)
+            result = selector.run_selection(
             )
             
-            if result['success']:
-                print(f"\n✅ Successfully selected {result['total_selected']} segments")
+            if result and 'total_segments' in result:
+                print(f"\n✅ Successfully selected {result['total_segments']} segments")
+                print(f"   From {result.get('total_files', 0)} files")
+                print(f"   Across {result.get('total_labels', 0)} labels")
                 
-                stats = result.get('statistics', {})
-                if stats:
-                    print(f"\n📊 Segment selection statistics:")
-                    print(f"   Files with segments: {stats.get('files_with_segments', 0)}")
-                    print(f"   Avg segments per file: {stats.get('avg_segments_per_file', 0):.1f}")
-                    
-                    if 'label_distribution' in stats:
-                        print("\n   Label distribution:")
-                        for label, count in stats['label_distribution'].items():
-                            print(f"     {label}: {count} segments")
-                    
-                    if 'position_distribution' in stats:
-                        print("\n   Position distribution:")
-                        pos_dist = stats['position_distribution']
-                        print(f"     L (left): {pos_dist.get('L', 0)}")
-                        print(f"     C (center): {pos_dist.get('C', 0)}")
-                        print(f"     R (right): {pos_dist.get('R', 0)}")
-                        if pos_dist.get('Other', 0) > 0:
-                            print(f"     Other: {pos_dist.get('Other', 0)}")
+                if result.get('total_pairs', 0) > 0:
+                    print(f"   Generated {result['total_pairs']} segment pairs")
                 
-                print(f"\n💾 Data saved to: experiment_{self.current_experiment:03d}_segment_training_data")
+                # Show segments per label if available
+                if 'segments_per_label' in result:
+                    print("\n📊 Segments per label:")
+                    # Need to get label names
+                    cursor = self.db_conn.cursor()
+                    for label_id, count in result['segments_per_label'].items():
+                        # Try to get label name
+                        cursor.execute("""
+                            SELECT label_text FROM files_y 
+                            WHERE label_id = %s 
+                            LIMIT 1
+                        """, (label_id,))
+                        row = cursor.fetchone()
+                        label_name = row[0] if row else f"Label {label_id}"
+                        print(f"     {label_name}: {count} segments")
+                    cursor.close()
+                
+                print(f"\n💾 Data saved to:")
+                print(f"   experiment_{self.current_experiment:03d}_segment_training_data")
+                if result.get('total_pairs', 0) > 0:
+                    print(f"   experiment_{self.current_experiment:03d}_segment_pairs")
             else:
-                print(f"❌ Failed to select segments: {result.get('error', 'Unknown error')}")
+                print(f"❌ Failed to select segments")
+                if isinstance(result, dict):
+                    print(f"   Result: {result}")
                 
         except ImportError:
             print("❌ ExperimentSegmentSelector module not found")
