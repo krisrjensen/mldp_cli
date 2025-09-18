@@ -181,10 +181,11 @@ class ExperimentSegmentSelector:
                 s.beginning_index as start_sample_index,
                 s.beginning_index + s.segment_length as end_sample_index,
                 s.segment_type,
+                s.segment_id_code,
                 s.transient_relative_position as position_arc
             FROM data_segments s
             WHERE s.experiment_file_id = %s
-                AND s.segment_type IN ('arc', 'restriking_arc')
+                AND s.enabled = true
             ORDER BY s.beginning_index
         """, (file_id,))
         
@@ -193,11 +194,12 @@ class ExperimentSegmentSelector:
     def select_balanced_segments(self, segments: List[Dict[str, Any]], 
                                 min_segments: int) -> List[Dict[str, Any]]:
         """
-        Select segments with position balance.
+        Select segments with position balance using segment_id_code prefixes.
         
         For balanced mode:
-        - Find the minimum count across all positions (L, C, R)
-        - Randomly select that number of segments from EACH position
+        - Group segments by segment_id_code prefix (Cl, Cm, Cr, L, R)
+        - Find the minimum count across all groups
+        - Randomly select that number of segments from EACH group
         
         Args:
             segments: Available segments
@@ -209,34 +211,58 @@ class ExperimentSegmentSelector:
         if not segments:
             return []
             
-        # Group segments by position
-        by_position = {}
+        # Group segments by segment_id_code prefix
+        by_prefix = {}
         for seg in segments:
-            pos = seg['position_arc'] or 'unknown'
-            if pos not in by_position:
-                by_position[pos] = []
-            by_position[pos].append(seg)
+            # Get segment_id_code (it's the 6th element in the tuple from SQL query)
+            segment_id_code = seg.get('segment_id_code') or seg[5] if len(seg) > 5 else None
+            
+            if segment_id_code:
+                # Extract prefix (Cl, Cm, Cr, L, R)
+                if segment_id_code.startswith('Cm'):
+                    prefix = 'Cm'
+                elif segment_id_code.startswith('Cl'):
+                    prefix = 'Cl'
+                elif segment_id_code.startswith('Cr'):
+                    prefix = 'Cr'
+                elif segment_id_code.startswith('L'):
+                    prefix = 'L'
+                elif segment_id_code.startswith('R'):
+                    prefix = 'R'
+                else:
+                    prefix = 'Other'
+            else:
+                # Fallback to old position_arc if segment_id_code not available
+                pos = seg.get('position_arc') or seg[6] if len(seg) > 6 else 'unknown'
+                prefix = pos[0] if pos and pos != 'unknown' else 'Other'
+            
+            if prefix not in by_prefix:
+                by_prefix[prefix] = []
+            by_prefix[prefix].append(seg)
         
         selected = []
         
-        # Find minimum count across all positions
-        position_counts = {pos: len(segs) for pos, segs in by_position.items()}
+        # Find minimum count across all groups
+        prefix_counts = {prefix: len(segs) for prefix, segs in by_prefix.items()}
         
-        if not position_counts:
+        if not prefix_counts:
             return []
         
-        # Find the minimum count across positions
-        min_count = min(position_counts.values())
+        # Find the minimum count across groups
+        min_count = min(prefix_counts.values())
         
-        # Select min_count segments from EACH position
-        for position, position_segments in by_position.items():
-            if position_segments:
-                # Randomly select min_count segments from this position
-                num_to_select = min(min_count, len(position_segments))
-                selected_from_position = random.sample(position_segments, num_to_select)
-                selected.extend(selected_from_position)
+        # Select min_count segments from EACH group
+        for prefix, prefix_segments in by_prefix.items():
+            if prefix_segments:
+                # Randomly select min_count segments from this group
+                num_to_select = min(min_count, len(prefix_segments))
+                selected_from_prefix = random.sample(prefix_segments, num_to_select)
+                selected.extend(selected_from_prefix)
         
-        logger.info(f"Balanced selection: {min_count} segments × {len(by_position)} positions = {len(selected)} total")
+        logger.info(f"Balanced selection by segment_id_code prefix:")
+        for prefix, count in prefix_counts.items():
+            logger.info(f"  {prefix}: {count} available, selected {min(min_count, count)}")
+        logger.info(f"Total: {min_count} × {len(by_prefix)} groups = {len(selected)} segments")
         
         return selected
     
@@ -423,19 +449,41 @@ class ExperimentSegmentSelector:
                     # Log selections
                     for seg in selected:
                         selection_order += 1
+                        
+                        # Get segment_id_code for position tracking
+                        segment_id_code = seg.get('segment_id_code') or seg[5] if len(seg) > 5 else None
+                        
+                        # Determine position from segment_id_code prefix
+                        if segment_id_code:
+                            if segment_id_code.startswith('Cm'):
+                                position = 'Cm'
+                            elif segment_id_code.startswith('Cl'):
+                                position = 'Cl'
+                            elif segment_id_code.startswith('Cr'):
+                                position = 'Cr'
+                            elif segment_id_code.startswith('L'):
+                                position = 'L'
+                            elif segment_id_code.startswith('R'):
+                                position = 'R'
+                            else:
+                                position = 'Other'
+                        else:
+                            position = seg.get('position_arc') or seg[6] if len(seg) > 6 else 'unknown'
+                        
                         self.log_selection(
                             file_id,
-                            seg['segment_id'],
-                            seg['position_arc'] or 'unknown',
+                            seg['segment_id'] if isinstance(seg, dict) else seg[0],
+                            position,
                             label_id,
                             selection_order
                         )
                         
                         # Track segment metadata
                         seg_info = {
-                            'segment_id': seg['segment_id'],
+                            'segment_id': seg['segment_id'] if isinstance(seg, dict) else seg[0],
                             'file_id': file_id,
                             'label_id': label_id,
+                            'segment_id_code': segment_id_code,
                             'position': seg['position_arc']
                         }
                         all_selected_segments.append(seg_info)
