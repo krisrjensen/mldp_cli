@@ -248,7 +248,21 @@ class ExperimentQueryPG:
             except Exception as e:
                 logger.debug(f"Error getting pipelines: {e}")
                 details['pipelines'] = []
-            
+
+            # Get segment training data
+            try:
+                details['segment_training_data'] = self._get_segment_training_data(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting segment training data: {e}")
+                details['segment_training_data'] = {'total_segments': 0, 'unique_labels': 0, 'label_distribution': []}
+
+            # Get file-segment label cross-distribution
+            try:
+                details['file_segment_distribution'] = self._get_file_segment_label_distribution(cursor, experiment_id)
+            except Exception as e:
+                logger.debug(f"Error getting file-segment distribution: {e}")
+                details['file_segment_distribution'] = {'has_data': False, 'distributions': []}
+
             return details
             
         finally:
@@ -593,7 +607,7 @@ class ExperimentQueryPG:
         """Get pipeline associations for experiment"""
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     ep.pipeline_id,
                     p.pipeline_name,
                     p.description,
@@ -604,7 +618,7 @@ class ExperimentQueryPG:
                 WHERE ep.experiment_id = %s
                 ORDER BY ep.created_at DESC
             """, (experiment_id,))
-            
+
             pipelines = []
             for row in cursor.fetchall():
                 pipelines.append({
@@ -614,11 +628,191 @@ class ExperimentQueryPG:
                     'status': row[3],
                     'created_at': row[4].isoformat() if row[4] else None
                 })
-            
+
             return pipelines
         except Exception as e:
             logger.debug(f"Error getting pipelines: {e}")
             return []
+
+    def _get_file_segment_label_distribution(self, cursor, experiment_id: int) -> Dict[str, Any]:
+        """
+        Get distribution of segment labels within each file label.
+
+        Note: Handles column name variations:
+        - Experiment 18: Uses 'assigned_label' (published data, cannot change)
+        - Other experiments: Use 'file_label_name' (standard)
+        """
+        try:
+            data = {
+                'has_data': False,
+                'distributions': []
+            }
+
+            # Check if both file and segment training data tables exist
+            file_table = f"experiment_{experiment_id:03d}_file_training_data"
+            seg_table = f"experiment_{experiment_id:03d}_segment_training_data"
+
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                ) AND EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (file_table, seg_table))
+
+            if cursor.fetchone()[0]:
+                # Detect which column name is used (assigned_label for exp 18, file_label_name for others)
+                cursor.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                    AND column_name IN ('assigned_label', 'file_label_name')
+                    LIMIT 1
+                """, (file_table,))
+
+                label_column_result = cursor.fetchone()
+                if not label_column_result:
+                    return data  # No label column found
+
+                label_column = label_column_result[0]
+
+                # Get the cross-distribution using the correct column
+                cursor.execute(f"""
+                    SELECT
+                        ft.{label_column} as file_label,
+                        COALESCE(sl.label_name, 'unlabeled') as segment_label,
+                        COUNT(DISTINCT st.segment_id) as segment_count
+                    FROM {file_table} ft
+                    JOIN data_segments ds ON ft.file_id = ds.experiment_file_id
+                    JOIN {seg_table} st ON ds.segment_id = st.segment_id
+                    LEFT JOIN segment_labels sl ON ds.segment_label_id = sl.label_id
+                    WHERE ft.experiment_id = %s AND st.experiment_id = %s
+                    GROUP BY ft.{label_column}, sl.label_name
+                    ORDER BY ft.{label_column}, segment_count DESC
+                """, (experiment_id, experiment_id))
+
+                results = cursor.fetchall()
+                if results:
+                    data['has_data'] = True
+                    # Organize by file label
+                    file_label_dict = {}
+                    for file_label, seg_label, count in results:
+                        if file_label not in file_label_dict:
+                            file_label_dict[file_label] = []
+                        file_label_dict[file_label].append({
+                            'segment_label': seg_label,
+                            'count': count
+                        })
+
+                    # Convert to list format
+                    for file_label, segments in file_label_dict.items():
+                        data['distributions'].append({
+                            'file_label': file_label,
+                            'segments': segments,
+                            'total': sum(s['count'] for s in segments)
+                        })
+
+            return data
+        except Exception as e:
+            logger.debug(f"Error getting file-segment label distribution: {e}")
+            return {'has_data': False, 'distributions': []}
+
+    def _get_segment_training_data(self, cursor, experiment_id: int) -> Dict[str, Any]:
+        """Get segment training data with label distribution"""
+        try:
+            data = {
+                'total_segments': 0,
+                'unique_labels': 0,
+                'label_distribution': []
+            }
+
+            # Check if segment training data table exists
+            seg_table = f"experiment_{experiment_id:03d}_segment_training_data"
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (seg_table,))
+
+            if cursor.fetchone()[0]:
+                # Get total count
+                cursor.execute(f"""
+                    SELECT COUNT(DISTINCT segment_id) as total_segments
+                    FROM {seg_table}
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                result = cursor.fetchone()
+                if result:
+                    data['total_segments'] = result[0]
+
+                # Get segment label distribution
+                cursor.execute(f"""
+                    SELECT
+                        COALESCE(sl.label_name, 'unlabeled') as label_name,
+                        COUNT(*) as count
+                    FROM {seg_table} st
+                    JOIN data_segments ds ON st.segment_id = ds.segment_id
+                    LEFT JOIN segment_labels sl ON ds.segment_label_id = sl.label_id
+                    WHERE st.experiment_id = %s
+                    GROUP BY sl.label_name
+                    ORDER BY count DESC, label_name
+                """, (experiment_id,))
+
+                labels = cursor.fetchall()
+                if labels:
+                    data['unique_labels'] = len(labels)
+                    data['label_distribution'] = [
+                        {'label_name': label[0], 'count': label[1]}
+                        for label in labels
+                    ]
+            else:
+                # Try to get data from segment_selection_log if training table doesn't exist
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'segment_selection_log'
+                    )
+                """)
+
+                if cursor.fetchone()[0]:
+                    # Get total segments for this experiment
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT segment_id) as total_segments
+                        FROM segment_selection_log
+                        WHERE experiment_id = %s
+                    """, (experiment_id,))
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        data['total_segments'] = result[0]
+
+                        # Get segment label distribution
+                        cursor.execute("""
+                            SELECT
+                                COALESCE(sl.label_name, 'unlabeled') as label_name,
+                                COUNT(DISTINCT ssl.segment_id) as count
+                            FROM segment_selection_log ssl
+                            JOIN data_segments ds ON ssl.segment_id = ds.segment_id
+                            LEFT JOIN segment_labels sl ON ds.segment_label_id = sl.label_id
+                            WHERE ssl.experiment_id = %s
+                            GROUP BY sl.label_name
+                            ORDER BY count DESC, label_name
+                        """, (experiment_id,))
+
+                        labels = cursor.fetchall()
+                        if labels:
+                            data['unique_labels'] = len(labels)
+                            data['label_distribution'] = [
+                                {'label_name': label[0], 'count': label[1]}
+                                for label in labels
+                            ]
+
+            return data
+        except Exception as e:
+            logger.debug(f"Error getting segment training data: {e}")
+            return {'total_segments': 0, 'unique_labels': 0, 'label_distribution': []}
     
     def get_experiment_configuration(self, experiment_id: int) -> Dict[str, Any]:
         """
@@ -729,8 +923,8 @@ class ExperimentQueryPG:
                 print(f"     Category: {fs['category']}")
                 print(f"     Data channel: {fs.get('data_channel', 'load_voltage')}")
                 print(f"     Number of features: {fs['num_features']}")
-                if fs['n_values']:
-                    print(f"     N values (chunk sizes): {fs['n_values']}")
+                if fs.get('n_value'):
+                    print(f"     N value (chunk size): {fs['n_value']}")
                 if fs['features']:
                     # Split features for better display
                     features_str = fs['features']
@@ -754,7 +948,53 @@ class ExperimentQueryPG:
             print(f"\n🏷️ Segment Labels:")
             for sl in segment_labels:
                 print(f"  - {sl['label_name']} ({sl['display_name']}, ID: {sl['label_id']})")
-        
+
+        # Segment Training Data with bar chart
+        segment_training = details.get('segment_training_data', {})
+        if segment_training and segment_training.get('total_segments'):
+            print(f"\n📊 SEGMENT TRAINING DATA:")
+            print("=" * 60)
+            print(f"Total segments: {segment_training['total_segments']}")
+            print(f"Unique labels: {segment_training['unique_labels']}")
+
+            label_dist = segment_training.get('label_distribution', [])
+            if label_dist:
+                print("\nSegment Label Distribution:")
+                max_count = max(item['count'] for item in label_dist)
+                for item in label_dist:
+                    bar_length = int(item['count'] / max_count * 30)
+                    bar = '█' * bar_length
+                    print(f"  {item['label_name']:35} {item['count']:4} {bar}")
+
+        # File-Segment Label Cross-Distribution
+        file_seg_dist = details.get('file_segment_distribution', {})
+        if file_seg_dist.get('has_data'):
+            print(f"\n📂 FILE LABEL → SEGMENT LABEL DISTRIBUTION:")
+            print("=" * 60)
+
+            distributions = file_seg_dist.get('distributions', [])
+            # Sort by file label for consistent display
+            distributions.sort(key=lambda x: x['file_label'])
+
+            for dist in distributions:
+                file_label = dist['file_label']
+                segments = dist['segments']
+                total = dist['total']
+
+                print(f"\n{file_label} ({total} segments):")
+
+                if segments:
+                    # Find max count for this file label's segments
+                    max_seg_count = max(s['count'] for s in segments)
+
+                    for seg in segments:
+                        # Create proportional bar relative to this file label's max
+                        bar_length = int(seg['count'] / max_seg_count * 25)
+                        bar = '▪' * bar_length
+                        # Calculate percentage of segments in this file label
+                        percentage = (seg['count'] / total * 100) if total > 0 else 0
+                        print(f"    {seg['segment_label']:32} {seg['count']:4} ({percentage:5.1f}%) {bar}")
+
         # Segments
         segments = details.get('segments', {})
         if segments.get('total'):

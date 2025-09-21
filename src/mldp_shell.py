@@ -70,7 +70,7 @@ class MLDPCompleter(Completer):
             'closest': ['10', '20', '50', '100'],
             
             # Experiments
-            'experiment-select': ['41', '42', '43'],
+            'select-segments': ['41', '42', '43'],
             'update-decimations': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
             'update-segment-sizes': ['128', '256', '512', '1024', '2048', '4096', '8192', '16384', '32768', '65536', '131072', '262144'],
             'update-amplitude-methods': ['minmax', 'zscore', 'maxabs', 'robust', 'TRAW', 'TADC14', 'TADC12', 'TADC10', 'TADC8', 'TADC6'],
@@ -79,9 +79,25 @@ class MLDPCompleter(Completer):
             'clear-feature-sets': [],
             'list-feature-sets': [],
             'show-all-feature-sets': [],
+            # New feature management commands
+            'create-feature': ['--name', '--category', '--behavior', '--description', 'electrical', 'statistical', 'spectral', 'temporal', 'compute', 'driver', 'derived', 'aggregate', 'transform'],
+            'list-features': ['--category', 'electrical', 'statistical', 'spectral', 'temporal', 'compute'],
+            'show-feature': [],
+            'update-feature': ['--name', '--category', '--description'],
+            'delete-feature': [],
+            'create-global-feature-set': ['--name', '--category', '--description', 'electrical', 'statistical', 'custom'],
+            'add-features-to-set': ['--features'],
+            'remove-features-from-set': ['--features'],
+            'clone-feature-set': ['--name'],
+            'link-feature-set': ['--n-value', '--channel', '--priority', 'load_voltage', 'source_current'],
+            'bulk-link-feature-sets': ['--sets', '--n-values'],
+            'update-feature-link': ['--n-value', '--priority', '--active'],
+            'show-feature-config': [],
             'update-selection-config': ['--max-files', '--seed', '--strategy', '--balanced', '10', '25', '50', '100'],
             'select-files': ['--max-files', '--label', '--seed', '50', '100'],
+            'remove-files': ['--label', '--file-ids'],
             'remove-file-labels': ['trash', 'voltage_only', 'arc_short_gap', 'arc_extinguish', 'other'],
+            'remove-segments': ['--label', '--segment-ids'],
             
             # Settings
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
@@ -182,7 +198,7 @@ class MLDPShell:
             'clear': self.cmd_clear,
             'export': self.cmd_export,
             'time': self.cmd_time,
-            'experiment-select': self.cmd_experiment_select,
+            'select-segments': self.cmd_select_segments,
             'update-decimations': self.cmd_update_decimations,
             'update-segment-sizes': self.cmd_update_segment_sizes,
             'update-amplitude-methods': self.cmd_update_amplitude_methods,
@@ -192,10 +208,26 @@ class MLDPShell:
             'clear-feature-sets': self.cmd_clear_feature_sets,
             'list-feature-sets': self.cmd_list_feature_sets,
             'show-all-feature-sets': self.cmd_show_all_feature_sets,
+            # New feature management commands
+            'create-feature': self.cmd_create_feature,
+            'list-features': self.cmd_list_features,
+            'show-feature': self.cmd_show_feature,
+            'update-feature': self.cmd_update_feature,
+            'delete-feature': self.cmd_delete_feature,
+            'create-global-feature-set': self.cmd_create_global_feature_set,
+            'add-features-to-set': self.cmd_add_features_to_set,
+            'remove-features-from-set': self.cmd_remove_features_from_set,
+            'clone-feature-set': self.cmd_clone_feature_set,
+            'link-feature-set': self.cmd_link_feature_set,
+            'bulk-link-feature-sets': self.cmd_bulk_link_feature_sets,
+            'update-feature-link': self.cmd_update_feature_link,
+            'show-feature-config': self.cmd_show_feature_config,
             'update-selection-config': self.cmd_update_selection_config,
             'select-files': self.cmd_select_files,
+            'remove-files': self.cmd_remove_files,
             'remove-file-labels': self.cmd_remove_file_labels,
-            'generate-segment-training-data': self.cmd_generate_segment_training_data,
+            'remove-segments': self.cmd_remove_segments,
+            'generate-training-data': self.cmd_generate_training_data,
             'generate-segment-pairs': self.cmd_generate_segment_pairs,
             'generate-feature-fileset': self.cmd_generate_feature_fileset,
             'help': self.cmd_help,
@@ -210,9 +242,10 @@ class MLDPShell:
             'logs': self.cmd_servers_logs,
             # Segment generation commands
             'segment-generate': self.cmd_segment_generate,
-            'segment-status': self.cmd_segment_status,
+            'generate-segment-fileset': self.cmd_generate_segment_fileset,
+            'show-segment-status': self.cmd_show_segment_status,
             'segment-test': self.cmd_segment_test,
-            'segment-validate': self.cmd_segment_validate,
+            'validate-segments': self.cmd_validate_segments,
             'segment-plot': self.cmd_segment_plot,
         }
     
@@ -476,78 +509,159 @@ class MLDPShell:
                     """, (table_name,))
                     
                     if cursor.fetchone()[0]:
-                        # Get file label statistics
-                        cursor.execute(f"""
-                            SELECT 
-                                file_label_name,
-                                COUNT(*) as count
-                            FROM {table_name}
-                            WHERE experiment_id = %s
-                            GROUP BY file_label_name
-                            ORDER BY count DESC, file_label_name
-                        """, (exp_id,))
-                        
-                        labels = cursor.fetchall()
-                        
-                        if labels:
-                            print("\n📁 FILE TRAINING DATA:")
-                            print("=" * 60)
-                            
-                            # Get total counts
+                        # Check which column name is used for labels
+                        # Note: Experiment 18 uses 'assigned_label' (published data, cannot change)
+                        # All other experiments should use 'file_label_name' (standard)
+                        cursor.execute("""
+                            SELECT column_name
+                            FROM information_schema.columns
+                            WHERE table_name = %s
+                            AND column_name IN ('assigned_label', 'file_label_name')
+                            LIMIT 1
+                        """, (table_name,))
+
+                        label_column_result = cursor.fetchone()
+                        if label_column_result:
+                            label_column = label_column_result[0]
+
+                            # Get file label statistics using the correct column
                             cursor.execute(f"""
-                                SELECT 
-                                    COUNT(DISTINCT file_id) as total_files,
-                                    COUNT(DISTINCT file_label_name) as unique_labels
+                                SELECT
+                                    {label_column} as file_label_name,
+                                    COUNT(*) as count
                                 FROM {table_name}
                                 WHERE experiment_id = %s
+                                GROUP BY {label_column}
+                                ORDER BY count DESC, {label_column}
                             """, (exp_id,))
-                            
-                            stats = cursor.fetchone()
-                            print(f"Total files: {stats[0]}")
-                            print(f"Unique labels: {stats[1]}")
-                            
-                            # Show label distribution
-                            print("\nLabel Distribution:")
-                            for label_name, count in labels:
-                                bar_length = int(count / max(l[1] for l in labels) * 30)
-                                bar = '█' * bar_length
-                                print(f"  {label_name:30} {count:4} {bar}")
-                            
-                            # Check for segment training data too
-                            seg_table = f"experiment_{exp_id:03d}_segment_training_data"
-                            cursor.execute("""
-                                SELECT EXISTS (
-                                    SELECT 1 FROM information_schema.tables 
-                                    WHERE table_name = %s
-                                )
-                            """, (seg_table,))
-                            
-                            if cursor.fetchone()[0]:
+
+                            labels = cursor.fetchall()
+
+                            if labels:
+                                print("\n📁 FILE TRAINING DATA:")
+                                print("=" * 60)
+
+                                # Get total counts using the correct column
                                 cursor.execute(f"""
-                                    SELECT COUNT(*) FROM {seg_table}
+                                    SELECT
+                                        COUNT(DISTINCT file_id) as total_files,
+                                        COUNT(DISTINCT {label_column}) as unique_labels
+                                    FROM {table_name}
                                     WHERE experiment_id = %s
                                 """, (exp_id,))
-                                seg_count = cursor.fetchone()[0]
-                                if seg_count > 0:
-                                    print(f"\n📊 Segment Training Data: {seg_count} segments selected")
-                            
-                            # Check for segment pairs too
-                            pairs_table = f"experiment_{exp_id:03d}_segment_pairs"
-                            cursor.execute("""
-                                SELECT EXISTS (
-                                    SELECT 1 FROM information_schema.tables 
-                                    WHERE table_name = %s
-                                )
-                            """, (pairs_table,))
-                            
-                            if cursor.fetchone()[0]:
-                                cursor.execute(f"""
-                                    SELECT COUNT(*) FROM {pairs_table}
-                                    WHERE experiment_id = %s
-                                """, (exp_id,))
-                                pairs_count = cursor.fetchone()[0]
-                                if pairs_count > 0:
-                                    print(f"🔗 Segment Pairs: {pairs_count} pairs generated")
+
+                                stats = cursor.fetchone()
+                                print(f"Total files: {stats[0]}")
+                                print(f"Unique labels: {stats[1]}")
+
+                                # Show label distribution
+                                print("\nLabel Distribution:")
+                                for label_name, count in labels:
+                                    bar_length = int(count / max(l[1] for l in labels) * 30)
+                                    bar = '█' * bar_length
+                                    print(f"  {label_name:30} {count:4} {bar}")
+
+                                # Check for segment training data too
+                                seg_table = f"experiment_{exp_id:03d}_segment_training_data"
+                                cursor.execute("""
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM information_schema.tables
+                                        WHERE table_name = %s
+                                    )
+                                """, (seg_table,))
+
+                                if cursor.fetchone()[0]:
+                                    cursor.execute(f"""
+                                        SELECT COUNT(*) FROM {seg_table}
+                                        WHERE experiment_id = %s
+                                    """, (exp_id,))
+                                    seg_count = cursor.fetchone()[0]
+                                    if seg_count > 0:
+                                        print(f"\n📊 SEGMENT TRAINING DATA:")
+                                        print("=" * 60)
+                                        print(f"Total segments: {seg_count}")
+
+                                        # Get segment label distribution by joining with data_segments
+                                        cursor.execute(f"""
+                                            SELECT
+                                                COALESCE(sl.label_name, 'unlabeled') as label_name,
+                                                COUNT(*) as count
+                                            FROM {seg_table} st
+                                            JOIN data_segments ds ON st.segment_id = ds.segment_id
+                                            LEFT JOIN segment_labels sl ON ds.segment_label_id = sl.label_id
+                                            GROUP BY sl.label_name
+                                            ORDER BY count DESC, label_name
+                                        """)
+
+                                        seg_labels = cursor.fetchall()
+                                        if seg_labels:
+                                            print(f"Unique segment labels: {len(seg_labels)}")
+                                            print("\nSegment Label Distribution:")
+                                            max_seg_count = max(l[1] for l in seg_labels)
+                                            for label_name, count in seg_labels:
+                                                bar_length = int(count / max_seg_count * 30)
+                                                bar = '█' * bar_length
+                                                print(f"  {label_name:35} {count:4} {bar}")
+
+                                        # Get position distribution from segment_selection_log if available
+                                        cursor.execute("""
+                                            SELECT EXISTS (
+                                                SELECT 1 FROM information_schema.tables
+                                                WHERE table_name = 'segment_selection_log'
+                                            )
+                                        """)
+
+                                        if cursor.fetchone()[0]:
+                                            cursor.execute("""
+                                                SELECT
+                                                    position_type,
+                                                    COUNT(*) as count
+                                                FROM segment_selection_log
+                                                WHERE experiment_id = %s
+                                                GROUP BY position_type
+                                                ORDER BY position_type
+                                            """, (exp_id,))
+
+                                            positions = cursor.fetchall()
+                                            if positions:
+                                                print("\nPosition Distribution:")
+                                                for pos, count in positions:
+                                                    print(f"  {pos:10}: {count} segments")
+
+                                        # Also get segment type distribution
+                                        cursor.execute(f"""
+                                            SELECT
+                                                ds.segment_type,
+                                                COUNT(*) as count
+                                            FROM {seg_table} st
+                                            JOIN data_segments ds ON st.segment_id = ds.segment_id
+                                            GROUP BY ds.segment_type
+                                            ORDER BY ds.segment_type
+                                        """)
+
+                                        seg_types = cursor.fetchall()
+                                        if seg_types:
+                                            print("\nSegment Type Distribution:")
+                                            for seg_type, count in seg_types:
+                                                print(f"  {seg_type:10}: {count} segments")
+
+                                # Check for segment pairs too
+                                pairs_table = f"experiment_{exp_id:03d}_segment_pairs"
+                                cursor.execute("""
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM information_schema.tables
+                                        WHERE table_name = %s
+                                    )
+                                """, (pairs_table,))
+
+                                if cursor.fetchone()[0]:
+                                    cursor.execute(f"""
+                                        SELECT COUNT(*) FROM {pairs_table}
+                                        WHERE experiment_id = %s
+                                    """, (exp_id,))
+                                    pairs_count = cursor.fetchone()[0]
+                                    if pairs_count > 0:
+                                        print(f"🔗 Segment Pairs: {pairs_count} pairs generated")
                             
                 except Exception as e:
                     # Silently continue if there's an error (table might not exist)
@@ -1290,7 +1404,6 @@ class MLDPShell:
   experiment-summary [id]             Show experiment summary
   experiment-generate <config>        Generate new experiment (balanced|small|large)
   experiment-create --name <name>     Create experiment with full CLI specification
-  experiment-select <id>              Run segment selection for experiment
 
 🔧 EXPERIMENT CONFIGURATION:
   update-decimations <d1> <d2>...     Update decimation factors
@@ -1305,6 +1418,8 @@ class MLDPShell:
   clear-feature-sets                   Remove ALL feature sets from experiment
   select-files [--max-files N]        Select files for training data
   remove-file-labels <label1>...      Remove files with specified labels from training data
+  remove-files <id1> <id2>...         Remove specific files by ID from training data
+  remove-segments <id1> <id2>...      Remove specific segments by ID from training data
 
 📐 DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
@@ -1316,6 +1431,20 @@ class MLDPShell:
   heatmap [--version N]               Generate distance heatmap
   histogram [--version] [--bins]      Generate distance histogram
   visualize --segment-id ID           Visualize segment data
+
+🔬 ML PIPELINE COMMANDS:
+  select-files                        Select files for training (DB table)
+  select-segments                     Select segments for training (DB table)
+  generate-segment-pairs              Generate segment pairs (DB table)
+  generate-segment-fileset            Generate physical segment files from raw data
+  generate-feature-fileset            Extract features and save to disk
+
+🔍 SEGMENT COMMANDS:
+  segment-generate                    Generate segments from raw data
+  show-segment-status                 Show segment generation status
+  segment-test                        Test segment generation with small dataset
+  validate-segments                   Validate generated segments
+  segment-plot                        Plot segment data
 
 ⚙️  SETTINGS:
   set <param> <value>                 Set configuration (experiment, distance)
@@ -1345,54 +1474,128 @@ class MLDPShell:
   • Export supports .csv and .json formats
 """)
     
-    def cmd_experiment_select(self, args):
-        """Run segment selection for an experiment"""
-        if not args:
-            print("Usage: experiment-select <experiment_id>")
-            print("Example: experiment-select 41")
-            return
-            
-        try:
+    def cmd_select_segments(self, args):
+        """Select segments for training with proper segment code balancing"""
+        # Parse experiment ID if provided, otherwise use current
+        if args and args[0].isdigit():
             experiment_id = int(args[0])
-        except ValueError:
-            print(f"❌ Invalid experiment ID: {args[0]}")
+            args = args[1:]  # Remove experiment ID from args
+        else:
+            experiment_id = self.current_experiment
+
+        if not experiment_id:
+            print("❌ No experiment specified. Use: select-segments <experiment_id> [options]")
+            print("   Or set current experiment: set experiment <id>")
             return
-            
-        # Import and run the segment selector
-        try:
-            from experiment_segment_selector import ExperimentSegmentSelector
-            
-            # Use current database connection if available
-            if self.db_conn:
-                db_config = {
-                    'host': 'localhost',
-                    'database': 'arc_detection',
-                    'user': 'kjensen'
-                }
+
+        # Parse options
+        strategy = 'balanced'  # Default
+        segments_per_type = 3  # Default for fixed_per_type strategy
+        seed = 42
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--strategy' and i + 1 < len(args):
+                strategy = args[i + 1]
+                i += 2
+            elif args[i] == '--segments-per-type' and i + 1 < len(args):
+                segments_per_type = int(args[i + 1])
+                i += 2
+            elif args[i] == '--seed' and i + 1 < len(args):
+                seed = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print("\nUsage: select-segments [experiment_id] [options]")
+                print("\nOptions:")
+                print("  --strategy STRAT           Selection strategy (default: balanced)")
+                print("                             balanced: Find min count across segment types,")
+                print("                                      select that number from EACH type")
+                print("                             fixed_per_type: Select N segments from each type")
+                print("                             proportional: Select proportionally from each type")
+                print("  --segments-per-type N      For fixed_per_type: segments to select per type (default: 3)")
+                print("  --seed N                   Random seed (default: 42)")
+                print("\n📊 BALANCED STRATEGY (recommended):")
+                print("  Per file: Groups segments by code type (L, R, C, Cm, Cl, Cr, etc.)")
+                print("  Example: File has L=45, R=40, C=5, Cm=25, Cl=3, Cr=2 segments")
+                print("  → Finds minimum: min(45,40,5,25,3,2) = 2")
+                print("  → Selects 2 from EACH type: 2L + 2R + 2C + 2Cm + 2Cl + 2Cr = 12 total")
+                print("\nExamples:")
+                print("  select-segments 41 --strategy balanced")
+                print("  select-segments 41 --strategy fixed_per_type --segments-per-type 5")
+                print("  select-segments --strategy balanced  (uses current experiment)")
+                return
             else:
-                print("⚠️ No database connection. Using default configuration.")
-                db_config = {
-                    'host': 'localhost',
-                    'database': 'arc_detection',
-                    'user': 'kjensen'
-                }
-            
-            print(f"🔄 Starting segment selection for experiment {experiment_id}...")
-            print("This may take several minutes...")
-            
-            selector = ExperimentSegmentSelector(experiment_id, db_config)
-            summary = selector.run_selection()
-            
-            print(f"\n✅ Segment Selection Complete!")
-            print(f"  Total labels: {summary['total_labels']}")
-            print(f"  Total files: {summary['total_files']}")
-            print(f"  Total segments: {summary['total_segments']}")
-            print(f"  Total pairs: {summary['total_pairs']:,}")
-            print(f"  Table: experiment_{experiment_id:03d}_segment_pairs")
-            
+                i += 1
+
+        print(f"🔄 Selecting segments for experiment {experiment_id}...")
+        print(f"   Strategy: {strategy}")
+        if strategy == 'fixed_per_type':
+            print(f"   Segments per type: {segments_per_type}")
+        elif strategy == 'balanced':
+            print(f"   Will select minimum count across all segment types from EACH type")
+        print(f"   Random seed: {seed}")
+
+        try:
+            # Try to use the improved v2 selector first
+            try:
+                from experiment_segment_selector_v2 import SegmentSelectorV2
+                use_v2 = True
+            except ImportError:
+                # Fallback to original if v2 not available
+                from experiment_segment_selector import ExperimentSegmentSelector
+                use_v2 = False
+                print("⚠️  Using legacy selector. For better results, ensure experiment_segment_selector_v2.py is available.")
+
+            # Database configuration
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            # Run selection with appropriate selector
+            if use_v2:
+                selector = SegmentSelectorV2(experiment_id, db_config)
+                result = selector.run_selection(
+                    strategy=strategy,
+                    segments_per_type=segments_per_type
+                )
+            else:
+                # Fallback to old selector
+                selector = ExperimentSegmentSelector(experiment_id, db_config)
+                result = selector.run_selection()
+
+            # Display results
+            if result and 'total_segments' in result:
+                print(f"\n✅ Successfully selected {result['total_segments']} segments")
+                print(f"   From {result.get('total_files', 0)} files")
+
+                # Show average per file
+                if result.get('total_files', 0) > 0:
+                    avg_per_file = result['total_segments'] / result['total_files']
+                    print(f"   Average per file: {avg_per_file:.1f}")
+
+                # Show segment type distribution from v2 selector
+                if 'segments_by_type' in result:
+                    print("\n📊 Segment type distribution:")
+                    for code_type, count in sorted(result['segments_by_type'].items()):
+                        print(f"     {code_type}: {count} segments")
+
+                # Show strategy used
+                if 'strategy' in result:
+                    print(f"\n📋 Selection strategy: {result['strategy']}")
+
+                print(f"\n💾 Data saved to:")
+                print(f"   experiment_{experiment_id:03d}_segment_training_data")
+            else:
+                print(f"❌ Failed to select segments")
+                if isinstance(result, dict) and 'error' in result:
+                    print(f"   Error: {result['error']}")
+
         except ImportError as e:
             print(f"❌ Could not import segment selector: {e}")
-            print("Make sure experiment_segment_selector.py is in the same directory")
+            print("Make sure experiment_segment_selector_v2.py is in the same directory")
         except Exception as e:
             print(f"❌ Error during segment selection: {e}")
     
@@ -1827,7 +2030,941 @@ class MLDPShell:
             print(f"❌ Database error: {e}")
         except Exception as e:
             print(f"❌ Error showing feature sets: {e}")
-    
+
+    def cmd_create_feature(self, args):
+        """Create a new feature in ml_features_lut"""
+        if not args or '--name' not in args:
+            print("Usage: create-feature --name <name> --category <category> --behavior <behavior> [--description <desc>]")
+            print("\nCategories: electrical, statistical, spectral, temporal, compute")
+            print("Behaviors: driver, derived, aggregate, transform")
+            print("\nExample: create-feature --name impedance --category electrical --behavior derived --description 'Electrical impedance Z=V/I'")
+            return
+
+        name = None
+        category = 'electrical'
+        behavior = 'driver'
+        description = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--name' and i + 1 < len(args):
+                name = args[i + 1]
+                i += 2
+            elif args[i] == '--category' and i + 1 < len(args):
+                category = args[i + 1]
+                i += 2
+            elif args[i] == '--behavior' and i + 1 < len(args):
+                behavior = args[i + 1]
+                i += 2
+            elif args[i] == '--description' and i + 1 < len(args):
+                description = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        if not name:
+            print("❌ Feature name is required")
+            return
+
+        valid_categories = ['electrical', 'statistical', 'spectral', 'temporal', 'compute']
+        if category not in valid_categories:
+            print(f"❌ Invalid category: {category}")
+            print(f"   Must be one of: {', '.join(valid_categories)}")
+            return
+
+        valid_behaviors = ['driver', 'derived', 'aggregate', 'transform']
+        if behavior not in valid_behaviors:
+            print(f"❌ Invalid behavior: {behavior}")
+            print(f"   Must be one of: {', '.join(valid_behaviors)}")
+            return
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT feature_id FROM ml_features_lut WHERE feature_name = %s", (name,))
+            if cursor.fetchone():
+                print(f"❌ Feature '{name}' already exists")
+                conn.close()
+                return
+
+            cursor.execute("SELECT COALESCE(MAX(feature_id), 0) + 1 FROM ml_features_lut")
+            feature_id = cursor.fetchone()[0]
+
+            cursor.execute("""
+                INSERT INTO ml_features_lut
+                (feature_id, feature_name, feature_category, behavior_type, description, is_active, created_at)
+                VALUES (%s, %s, %s, %s, %s, true, CURRENT_TIMESTAMP)
+            """, (feature_id, name, category, behavior, description or f"{name} feature"))
+
+            conn.commit()
+            print(f"✅ Created feature '{name}' (ID: {feature_id})")
+            print(f"   Category: {category}")
+            print(f"   Behavior: {behavior}")
+            if description:
+                print(f"   Description: {description}")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error creating feature: {e}")
+
+    def cmd_list_features(self, args):
+        """List all available features"""
+        category_filter = None
+        if args and '--category' in args:
+            idx = args.index('--category')
+            if idx + 1 < len(args):
+                category_filter = args[idx + 1]
+
+        try:
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            query = """
+                SELECT
+                    feature_id,
+                    feature_name,
+                    feature_category,
+                    behavior_type,
+                    description,
+                    is_active
+                FROM ml_features_lut
+            """
+            params = []
+
+            if category_filter:
+                query += " WHERE feature_category = %s"
+                params.append(category_filter)
+
+            query += " ORDER BY feature_category, feature_id"
+
+            cursor.execute(query, params)
+            features = cursor.fetchall()
+
+            if not features:
+                if category_filter:
+                    print(f"No features found in category '{category_filter}'")
+                else:
+                    print("No features found in database")
+                return
+
+            from collections import defaultdict
+            by_category = defaultdict(list)
+            for f in features:
+                by_category[f['feature_category']].append(f)
+
+            print("\n📊 Available Features:")
+            print("=" * 80)
+
+            for category in sorted(by_category.keys()):
+                print(f"\n🏷️  {category.upper()} Features:")
+                print("-" * 40)
+
+                for f in by_category[category]:
+                    status = "✓" if f['is_active'] else "✗"
+                    print(f"  {status} ID {f['feature_id']:3d}: {f['feature_name']:20s} ({f['behavior_type']:10s})")
+                    if f['description'] and f['description'] != f'{f["feature_name"]} feature':
+                        print(f"           {f['description'][:60]}")
+
+            print("\n" + "=" * 80)
+            print(f"Total: {len(features)} features")
+
+            if not category_filter:
+                print("\nFilter by category: list-features --category <category>")
+                print("Categories: electrical, statistical, spectral, temporal, compute")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error listing features: {e}")
+
+    def cmd_show_feature(self, args):
+        """Show details of a specific feature"""
+        if not args:
+            print("Usage: show-feature <feature_id|feature_name>")
+            return
+
+        try:
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            feature_arg = args[0]
+            if feature_arg.isdigit():
+                cursor.execute("SELECT * FROM ml_features_lut WHERE feature_id = %s", (int(feature_arg),))
+            else:
+                cursor.execute("SELECT * FROM ml_features_lut WHERE feature_name = %s", (feature_arg,))
+
+            feature = cursor.fetchone()
+
+            if not feature:
+                print(f"❌ Feature '{feature_arg}' not found")
+                return
+
+            print(f"\n📊 Feature Details:")
+            print("=" * 60)
+            print(f"ID:           {feature['feature_id']}")
+            print(f"Name:         {feature['feature_name']}")
+            print(f"Category:     {feature.get('feature_category', 'N/A')}")
+            print(f"Behavior:     {feature.get('behavior_type', 'N/A')}")
+            print(f"Active:       {'✓' if feature.get('is_active', False) else '✗'}")
+            print(f"Description:  {feature.get('description', 'N/A')}")
+            print(f"Created:      {feature.get('created_at', 'N/A')}")
+
+            cursor.execute("""
+                SELECT
+                    fs.feature_set_id,
+                    fs.feature_set_name
+                FROM ml_feature_set_features fsf
+                JOIN ml_feature_sets_lut fs ON fsf.feature_set_id = fs.feature_set_id
+                WHERE fsf.feature_id = %s
+                ORDER BY fs.feature_set_id
+            """, (feature['feature_id'],))
+
+            feature_sets = cursor.fetchall()
+            if feature_sets:
+                print(f"\nUsed in {len(feature_sets)} feature set(s):")
+                for fs in feature_sets:
+                    print(f"  • ID {fs['feature_set_id']}: {fs['feature_set_name']}")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error showing feature: {e}")
+
+    def cmd_update_feature(self, args):
+        """Update feature properties"""
+        if not args or len(args) < 2:
+            print("Usage: update-feature <feature_id> [--name <name>] [--category <category>] [--description <desc>]")
+            return
+
+        try:
+            feature_id = int(args[0])
+
+            updates = {}
+            i = 1
+            while i < len(args):
+                if args[i] == '--name' and i + 1 < len(args):
+                    updates['feature_name'] = args[i + 1]
+                    i += 2
+                elif args[i] == '--category' and i + 1 < len(args):
+                    updates['feature_category'] = args[i + 1]
+                    i += 2
+                elif args[i] == '--description' and i + 1 < len(args):
+                    updates['description'] = args[i + 1]
+                    i += 2
+                else:
+                    i += 1
+
+            if not updates:
+                print("❌ No updates specified")
+                return
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            set_clauses = []
+            params = []
+            for key, value in updates.items():
+                set_clauses.append(f"{key} = %s")
+                params.append(value)
+            params.append(feature_id)
+
+            query = f"UPDATE ml_features_lut SET {', '.join(set_clauses)} WHERE feature_id = %s"
+            cursor.execute(query, params)
+
+            if cursor.rowcount == 0:
+                print(f"❌ Feature {feature_id} not found")
+            else:
+                conn.commit()
+                print(f"✅ Updated feature {feature_id}")
+                for key, value in updates.items():
+                    print(f"   {key}: {value}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid feature ID")
+        except Exception as e:
+            print(f"❌ Error updating feature: {e}")
+
+    def cmd_delete_feature(self, args):
+        """Delete a feature if not in use"""
+        if not args:
+            print("Usage: delete-feature <feature_id>")
+            return
+
+        try:
+            feature_id = int(args[0])
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM ml_feature_set_features WHERE feature_id = %s
+            """, (feature_id,))
+
+            count = cursor.fetchone()[0]
+            if count > 0:
+                print(f"❌ Cannot delete feature {feature_id}: used in {count} feature set(s)")
+                print("   Remove from feature sets first using 'remove-features-from-set'")
+                return
+
+            cursor.execute("DELETE FROM ml_features_lut WHERE feature_id = %s", (feature_id,))
+
+            if cursor.rowcount == 0:
+                print(f"❌ Feature {feature_id} not found")
+            else:
+                conn.commit()
+                print(f"✅ Deleted feature {feature_id}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid feature ID")
+        except Exception as e:
+            print(f"❌ Error deleting feature: {e}")
+
+    def cmd_create_global_feature_set(self, args):
+        """Create a feature set without linking to any experiment"""
+        if not args or '--name' not in args:
+            print("Usage: create-global-feature-set --name <name> [--category <category>] [--description <desc>]")
+            print("\nExample: create-global-feature-set --name basic_electrical --category electrical --description 'Basic electrical measurements'")
+            return
+
+        name = None
+        category = 'custom'
+        description = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--name' and i + 1 < len(args):
+                name = args[i + 1]
+                i += 2
+            elif args[i] == '--category' and i + 1 < len(args):
+                category = args[i + 1]
+                i += 2
+            elif args[i] == '--description' and i + 1 < len(args):
+                description = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        if not name:
+            print("❌ Feature set name is required")
+            return
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT feature_set_id FROM ml_feature_sets_lut WHERE feature_set_name = %s", (name,))
+            if cursor.fetchone():
+                print(f"❌ Feature set '{name}' already exists")
+                conn.close()
+                return
+
+            cursor.execute("SELECT COALESCE(MAX(feature_set_id), 0) + 1 FROM ml_feature_sets_lut")
+            feature_set_id = cursor.fetchone()[0]
+
+            cursor.execute("""
+                INSERT INTO ml_feature_sets_lut
+                (feature_set_id, feature_set_name, category, description, is_active, created_at)
+                VALUES (%s, %s, %s, %s, true, CURRENT_TIMESTAMP)
+            """, (feature_set_id, name, category, description or f"{name} feature set"))
+
+            conn.commit()
+            print(f"✅ Created global feature set '{name}' (ID: {feature_set_id})")
+            print(f"   Category: {category}")
+            if description:
+                print(f"   Description: {description}")
+            print(f"\nNext: Add features using: add-features-to-set {feature_set_id} --features <id1,id2,...>")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error creating feature set: {e}")
+
+    def cmd_add_features_to_set(self, args):
+        """Add features to an existing feature set"""
+        if not args or len(args) < 2 or '--features' not in args:
+            print("Usage: add-features-to-set <feature_set_id> --features <feature_id1,feature_id2,...>")
+            print("\nExample: add-features-to-set 15 --features 1,2,3,4")
+            print("\nUse 'list-features' to see available feature IDs")
+            return
+
+        try:
+            feature_set_id = int(args[0])
+
+            features = []
+            idx = args.index('--features')
+            if idx + 1 < len(args):
+                features = [int(f.strip()) for f in args[idx + 1].split(',')]
+
+            if not features:
+                print("❌ No features specified")
+                return
+
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            cursor.execute("SELECT feature_set_name FROM ml_feature_sets_lut WHERE feature_set_id = %s", (feature_set_id,))
+            result = cursor.fetchone()
+            if not result:
+                print(f"❌ Feature set {feature_set_id} does not exist")
+                conn.close()
+                return
+
+            feature_set_name = result['feature_set_name']
+
+            cursor.execute("SELECT feature_id, feature_name FROM ml_features_lut WHERE feature_id = ANY(%s)", (features,))
+            valid_features = {row['feature_id']: row['feature_name'] for row in cursor}
+
+            invalid = [f for f in features if f not in valid_features]
+            if invalid:
+                print(f"❌ Invalid feature IDs: {invalid}")
+                conn.close()
+                return
+
+            cursor.execute("""
+                SELECT COALESCE(MAX(feature_order), 0) as max_order
+                FROM ml_feature_set_features
+                WHERE feature_set_id = %s
+            """, (feature_set_id,))
+            max_order = cursor.fetchone()['max_order']
+
+            added = []
+            skipped = []
+            for i, feature_id in enumerate(features, 1):
+                try:
+                    cursor.execute("""
+                        INSERT INTO ml_feature_set_features (feature_set_id, feature_id, feature_order)
+                        VALUES (%s, %s, %s)
+                    """, (feature_set_id, feature_id, max_order + i))
+                    added.append(valid_features[feature_id])
+                    conn.commit()
+                except psycopg2.IntegrityError:
+                    skipped.append(valid_features[feature_id])
+                    conn.rollback()
+
+            print(f"✅ Updated feature set '{feature_set_name}' (ID: {feature_set_id})")
+            if added:
+                print(f"   Added {len(added)} features: {', '.join(added)}")
+            if skipped:
+                print(f"   Skipped {len(skipped)} (already in set): {', '.join(skipped)}")
+
+            cursor.execute("""
+                SELECT fl.feature_name
+                FROM ml_feature_set_features fsf
+                JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                WHERE fsf.feature_set_id = %s
+                ORDER BY fsf.feature_order
+            """, (feature_set_id,))
+
+            all_features = [row['feature_name'] for row in cursor]
+            print(f"\n   Total features in set: {len(all_features)}")
+            print(f"   Features: {', '.join(all_features)}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid feature set ID or feature IDs")
+        except Exception as e:
+            print(f"❌ Error adding features: {e}")
+
+    def cmd_remove_features_from_set(self, args):
+        """Remove features from a feature set"""
+        if not args or len(args) < 2 or '--features' not in args:
+            print("Usage: remove-features-from-set <feature_set_id> --features <feature_id1,feature_id2,...>")
+            return
+
+        try:
+            feature_set_id = int(args[0])
+
+            features = []
+            idx = args.index('--features')
+            if idx + 1 < len(args):
+                features = [int(f.strip()) for f in args[idx + 1].split(',')]
+
+            if not features:
+                print("❌ No features specified")
+                return
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                DELETE FROM ml_feature_set_features
+                WHERE feature_set_id = %s AND feature_id = ANY(%s)
+            """, (feature_set_id, features))
+
+            removed = cursor.rowcount
+            if removed > 0:
+                conn.commit()
+                print(f"✅ Removed {removed} feature(s) from feature set {feature_set_id}")
+
+                cursor.execute("""
+                    WITH reordered AS (
+                        SELECT feature_set_id, feature_id,
+                               ROW_NUMBER() OVER (PARTITION BY feature_set_id ORDER BY feature_order) as new_order
+                        FROM ml_feature_set_features
+                        WHERE feature_set_id = %s
+                    )
+                    UPDATE ml_feature_set_features fsf
+                    SET feature_order = r.new_order
+                    FROM reordered r
+                    WHERE fsf.feature_set_id = r.feature_set_id
+                      AND fsf.feature_id = r.feature_id
+                """, (feature_set_id,))
+                conn.commit()
+                print("   Reordered remaining features")
+            else:
+                print(f"❌ No features removed (not found in set)")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid feature set ID or feature IDs")
+        except Exception as e:
+            print(f"❌ Error removing features: {e}")
+
+    def cmd_clone_feature_set(self, args):
+        """Create a copy of an existing feature set"""
+        if not args or len(args) < 2 or '--name' not in args:
+            print("Usage: clone-feature-set <source_feature_set_id> --name <new_name>")
+            return
+
+        try:
+            source_id = int(args[0])
+
+            new_name = None
+            idx = args.index('--name')
+            if idx + 1 < len(args):
+                new_name = args[idx + 1]
+
+            if not new_name:
+                print("❌ New name is required")
+                return
+
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            cursor.execute("""
+                SELECT * FROM ml_feature_sets_lut WHERE feature_set_id = %s
+            """, (source_id,))
+            source = cursor.fetchone()
+
+            if not source:
+                print(f"❌ Source feature set {source_id} not found")
+                return
+
+            cursor.execute("SELECT 1 FROM ml_feature_sets_lut WHERE feature_set_name = %s", (new_name,))
+            if cursor.fetchone():
+                print(f"❌ Feature set '{new_name}' already exists")
+                return
+
+            cursor.execute("SELECT COALESCE(MAX(feature_set_id), 0) + 1 FROM ml_feature_sets_lut")
+            new_id = cursor.fetchone()['next_id']
+
+            cursor.execute("""
+                INSERT INTO ml_feature_sets_lut
+                (feature_set_id, feature_set_name, category, description, is_active)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (new_id, new_name, source['category'],
+                  f"Clone of {source['feature_set_name']}: {source.get('description', '')}",
+                  True))
+
+            cursor.execute("""
+                INSERT INTO ml_feature_set_features (feature_set_id, feature_id, feature_order)
+                SELECT %s, feature_id, feature_order
+                FROM ml_feature_set_features
+                WHERE feature_set_id = %s
+            """, (new_id, source_id))
+
+            conn.commit()
+
+            print(f"✅ Cloned feature set '{source['feature_set_name']}' (ID: {source_id})")
+            print(f"   New set: '{new_name}' (ID: {new_id})")
+
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM ml_feature_set_features WHERE feature_set_id = %s
+            """, (new_id,))
+            count = cursor.fetchone()['count']
+            print(f"   Copied {count} features")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid source feature set ID")
+        except Exception as e:
+            print(f"❌ Error cloning feature set: {e}")
+
+    def cmd_link_feature_set(self, args):
+        """Link a feature set to an experiment with configuration"""
+        if not args or len(args) < 2:
+            print("Usage: link-feature-set <experiment_id> <feature_set_id> [--n-value <n>] [--channel <channel>] [--priority <p>]")
+            print("\nChannels: load_voltage, source_current")
+            print("\nExample: link-feature-set 41 6 --n-value 64 --channel load_voltage --priority 1")
+            return
+
+        try:
+            experiment_id = int(args[0])
+            feature_set_id = int(args[1])
+
+            n_value = None
+            channel = 'load_voltage'
+            priority = None
+
+            i = 2
+            while i < len(args):
+                if args[i] == '--n-value' and i + 1 < len(args):
+                    n_value = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--channel' and i + 1 < len(args):
+                    channel = args[i + 1]
+                    i += 2
+                elif args[i] == '--priority' and i + 1 < len(args):
+                    priority = int(args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT COALESCE(MAX(experiment_feature_set_id), 0) + 1 FROM ml_experiments_feature_sets
+            """)
+            efs_id = cursor.fetchone()[0]
+
+            if priority is None:
+                cursor.execute("""
+                    SELECT COALESCE(MAX(priority_order), 0) + 1
+                    FROM ml_experiments_feature_sets
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                priority = cursor.fetchone()[0]
+
+            cursor.execute("""
+                INSERT INTO ml_experiments_feature_sets
+                (experiment_feature_set_id, experiment_id, feature_set_id, n_value, priority_order, is_active, data_channel)
+                VALUES (%s, %s, %s, %s, %s, true, %s)
+            """, (efs_id, experiment_id, feature_set_id, n_value, priority, channel))
+
+            conn.commit()
+            print(f"✅ Linked feature set {feature_set_id} to experiment {experiment_id}")
+            print(f"   Channel: {channel}")
+            if n_value:
+                print(f"   N-value: {n_value}")
+            print(f"   Priority: {priority}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid experiment ID or feature set ID")
+        except psycopg2.IntegrityError as e:
+            print(f"❌ Link already exists or invalid IDs: {e}")
+        except Exception as e:
+            print(f"❌ Error linking feature set: {e}")
+
+    def cmd_bulk_link_feature_sets(self, args):
+        """Link multiple feature sets to an experiment"""
+        if not args or len(args) < 2 or '--sets' not in args:
+            print("Usage: bulk-link-feature-sets <experiment_id> --sets <id1,id2,id3,...> [--n-values <n1,n2,n3,...>]")
+            print("\nExample: bulk-link-feature-sets 41 --sets 1,2,3,4,5 --n-values null,null,null,null,null")
+            print("         bulk-link-feature-sets 41 --sets 6,7,8,9 --n-values 64,64,64,64")
+            return
+
+        try:
+            experiment_id = int(args[0])
+
+            sets = []
+            idx = args.index('--sets')
+            if idx + 1 < len(args):
+                sets = [int(s.strip()) for s in args[idx + 1].split(',')]
+
+            if not sets:
+                print("❌ No feature sets specified")
+                return
+
+            n_values = [None] * len(sets)
+            if '--n-values' in args:
+                idx = args.index('--n-values')
+                if idx + 1 < len(args):
+                    n_val_strs = args[idx + 1].split(',')
+                    for i, val in enumerate(n_val_strs[:len(sets)]):
+                        if val.strip().lower() != 'null' and val.strip():
+                            n_values[i] = int(val.strip())
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT COALESCE(MAX(experiment_feature_set_id), 0) + 1 FROM ml_experiments_feature_sets")
+            next_efs_id = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT COALESCE(MAX(priority_order), 0) + 1
+                FROM ml_experiments_feature_sets
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            next_priority = cursor.fetchone()[0]
+
+            success = 0
+            failed = 0
+
+            for i, fs_id in enumerate(sets):
+                try:
+                    cursor.execute("""
+                        INSERT INTO ml_experiments_feature_sets
+                        (experiment_feature_set_id, experiment_id, feature_set_id, n_value, priority_order, is_active, data_channel)
+                        VALUES (%s, %s, %s, %s, %s, true, 'load_voltage')
+                    """, (next_efs_id, experiment_id, fs_id, n_values[i], next_priority))
+
+                    next_efs_id += 1
+                    next_priority += 1
+                    success += 1
+                    conn.commit()
+                except psycopg2.IntegrityError:
+                    failed += 1
+                    conn.rollback()
+
+            print(f"✅ Linked {success}/{len(sets)} feature sets to experiment {experiment_id}")
+            if failed > 0:
+                print(f"   ⚠️  {failed} feature sets were already linked or don't exist")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid experiment ID or feature set IDs")
+        except Exception as e:
+            print(f"❌ Error linking feature sets: {e}")
+
+    def cmd_update_feature_link(self, args):
+        """Update properties of an experiment-feature set link"""
+        if not args or len(args) < 2:
+            print("Usage: update-feature-link <experiment_id> <feature_set_id> [--n-value <n>] [--priority <p>] [--active <bool>]")
+            return
+
+        try:
+            experiment_id = int(args[0])
+            feature_set_id = int(args[1])
+
+            updates = {}
+            i = 2
+            while i < len(args):
+                if args[i] == '--n-value' and i + 1 < len(args):
+                    val = args[i + 1]
+                    updates['n_value'] = None if val.lower() == 'null' else int(val)
+                    i += 2
+                elif args[i] == '--priority' and i + 1 < len(args):
+                    updates['priority_order'] = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--active' and i + 1 < len(args):
+                    updates['is_active'] = args[i + 1].lower() in ['true', '1', 'yes']
+                    i += 2
+                else:
+                    i += 1
+
+            if not updates:
+                print("❌ No updates specified")
+                return
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            set_clauses = []
+            params = []
+            for key, value in updates.items():
+                set_clauses.append(f"{key} = %s")
+                params.append(value)
+            params.extend([experiment_id, feature_set_id])
+
+            query = f"""
+                UPDATE ml_experiments_feature_sets
+                SET {', '.join(set_clauses)}
+                WHERE experiment_id = %s AND feature_set_id = %s
+            """
+            cursor.execute(query, params)
+
+            if cursor.rowcount == 0:
+                print(f"❌ Link between experiment {experiment_id} and feature set {feature_set_id} not found")
+            else:
+                conn.commit()
+                print(f"✅ Updated link between experiment {experiment_id} and feature set {feature_set_id}")
+                for key, value in updates.items():
+                    print(f"   {key}: {value}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid experiment ID or feature set ID")
+        except Exception as e:
+            print(f"❌ Error updating feature link: {e}")
+
+    def cmd_show_feature_config(self, args):
+        """Show complete feature configuration for an experiment"""
+        experiment_id = None
+        if args and args[0].isdigit():
+            experiment_id = int(args[0])
+        else:
+            experiment_id = self.current_experiment
+
+        try:
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            print(f"\n🧬 Feature Configuration for Experiment {experiment_id}:")
+            print("=" * 80)
+
+            cursor.execute("""
+                SELECT
+                    efs.priority_order,
+                    fs.feature_set_id,
+                    fs.feature_set_name,
+                    fs.category,
+                    efs.n_value,
+                    efs.data_channel,
+                    efs.is_active,
+                    fs.description,
+                    ARRAY_AGG(fl.feature_name ORDER BY fsf.feature_order) as features
+                FROM ml_experiments_feature_sets efs
+                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                LEFT JOIN ml_feature_set_features fsf ON fs.feature_set_id = fsf.feature_set_id
+                LEFT JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                WHERE efs.experiment_id = %s
+                GROUP BY efs.priority_order, fs.feature_set_id, fs.feature_set_name,
+                         fs.category, efs.n_value, efs.data_channel, efs.is_active, fs.description
+                ORDER BY efs.priority_order
+            """, (experiment_id,))
+
+            results = cursor.fetchall()
+
+            if not results:
+                print("No feature sets configured for this experiment")
+                print("\nAdd feature sets using:")
+                print("  link-feature-set <exp_id> <fs_id> [options]")
+                print("  bulk-link-feature-sets <exp_id> --sets <ids> [options]")
+                return
+
+            print(f"{'Pri':<4} {'ID':<4} {'Name':<25} {'N-Val':<8} {'Channel':<15} {'Features':<30}")
+            print("-" * 80)
+
+            for row in results:
+                status = "✓" if row['is_active'] else "✗"
+                n_val = str(row['n_value']) if row['n_value'] else '-'
+                features = ', '.join(row['features']) if row['features'] and row['features'][0] else 'No features'
+
+                if len(features) > 30:
+                    features = features[:27] + '...'
+
+                print(f"{row['priority_order']:<4} {row['feature_set_id']:<4} {row['feature_set_name'][:24]:<25} "
+                      f"{n_val:<8} {row['data_channel']:<15} {features}")
+
+                if row['description'] and row['description'] != f"{row['feature_set_name']} feature set":
+                    print(f"     {row['description'][:70]}")
+
+            print("-" * 80)
+            print(f"Total: {len(results)} feature sets configured")
+
+            active = sum(1 for r in results if r['is_active'])
+            with_n = sum(1 for r in results if r['n_value'])
+
+            print(f"\nStatus: {active} active, {len(results) - active} inactive")
+            print(f"N-values: {with_n} sets have window sizes configured")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error showing feature configuration: {e}")
+
     def cmd_update_selection_config(self, args):
         """Update segment selection configuration"""
         if not args or all(not arg.startswith('--') for arg in args):
@@ -2021,12 +3158,28 @@ class MLDPShell:
                 print(f"❌ Table {table_name} does not exist")
                 return
             
-            # Get counts before deletion
+            # Check which column name is used for labels
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                AND column_name IN ('assigned_label', 'file_label_name')
+                LIMIT 1
+            """, (table_name,))
+
+            label_column_result = cursor.fetchone()
+            if not label_column_result:
+                print("❌ No label column found in the table")
+                return
+
+            label_column = label_column_result[0]
+
+            # Get counts before deletion using correct column
             cursor.execute(f"""
-                SELECT file_label_name, COUNT(*) as count
+                SELECT {label_column}, COUNT(*) as count
                 FROM {table_name}
-                WHERE file_label_name = ANY(%s)
-                GROUP BY file_label_name
+                WHERE {label_column} = ANY(%s)
+                GROUP BY {label_column}
             """, (labels_to_remove,))
             
             labels_found = {}
@@ -2049,10 +3202,10 @@ class MLDPShell:
                 print("❌ Removal cancelled")
                 return
             
-            # Delete the files
+            # Delete the files using correct column
             cursor.execute(f"""
                 DELETE FROM {table_name}
-                WHERE file_label_name = ANY(%s)
+                WHERE {label_column} = ANY(%s)
             """, (labels_to_remove,))
             
             deleted = cursor.rowcount
@@ -2062,24 +3215,24 @@ class MLDPShell:
             
             # Show remaining statistics
             cursor.execute(f"""
-                SELECT 
+                SELECT
                     COUNT(DISTINCT file_id) as total_files,
-                    COUNT(DISTINCT file_label_name) as unique_labels
+                    COUNT(DISTINCT {label_column}) as unique_labels
                 FROM {table_name}
                 WHERE experiment_id = %s
             """, (self.current_experiment,))
-            
+
             stats = cursor.fetchone()
             print(f"\n📊 Remaining in training data:")
             print(f"   Total files: {stats[0]}")
             print(f"   Unique labels: {stats[1]}")
-            
+
             # Show remaining label distribution
             cursor.execute(f"""
-                SELECT file_label_name, COUNT(*) as count
+                SELECT {label_column}, COUNT(*) as count
                 FROM {table_name}
                 WHERE experiment_id = %s
-                GROUP BY file_label_name
+                GROUP BY {label_column}
                 ORDER BY count DESC
             """, (self.current_experiment,))
             
@@ -2092,150 +3245,158 @@ class MLDPShell:
             print(f"❌ Error removing file labels: {e}")
         finally:
             cursor.close()
-    
-    def cmd_generate_segment_training_data(self, args):
-        """Generate segment training data table"""
+
+    def cmd_remove_files(self, args):
+        """Remove specific files from experiment training data"""
         if not self.db_conn:
             print("❌ Not connected to database. Use 'connect' first.")
             return
-        
-        segments_per_file = 3  # Default
-        balance_strategy = 'balanced'  # Default
-        respect_position = True
-        max_total_segments = None
-        seed = 42
-        
-        # Parse arguments
-        i = 0
-        while i < len(args):
-            if args[i] == '--segments-per-file' and i + 1 < len(args):
-                segments_per_file = int(args[i + 1])
-                i += 2
-            elif args[i] == '--balance-strategy' and i + 1 < len(args):
-                balance_strategy = args[i + 1]
-                i += 2
-            elif args[i] == '--no-respect-position':
-                respect_position = False
-                i += 1
-            elif args[i] == '--max-segments' and i + 1 < len(args):
-                max_total_segments = int(args[i + 1])
-                i += 2
-            elif args[i] == '--seed' and i + 1 < len(args):
-                seed = int(args[i + 1])
-                i += 2
-            elif args[i] == '--help':
-                print("\nUsage: generate-segment-training-data [options]")
-                print("\nOptions:")
-                print("  --segments-per-file N      Segments per file (default: 3)")
-                print("  --balance-strategy STRAT  Selection strategy (default: balanced)")
-                print("                             balanced: Find min count across positions (L/C/R),")
-                print("                                      select that number from EACH position")
-                print("                             random:   Select up to N segments randomly")
-                print("  --no-respect-position      Don't maintain L/C/R position uniqueness")
-                print("  --max-segments N           Maximum total segments")
-                print("  --seed N                   Random seed (default: 42)")
-                print("\nBalanced Mode Logic:")
-                print("  If a file has L=5, C=3, R=7 segments:")
-                print("  - Selects min(5,3,7)=3 from EACH position")
-                print("  - Total: 3L + 3C + 3R = 9 segments from this file")
-                print("\nExample:")
-                print("  generate-segment-training-data --segments-per-file 3 --balance-strategy balanced")
-                return
-            else:
-                i += 1
-        
-        print(f"🔄 Generating segment training data for experiment {self.current_experiment}...")
-        print(f"   Target segments per file: {segments_per_file}")
-        print(f"   Balance strategy: {balance_strategy}")
-        print(f"   Respect position uniqueness: {respect_position}")
-        if max_total_segments:
-            print(f"   Maximum total segments: {max_total_segments}")
-        
+
+        if not args:
+            print("Usage: remove-files <file_id1> [file_id2] [file_id3] ...")
+            print("\nExample:")
+            print("  remove-files 1234 5678 9012")
+            print("\nThis removes specific files by ID from the training data.")
+            return
+
+        # Parse file IDs from arguments
+        file_ids = []
+        for arg in args:
+            try:
+                file_ids.append(int(arg))
+            except ValueError:
+                print(f"⚠️ Skipping invalid file ID: {arg}")
+
+        if not file_ids:
+            print("❌ No valid file IDs provided")
+            return
+
+        table_name = f"experiment_{self.current_experiment:03d}_file_training_data"
+
+        print(f"🗑️  Removing {len(file_ids)} files from experiment {self.current_experiment}...")
+
+        cursor = self.db_conn.cursor()
         try:
-            from experiment_segment_selector import ExperimentSegmentSelector
-            
-            # Create database configuration
-            db_config = {
-                'host': 'localhost',
-                'port': 5432,
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-            
-            # First ensure the experiment config exists in database
-            cursor = self.db_conn.cursor()
-            
-            # Set segment_balance based on strategy
-            segment_balance = (balance_strategy == 'balanced')
-            
+            # Check if table exists
             cursor.execute("""
-                INSERT INTO ml_experiments (
-                    experiment_id, experiment_name,
-                    segment_balance, min_segments_per_file, random_seed,
-                    selection_strategy
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (experiment_id) DO UPDATE SET
-                    segment_balance = EXCLUDED.segment_balance,
-                    min_segments_per_file = EXCLUDED.min_segments_per_file,
-                    random_seed = EXCLUDED.random_seed,
-                    selection_strategy = EXCLUDED.selection_strategy
-            """, (
-                self.current_experiment,
-                f'Experiment {self.current_experiment}',
-                segment_balance,
-                segments_per_file,
-                seed,
-                'position_balanced_per_file' if segment_balance else 'random_per_file'
-            ))
-            
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+
+            if not cursor.fetchone()[0]:
+                print(f"❌ Table {table_name} does not exist")
+                return
+
+            # Delete the files
+            cursor.execute(f"""
+                DELETE FROM {table_name}
+                WHERE file_id = ANY(%s) AND experiment_id = %s
+            """, (file_ids, self.current_experiment))
+
+            deleted = cursor.rowcount
             self.db_conn.commit()
-            cursor.close()
-            
-            # Create selector and run selection
-            selector = ExperimentSegmentSelector(self.current_experiment, db_config)
-            result = selector.run_selection(
-            )
-            
-            if result and 'total_segments' in result:
-                print(f"\n✅ Successfully selected {result['total_segments']} segments")
-                print(f"   From {result.get('total_files', 0)} files")
-                print(f"   Across {result.get('total_labels', 0)} labels")
-                
-                if result.get('total_pairs', 0) > 0:
-                    print(f"   Generated {result['total_pairs']} segment pairs")
-                
-                # Show segments per label if available
-                if 'segments_per_label' in result:
-                    print("\n📊 Segments per label:")
-                    # Need to get label names
-                    cursor = self.db_conn.cursor()
-                    for label_id, count in result['segments_per_label'].items():
-                        # Try to get label name
-                        cursor.execute("""
-                            SELECT label_text FROM files_y 
-                            WHERE label_id = %s 
-                            LIMIT 1
-                        """, (label_id,))
-                        row = cursor.fetchone()
-                        label_name = row[0] if row else f"Label {label_id}"
-                        print(f"     {label_name}: {count} segments")
-                    cursor.close()
-                
-                print(f"\n💾 Data saved to:")
-                print(f"   experiment_{self.current_experiment:03d}_segment_training_data")
-                if result.get('total_pairs', 0) > 0:
-                    print(f"   experiment_{self.current_experiment:03d}_segment_pairs")
-            else:
-                print(f"❌ Failed to select segments")
-                if isinstance(result, dict):
-                    print(f"   Result: {result}")
-                
-        except ImportError:
-            print("❌ ExperimentSegmentSelector module not found")
-            # Create the module now
-            self._create_segment_selector_module()
+
+            print(f"✅ Successfully removed {deleted} files")
+
+            # Show remaining statistics
+            cursor.execute(f"""
+                SELECT COUNT(DISTINCT file_id) FROM {table_name}
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+
+            remaining = cursor.fetchone()[0]
+            print(f"📊 Remaining files in training data: {remaining}")
+
         except Exception as e:
-            print(f"❌ Error generating segment training data: {e}")
+            self.db_conn.rollback()
+            print(f"❌ Error removing files: {e}")
+        finally:
+            cursor.close()
+
+    def cmd_remove_segments(self, args):
+        """Remove specific segments from experiment training data"""
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not args:
+            print("Usage: remove-segments <segment_id1> [segment_id2] [segment_id3] ...")
+            print("\nExample:")
+            print("  remove-segments 104075 104076 104077")
+            print("\nThis removes specific segments by ID from the training data.")
+            return
+
+        # Parse segment IDs from arguments
+        segment_ids = []
+        for arg in args:
+            try:
+                segment_ids.append(int(arg))
+            except ValueError:
+                print(f"⚠️ Skipping invalid segment ID: {arg}")
+
+        if not segment_ids:
+            print("❌ No valid segment IDs provided")
+            return
+
+        table_name = f"experiment_{self.current_experiment:03d}_segment_training_data"
+
+        print(f"🗑️  Removing {len(segment_ids)} segments from experiment {self.current_experiment}...")
+
+        cursor = self.db_conn.cursor()
+        try:
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+
+            if not cursor.fetchone()[0]:
+                print(f"❌ Table {table_name} does not exist")
+                print("   Run 'select-segments' first to create segment training data")
+                return
+
+            # Delete the segments
+            cursor.execute(f"""
+                DELETE FROM {table_name}
+                WHERE segment_id = ANY(%s) AND experiment_id = %s
+            """, (segment_ids, self.current_experiment))
+
+            deleted = cursor.rowcount
+            self.db_conn.commit()
+
+            print(f"✅ Successfully removed {deleted} segments")
+
+            # Show remaining statistics
+            cursor.execute(f"""
+                SELECT COUNT(DISTINCT segment_id) FROM {table_name}
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+
+            remaining = cursor.fetchone()[0]
+            print(f"📊 Remaining segments in training data: {remaining}")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"❌ Error removing segments: {e}")
+        finally:
+            cursor.close()
+
+    def cmd_generate_training_data(self, args):
+        """Deprecated - use select-segments instead"""
+        print("⚠️  This command has been replaced by 'select-segments' for clarity.")
+        print("\nUse: select-segments [experiment_id] [options]")
+        print("\nExample:")
+        print("  select-segments 41 --strategy balanced")
+        print("  select-segments --help  (for all options)")
+        print("\nRedirecting to select-segments...")
+        print()
+
+        # Redirect to the proper command
+        self.cmd_select_segments(args)
     
     def cmd_generate_segment_pairs(self, args):
         """Generate segment pairs for distance calculations"""
@@ -2266,13 +3427,20 @@ class MLDPShell:
             elif args[i] == '--help':
                 print("\nUsage: generate-segment-pairs [options]")
                 print("\nOptions:")
-                print("  --strategy STRAT            all_combinations|balanced|random_sample (default: all_combinations)")
+                print("  --strategy STRAT            Pairing strategy (default: all_combinations)")
+                print("                              Options: all_combinations, balanced, code_type_balanced, random_sample")
                 print("  --max-pairs-per-segment N   Maximum pairs per segment")
                 print("  --same-label-ratio RATIO    Ratio of same-label pairs for balanced strategy (0.0-1.0)")
                 print("  --seed N                    Random seed (default: 42)")
+                print("\nStrategies:")
+                print("  all_combinations   - Generate all possible pairs (N choose 2)")
+                print("  balanced          - Balance same/different label pairs")
+                print("  code_type_balanced - Balance pairs by segment code type (L, R, C, etc.)")
+                print("  random_sample     - Random sample of possible pairs")
                 print("\nExample:")
                 print("  generate-segment-pairs --strategy all_combinations")
-                print("  generate-segment-pairs --strategy balanced --max-pairs-per-segment 50 --same-label-ratio 0.3")
+                print("  generate-segment-pairs --strategy code_type_balanced --max-pairs-per-segment 100")
+                print("  generate-segment-pairs --strategy balanced --same-label-ratio 0.3")
                 return
             else:
                 i += 1
@@ -2285,11 +3453,11 @@ class MLDPShell:
         print(f"   Random seed: {seed}")
         
         try:
-            # Import the segment pair generator module
-            from experiment_segment_pair_generator import ExperimentSegmentPairGenerator
-            
+            # Import the v2 segment pair generator module (compatible with v2 selector)
+            from experiment_segment_pair_generator_v2 import ExperimentSegmentPairGeneratorV2
+
             # Create generator instance
-            generator = ExperimentSegmentPairGenerator(self.current_experiment, self.db_conn)
+            generator = ExperimentSegmentPairGeneratorV2(self.current_experiment, self.db_conn)
             
             # Generate pairs
             result = generator.generate_pairs(
@@ -2308,19 +3476,25 @@ class MLDPShell:
                 if 'statistics' in result and result['statistics']:
                     stats = result['statistics']
                     print("\n📊 Pair Statistics:")
-                    print(f"   Same-label pairs: {stats.get('same_label_pairs', 0)}")
-                    print(f"   Different-label pairs: {stats.get('diff_label_pairs', 0)}")
-                    
+                    print(f"   Same segment label pairs: {stats.get('same_segment_label_pairs', 0)}")
+                    print(f"   Same file label pairs: {stats.get('same_file_label_pairs', 0)}")
+                    print(f"   Same code type pairs: {stats.get('same_code_type_pairs', 0)}")
+
                     if 'type_distribution' in stats:
-                        print("\n   Type distribution:")
-                        for pair_type, count in stats['type_distribution'].items():
+                        print("\n   Pair type distribution:")
+                        for pair_type, count in sorted(stats['type_distribution'].items()):
                             print(f"     {pair_type}: {count}")
+
+                    if 'top_code_type_pairs' in stats and stats['top_code_type_pairs']:
+                        print("\n   Top code type combinations:")
+                        for pair in stats['top_code_type_pairs'][:5]:
+                            print(f"     {pair}")
             else:
                 print(f"\n❌ Failed to generate pairs: {result.get('error', 'Unknown error')}")
                 
         except ImportError:
-            print("❌ ExperimentSegmentPairGenerator module not found")
-            print("   Make sure experiment_segment_pair_generator.py is in the same directory")
+            print("❌ ExperimentSegmentPairGeneratorV2 module not found")
+            print("   Make sure experiment_segment_pair_generator_v2.py is in the same directory")
         except Exception as e:
             print(f"❌ Error generating segment pairs: {e}")
     
@@ -2738,8 +3912,119 @@ class MLDPShell:
         )
         
         print("\n✅ Generation complete!")
-    
-    def cmd_segment_status(self, args):
+
+    def cmd_generate_segment_fileset(self, args):
+        """Generate physical segment files from raw data on disk
+
+        This command creates the actual segment files on disk by processing
+        raw data files. It performs decimation and data type conversions.
+
+        Note: This is different from generate-training-data which only
+        creates database tables for tracking which segments to use.
+        """
+        if not args:
+            print("\nUsage: generate-segment-fileset <experiment_id> [options]")
+            print("\nThis command generates physical segment files from raw data.")
+            print("\nBy default, uses the experiment's configured data types and decimations.")
+            print("\nOptions:")
+            print("  --data-types <list>      Override data types (RAW,ADC14,ADC12,ADC10,ADC8,ADC6)")
+            print("  --decimations <list>     Override decimation factors (0=none, comma-separated)")
+            print("  --max-segments N         Maximum segments to process")
+            print("\nNote: If no --data-types or --decimations are specified, uses experiment config.")
+            print("\nExamples:")
+            print("  generate-segment-fileset 41 --data-types RAW")
+            print("  generate-segment-fileset 41 --data-types RAW,ADC14 --decimations 0,7,15")
+            print("  generate-segment-fileset 18 --files 1-10 --types ADC14,ADC12  (exp18 legacy)")
+            print("\n📝 Pipeline Order:")
+            print("  1. select-files          - Select files for training (DB)")
+            print("  2. select-segments       - Select segments for training (DB)")
+            print("  3. generate-training-data - Create training data tables (DB)")
+            print("  4. generate-segment-fileset - Create physical segment files (Disk)")
+            print("  5. generate-feature-fileset - Extract features from segments (Disk)")
+            print("\n📁 Output Structure:")
+            print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
+            return
+
+        experiment_id = int(args[0])
+
+        # Special handling for experiment 18 with legacy code
+        if experiment_id == 18 and '--files' in args:
+            print(f"🔄 Using legacy generator for experiment 18...")
+            self.cmd_segment_generate(args)
+            return
+
+        # Use new generator for all experiments
+        print(f"🔄 Generating segment fileset for experiment {experiment_id}...")
+
+        # Parse arguments - only use if explicitly provided
+        data_types = None  # Will use experiment config if not specified
+        decimations = None  # Will use experiment config if not specified
+        max_segments = None
+        use_experiment_config = True
+
+        i = 1
+        while i < len(args):
+            if args[i] == '--data-types' and i + 1 < len(args):
+                data_types = [dt.upper() for dt in args[i + 1].split(',')]
+                use_experiment_config = False
+                i += 2
+            elif args[i] == '--decimations' and i + 1 < len(args):
+                decimations = [int(d) for d in args[i + 1].split(',')]
+                use_experiment_config = False
+                i += 2
+            elif args[i] == '--max-segments' and i + 1 < len(args):
+                max_segments = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        if use_experiment_config:
+            print(f"📋 Using experiment {experiment_id} configuration (data types & decimations)")
+        else:
+            if data_types:
+                print(f"📋 Using custom data types: {data_types}")
+            if decimations is not None:
+                print(f"📋 Using custom decimations: {decimations}")
+
+        try:
+            from experiment_segment_fileset_generator_v2 import ExperimentSegmentFilesetGeneratorV2
+
+            # Database configuration
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            # Create generator
+            generator = ExperimentSegmentFilesetGeneratorV2(experiment_id, db_config)
+
+            # Generate fileset - pass None to use experiment config
+            result = generator.generate_segment_fileset(
+                data_types=data_types,  # None = use experiment config
+                decimations=decimations,  # None = use experiment config
+                max_segments=max_segments,
+                parallel_workers=1
+            )
+
+            if result.get('files_created', 0) > 0:
+                print(f"\n✅ Successfully generated segment files!")
+                print(f"   Files created: {result['files_created']}")
+                print(f"   Files skipped: {result['files_skipped']}")
+                print(f"   Segments processed: {result['segments_processed']}")
+                print(f"   Output path: {generator.segment_path}")
+            else:
+                print(f"\n❌ No segment files generated")
+                print(f"   Files failed: {result.get('files_failed', 0)}")
+
+        except ImportError:
+            print("❌ ExperimentSegmentFilesetGeneratorV2 module not found")
+            print("   Make sure experiment_segment_fileset_generator_v2.py is in the same directory")
+        except Exception as e:
+            print(f"❌ Error generating segment fileset: {e}")
+
+    def cmd_show_segment_status(self, args):
         """Check segment generation status"""
         from pathlib import Path
         import json
@@ -2817,7 +4102,7 @@ class MLDPShell:
         
         print("\n✅ Test complete!")
     
-    def cmd_segment_validate(self, args):
+    def cmd_validate_segments(self, args):
         """Validate generated segment files"""
         import numpy as np
         from pathlib import Path
