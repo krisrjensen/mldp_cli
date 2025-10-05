@@ -3,9 +3,10 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20250916_090000
-File version: 1.0.0.0
+Date Revised: 20251005_135000
+File version: 1.1.0.0
 Description: Extract features from segments and generate feature filesets
+             Updated to support multi-column amplitude-processed segment files
 """
 
 import psycopg2
@@ -124,11 +125,12 @@ class ExperimentFeatureExtractor:
             for row in cursor:
                 seg = dict(row)
                 # Construct file path using segment properties
-                # Path structure: /Volumes/ArcData/V3_database/experiment041/segment_files/S{length}/TRAW/D{div}/seg{seg_id}_file{file_id}_{code}.npy
-                # We need to search for the file since division can vary
+                # Path structure: /Volumes/ArcData/V3_database/experiment041/segment_files/S{length}/T{type}/D{dec}/SID{seg_id}_F{file_id}_D{dec}_T{type}_S{orig}_R{res}.npy
+                # We need to search for the file since division/decimation/type can vary
                 import glob
                 base_path = f"/Volumes/ArcData/V3_database/experiment{self.experiment_id:03d}/segment_files"
-                pattern = f"{base_path}/S{seg['segment_length']:06d}/TRAW/D*/seg{seg['segment_id']:08d}_file{seg['file_id']:08d}_{seg['segment_id_code']}.npy"
+                # Match new naming convention: SID{segment}_F{file}_D{dec}_T{type}_S{orig}_R{res}.npy
+                pattern = f"{base_path}/S*/T*/D*/SID{seg['segment_id']:08d}_F{seg['file_id']:08d}_*.npy"
 
                 matches = glob.glob(pattern)
                 if matches:
@@ -206,16 +208,20 @@ class ExperimentFeatureExtractor:
                 stored_size_str = parts[0]  # S008192
                 adc_type = parts[1]          # TADC10
                 division = parts[2]          # D000000
-                filename = parts[3]          # seg00155140_file00000001_A028.npy
+                filename = parts[3]          # SID00155140_F00000001_D000000_TTRAW_S008192_R008192.npy
 
-                # Parse stored size
+                # Parse stored size (resulting size after decimation)
                 stored_size = int(stored_size_str.replace('S', ''))
 
-                # Parse segment_id and file_id from filename
-                match = re.search(r'seg(\d+)_file(\d+)_', filename)
+                # Parse filename components: SID{seg}_F{file}_D{dec}_T{type}_S{orig}_R{res}.npy
+                match = re.search(r'SID(\d+)_F(\d+)_D(\d+)_T(\w+)_S(\d+)_R(\d+)', filename)
                 if match:
                     segment_id = int(match.group(1))
                     file_id = int(match.group(2))
+                    decimation = int(match.group(3))
+                    file_data_type = match.group(4)  # From filename
+                    original_size_from_file = int(match.group(5))
+                    resulting_size_from_file = int(match.group(6))
 
                     # Get original length from database
                     original_length = segment_original_lengths.get(segment_id)
@@ -227,6 +233,9 @@ class ExperimentFeatureExtractor:
                         'stored_size': stored_size,
                         'adc_type': adc_type,
                         'division': division,
+                        'decimation': decimation,
+                        'original_size': original_size_from_file,
+                        'resulting_size': resulting_size_from_file,
                         'filename': filename,
                         'original_length': original_length
                     })
@@ -749,16 +758,38 @@ class ExperimentFeatureExtractor:
                 'load_voltage': seg_data['load_voltage']
             }
         else:
-            # .npy file with 2D array (rows=samples, col0=voltage, col1=current)
-            if len(seg_data.shape) == 2 and seg_data.shape[1] == 2:
-                raw_data = {
-                    'load_voltage': seg_data[:, 0],
-                    'source_current': seg_data[:, 1]
-                }
+            # .npy file with 2D array
+            if len(seg_data.shape) == 2:
+                if seg_data.shape[1] == 2:
+                    # Legacy 2-column format (raw voltage, current only)
+                    raw_data = {
+                        'load_voltage': seg_data[:, 0],
+                        'source_current': seg_data[:, 1]
+                    }
+                elif seg_data.shape[1] >= 6:
+                    # New multi-column format with amplitude processing
+                    # Columns: [raw_voltage, raw_current, amp1_voltage, amp1_current, amp2_voltage, amp2_current, ...]
+                    # Use raw columns (0-1) as base, store all amplitude-processed columns
+                    raw_data = {
+                        'load_voltage': seg_data[:, 0],
+                        'source_current': seg_data[:, 1]
+                    }
+                    # Store amplitude-processed columns for later use
+                    # Format: amplitude_<method_index>_<channel>
+                    num_amplitude_methods = (seg_data.shape[1] - 2) // 2
+                    for i in range(num_amplitude_methods):
+                        col_start = 2 + (i * 2)
+                        raw_data[f'amplitude_{i}_voltage'] = seg_data[:, col_start]
+                        raw_data[f'amplitude_{i}_current'] = seg_data[:, col_start + 1]
+                else:
+                    raise ValueError(
+                        f"Unexpected segment file format: shape {seg_data.shape}. "
+                        f"Expected (N, 2) for legacy or (N, 6+) for amplitude-processed"
+                    )
             else:
                 raise ValueError(
                     f"Unexpected segment file format: shape {seg_data.shape}. "
-                    f"Expected (N, 2) array or .npz with 'load_voltage' and 'source_current'"
+                    f"Expected 2D array"
                 )
 
         segment_length = len(raw_data['source_current'])

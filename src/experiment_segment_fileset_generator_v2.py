@@ -3,9 +3,10 @@
 Filename: experiment_segment_fileset_generator_v2.py
 Author(s): Kristophor Jensen
 Date Created: 20250920_201500
-Date Revised: 20250920_201500
-File version: 1.0.0.0
+Date Revised: 20251005_182500
+File version: 1.1.0.0
 Description: Generate physical segment files compatible with v2 segment selector
+             with database-driven amplitude processing support
 """
 
 import os
@@ -20,6 +21,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 from tqdm import tqdm
+import importlib
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 
 logging.basicConfig(level=logging.INFO)
@@ -73,8 +75,14 @@ class ExperimentSegmentFilesetGeneratorV2:
         self.progress_file = self.segment_path / 'generation_progress.json'
         self.completed = self.load_progress()
 
+        # Load amplitude processing methods (cached for performance)
+        self.amplitude_methods = self.get_experiment_amplitude_methods()
+        expected_columns = 2 + (2 * len(self.amplitude_methods))
+
         logger.info(f"Initialized generator for experiment {experiment_id}")
         logger.info(f"Output path: {self.segment_path}")
+        logger.info(f"Amplitude methods: {len(self.amplitude_methods)} configured")
+        logger.info(f"Expected columns per segment file: {expected_columns}")
 
     def connect_db(self):
         """Create database connection"""
@@ -235,16 +243,17 @@ class ExperimentSegmentFilesetGeneratorV2:
         # But keeping it as placeholder for potential post-processing
         return source_data
 
-    def get_segment_file_path(self, segment_info: Dict, size: int,
-                             data_type: str, decimation: int) -> Path:
-        """Generate the output file path following the directory structure"""
+    def get_segment_file_path(self, segment_info: Dict, original_size: int,
+                             resulting_size: int, data_type: str, decimation: int) -> Path:
+        """Generate the output file path following the directory structure
+
+        Naming convention: SID{segment_id:08d}_F{file_id:08d}_D{decimation:06d}_T{data_type}_S{original_size}_R{resulting_size}.npy
+        """
         segment_id = segment_info['segment_id']
         file_id = segment_info['file_id']
-        code_type = segment_info.get('segment_code_type', 'UNK')
-        code_number = segment_info.get('segment_code_number', 0)
 
         # Build directory structure
-        size_dir = f"S{size:06d}"
+        size_dir = f"S{resulting_size:06d}"
         type_dir = f"T{data_type}"
         dec_dir = f"D{decimation:06d}"
 
@@ -252,8 +261,9 @@ class ExperimentSegmentFilesetGeneratorV2:
         full_dir = self.segment_path / size_dir / type_dir / dec_dir
         full_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename including segment code info
-        filename = f"seg{segment_id:08d}_file{file_id:08d}_{code_type}{code_number:03d}.npy"
+        # Generate filename with all metadata
+        # SID = Segment ID, F = File, D = Decimation, T = Type, S = original Size, R = Resulting size
+        filename = f"SID{segment_id:08d}_F{file_id:08d}_D{decimation:06d}_T{data_type}_S{original_size:06d}_R{resulting_size:06d}.npy"
 
         return full_dir / filename
 
@@ -302,14 +312,42 @@ class ExperimentSegmentFilesetGeneratorV2:
                     dec_data = segment_data
                     actual_size = original_size
 
+                # Apply amplitude processing to create multi-column output
+                # Format: [raw_voltage, raw_current, method1_voltage, method1_current, method2_voltage, method2_current, ...]
+                try:
+                    output_columns = []
+
+                    # Always start with raw voltage/current pair
+                    output_columns.extend([dec_data[:, 0], dec_data[:, 1]])
+
+                    # Add each amplitude processing method
+                    for method_config in self.amplitude_methods:
+                        amplitude_processed = self._apply_amplitude_processing(dec_data, method_config)
+                        output_columns.extend([amplitude_processed[:, 0], amplitude_processed[:, 1]])
+
+                    # Combine into final array
+                    final_data = np.column_stack(output_columns)
+
+                    # Validate shape
+                    expected_cols = 2 + (2 * len(self.amplitude_methods))
+                    if final_data.shape[1] != expected_cols:
+                        logger.error(f"Segment {segment_id}: Expected {expected_cols} columns, got {final_data.shape[1]}")
+                        results['failed'] += 1
+                        continue
+
+                except Exception as e:
+                    logger.error(f"Failed to apply amplitude processing to segment {segment_id}: {e}")
+                    results['failed'] += 1
+                    continue
+
                 # Generate output path
                 output_path = self.get_segment_file_path(
-                    segment_info, actual_size, data_type, decimation
+                    segment_info, original_size, actual_size, data_type, decimation
                 )
 
                 # Save segment
                 try:
-                    np.save(output_path, dec_data)
+                    np.save(output_path, final_data)
                     results['created'] += 1
                 except Exception as e:
                     logger.error(f"Failed to save segment {output_path}: {e}")
@@ -364,6 +402,133 @@ class ExperimentSegmentFilesetGeneratorV2:
         finally:
             cursor.close()
             conn.close()
+
+    def get_experiment_amplitude_methods(self) -> List[Dict[str, Any]]:
+        """Get amplitude processing methods configured for this experiment from PostgreSQL"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        try:
+            # Query PostgreSQL database for amplitude methods
+            cursor.execute("""
+                SELECT
+                    eam.method_id,
+                    am.method_name,
+                    am.function_name,
+                    am.function_args
+                FROM ml_experiments_amplitude_methods eam
+                JOIN ml_amplitude_normalization_lut am ON eam.method_id = am.method_id
+                WHERE eam.experiment_id = %s
+                ORDER BY eam.method_id
+            """, (self.experiment_id,))
+
+            amplitude_methods = []
+            for row in cursor:
+                # Parse JSON args if present
+                args = json.loads(row['function_args']) if row['function_args'] else {}
+
+                amplitude_methods.append({
+                    'method_id': row['method_id'],
+                    'name': row['method_name'],
+                    'function': row['function_name'],
+                    'args': args
+                })
+
+            if not amplitude_methods:
+                logger.warning(f"No amplitude methods configured for experiment {self.experiment_id}")
+            else:
+                logger.info(f"Loaded {len(amplitude_methods)} amplitude methods: {[m['name'] for m in amplitude_methods]}")
+
+            return amplitude_methods
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    def _apply_amplitude_processing(self, data: np.ndarray, method_config: Dict[str, Any]) -> np.ndarray:
+        """Apply amplitude processing method using DATABASE-DRIVEN dynamic loading"""
+        function_name = method_config["function"]
+        args = method_config["args"]
+
+        try:
+            # DATABASE-DRIVEN: Load functions dynamically based on function_name
+            if function_name.startswith('sklearn.'):
+                return self._apply_sklearn_function(data, function_name, args)
+            elif function_name == "chunk_standardize":
+                return self._apply_chunk_processing(data, args)
+            else:
+                # Future: Load custom functions from ml_code library
+                logger.warning(f"Unknown amplitude processing function: {function_name}, returning original data")
+                return data
+
+        except Exception as e:
+            logger.error(f"Error applying amplitude processing {function_name}: {e}")
+            return data  # Fallback to original data
+
+    def _apply_sklearn_function(self, data: np.ndarray, function_name: str, args: Dict) -> np.ndarray:
+        """Dynamically load and apply sklearn functions"""
+        try:
+            # Split module and class name
+            module_path, class_name = function_name.rsplit('.', 1)
+
+            # Dynamic import
+            module = importlib.import_module(module_path)
+            func_class = getattr(module, class_name)
+
+            # Handle special parameter conversions
+            processed_args = args.copy()
+            if 'quantile_range' in processed_args and isinstance(processed_args['quantile_range'], list):
+                processed_args['quantile_range'] = tuple(processed_args['quantile_range'])
+
+            # Create and apply scaler
+            scaler = func_class(**processed_args)
+
+            # Special handling for PowerTransformer
+            if class_name == "PowerTransformer":
+                try:
+                    return scaler.fit_transform(data)
+                except ValueError as e:
+                    logger.warning(f"PowerTransformer failed: {e}, returning normalized data")
+                    return (data - np.mean(data, axis=0)) / (np.std(data, axis=0) + 1e-8)
+            else:
+                return scaler.fit_transform(data)
+
+        except Exception as e:
+            logger.error(f"Error in sklearn function {function_name}: {e}")
+            return data
+
+    def _apply_chunk_processing(self, data: np.ndarray, args: Dict) -> np.ndarray:
+        """Apply chunk-based processing with fallback implementation"""
+        chunk_size = args.get("chunk_size", 8192)
+
+        # Fallback chunk standardization implementation
+        try:
+            rows, cols = data.shape
+            if rows < chunk_size:
+                logger.warning(f"Data too small for chunk size {chunk_size}, using standard scaling")
+                from sklearn.preprocessing import StandardScaler
+                scaler = StandardScaler()
+                return scaler.fit_transform(data)
+
+            # Chunk the data
+            chunks = []
+            for i in range(0, rows, chunk_size):
+                chunk = data[i:i+chunk_size]
+                if chunk.shape[0] >= 100:  # Only process chunks with enough data points
+                    # Standardize each chunk independently
+                    chunk_mean = np.mean(chunk, axis=0)
+                    chunk_std = np.std(chunk, axis=0)
+                    chunk_std[chunk_std == 0] = 1  # Avoid division by zero
+                    standardized_chunk = (chunk - chunk_mean) / chunk_std
+                    chunks.append(standardized_chunk)
+                else:
+                    chunks.append(chunk)  # Keep small chunks as-is
+
+            return np.vstack(chunks) if chunks else data
+
+        except Exception as e:
+            logger.error(f"Error in chunk processing: {e}")
+            return data
 
     def generate_segment_fileset(self,
                                 data_types: List[str] = None,

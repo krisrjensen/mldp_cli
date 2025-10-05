@@ -64,7 +64,20 @@ class MLDPCompleter(Completer):
             'heatmap': ['--version', '--output-dir', '1', '2', '3', '4', '5', '6', '7'],
             'histogram': ['--version', '--bins', '1_0', '1_1', '1_2', '1_3', '50', '100'],
             'visualize': ['--segment-id', '--file-id'],
-            
+            'segment-plot': ['--amplitude-method', '--original-segment', '--result-segment-size', '--types',
+                           '--decimations', '--output-folder', 'raw', 'minmax', 'zscore', 'amplitude_0', 'amplitude_1',
+                           'RAW', 'ADC6', 'ADC8', 'ADC10', 'ADC12', 'ADC14', '0', '7', '15'],
+            'feature-plot': ['--file', '--save', '--output-folder'],
+
+            # Distance calculations
+            'init-distance-tables': ['--drop-existing', '--help'],
+            'show-distance-metrics': [],
+            'add-distance-metric': ['--metric', 'L1', 'L2', 'cosine', 'pearson', 'euclidean', 'manhattan', 'wasserstein'],
+            'remove-distance-metric': ['--metric', '--all-except', 'L1', 'L2', 'cosine', 'pearson'],
+            'clean-distance-tables': ['--dry-run', '--force'],
+            'show-distance-functions': ['--active-only'],
+            'update-distance-function': ['--pairwise-metric', '--library', '--function-import', '--description', '--active'],
+
             # Analysis
             'stats': ['l1', 'l2', 'cosine', 'pearson'],
             'closest': ['10', '20', '50', '100'],
@@ -247,6 +260,16 @@ class MLDPShell:
             'segment-test': self.cmd_segment_test,
             'validate-segments': self.cmd_validate_segments,
             'segment-plot': self.cmd_segment_plot,
+            'feature-plot': self.cmd_feature_plot,
+            # Distance calculation commands
+            'init-distance-tables': self.cmd_init_distance_tables,
+            'show-distance-metrics': self.cmd_show_distance_metrics,
+            'add-distance-metric': self.cmd_add_distance_metric,
+            'remove-distance-metric': self.cmd_remove_distance_metric,
+            'clean-distance-tables': self.cmd_clean_distance_tables,
+            # Distance function LUT management
+            'show-distance-functions': self.cmd_show_distance_functions,
+            'update-distance-function': self.cmd_update_distance_function,
         }
     
     def get_prompt(self):
@@ -3697,7 +3720,721 @@ class MLDPShell:
             print("   Make sure experiment_segment_pair_generator_v2.py is in the same directory")
         except Exception as e:
             print(f"❌ Error generating segment pairs: {e}")
-    
+
+    def cmd_init_distance_tables(self, args):
+        """Initialize distance result tables for current experiment
+
+        Usage: init-distance-tables [options]
+
+        Options:
+            --drop-existing    Drop existing tables before creating (WARNING: destroys data)
+            --help             Show this help message
+
+        This command creates all necessary distance result tables for the current experiment
+        based on the distance functions configured in ml_distance_functions_lut.
+
+        Examples:
+            init-distance-tables
+            init-distance-tables --drop-existing
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        drop_existing = False
+        if '--help' in args:
+            print(self.cmd_init_distance_tables.__doc__)
+            return
+        if '--drop-existing' in args:
+            drop_existing = True
+
+        print(f"\n🔄 Initializing distance tables for experiment {self.current_experiment}...")
+
+        try:
+            import psycopg2
+
+            cursor = self.db_conn.cursor()
+
+            # Get distance functions configured for this experiment
+            cursor.execute("""
+                SELECT df.distance_function_id, df.function_name, df.result_table_prefix, df.display_name
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s AND df.is_active = true
+                ORDER BY df.distance_function_id
+            """, (self.current_experiment,))
+
+            distance_functions = cursor.fetchall()
+
+            if not distance_functions:
+                print(f"❌ No distance functions configured for experiment {self.current_experiment}")
+                print("   Check ml_experiments_distance_measurements table")
+                return
+
+            print(f"📊 Found {len(distance_functions)} active distance functions")
+            print()
+
+            created_count = 0
+            skipped_count = 0
+            error_count = 0
+
+            for func_id, func_name, table_prefix, display_name in distance_functions:
+                table_name = f"experiment_{self.current_experiment:03d}_{table_prefix}"
+
+                try:
+                    # Check if table exists
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = %s
+                        )
+                    """, (table_name,))
+
+                    table_exists = cursor.fetchone()[0]
+
+                    if table_exists:
+                        if drop_existing:
+                            print(f"🗑️  Dropping existing table: {table_name}")
+                            cursor.execute(f"DROP TABLE {table_name} CASCADE")
+                            self.db_conn.commit()
+                        else:
+                            print(f"⏭️  Skipping {table_name} (already exists)")
+                            skipped_count += 1
+                            continue
+
+                    # Create distance result table
+                    create_sql = f"""
+                        CREATE TABLE {table_name} (
+                            distance_id BIGSERIAL PRIMARY KEY,
+                            pair_id INTEGER NOT NULL,
+                            amplitude_processing_method_id INTEGER NOT NULL,
+                            distance_s DOUBLE PRECISION,
+                            distance_i DOUBLE PRECISION,
+                            distance_j DOUBLE PRECISION,
+                            distance_k DOUBLE PRECISION,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """
+
+                    cursor.execute(create_sql)
+
+                    # Create indexes
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_pair ON {table_name}(pair_id)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_amp ON {table_name}(amplitude_processing_method_id)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_pair_amp ON {table_name}(pair_id, amplitude_processing_method_id)")
+
+                    self.db_conn.commit()
+
+                    print(f"✅ Created table: {table_name} ({display_name})")
+                    created_count += 1
+
+                except Exception as e:
+                    print(f"❌ Error creating {table_name}: {e}")
+                    self.db_conn.rollback()
+                    error_count += 1
+
+            print()
+            print(f"📊 Summary:")
+            print(f"   Created: {created_count}")
+            print(f"   Skipped: {skipped_count}")
+            print(f"   Errors: {error_count}")
+            print()
+
+            if created_count > 0:
+                print(f"✅ Distance tables initialized for experiment {self.current_experiment}")
+            elif skipped_count > 0:
+                print(f"ℹ️  All tables already exist. Use --drop-existing to recreate them.")
+
+        except Exception as e:
+            print(f"❌ Error initializing distance tables: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_show_distance_metrics(self, args):
+        """Show distance metrics configured for current experiment
+
+        Usage: show-distance-metrics
+
+        Displays all distance metrics configured in ml_experiments_distance_measurements
+        for the current experiment.
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get distance functions configured for this experiment
+            cursor.execute("""
+                SELECT df.distance_function_id, df.function_name, df.display_name, df.result_table_prefix
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+                ORDER BY df.function_name
+            """, (self.current_experiment,))
+
+            metrics = cursor.fetchall()
+
+            if not metrics:
+                print(f"\n❌ No distance metrics configured for experiment {self.current_experiment}")
+                return
+
+            print(f"\n📊 Distance metrics configured for experiment {self.current_experiment}:")
+            print(f"\nID  | Function Name        | Display Name                      | Table Prefix")
+            print("-" * 90)
+            for metric in metrics:
+                print(f"{metric[0]:<4}| {metric[1]:<20} | {metric[2]:<33} | {metric[3]}")
+
+            print(f"\nTotal: {len(metrics)} metrics")
+
+        except Exception as e:
+            print(f"❌ Error showing distance metrics: {e}")
+
+    def cmd_add_distance_metric(self, args):
+        """Add distance metric to current experiment
+
+        Usage: add-distance-metric --metric <metric_name>
+
+        Options:
+            --metric <name>    Metric name (e.g., L1, L2, cosine, pearson, wasserstein)
+
+        Examples:
+            add-distance-metric --metric wasserstein
+            add-distance-metric --metric euclidean
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        metric_name = None
+        if '--metric' in args:
+            idx = args.index('--metric')
+            if idx + 1 < len(args):
+                metric_name = args[idx + 1]
+
+        if not metric_name:
+            print("❌ Error: --metric is required")
+            print("\nUsage: add-distance-metric --metric <metric_name>")
+            print("\nExample: add-distance-metric --metric wasserstein")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Find distance function by name
+            cursor.execute("""
+                SELECT distance_function_id, function_name, display_name
+                FROM ml_distance_functions_lut
+                WHERE function_name = %s AND is_active = true
+            """, (metric_name,))
+
+            function = cursor.fetchone()
+
+            if not function:
+                print(f"❌ Distance function '{metric_name}' not found or not active")
+                print("\nAvailable metrics:")
+                cursor.execute("SELECT function_name FROM ml_distance_functions_lut WHERE is_active = true ORDER BY function_name")
+                available = cursor.fetchall()
+                for avail in available:
+                    print(f"  - {avail[0]}")
+                return
+
+            func_id, func_name, display_name = function
+
+            # Check if already configured
+            cursor.execute("""
+                SELECT COUNT(*) FROM ml_experiments_distance_measurements
+                WHERE experiment_id = %s AND distance_function_id = %s
+            """, (self.current_experiment, func_id))
+
+            if cursor.fetchone()[0] > 0:
+                print(f"⚠️  {func_name} ({display_name}) is already configured for experiment {self.current_experiment}")
+                return
+
+            # Add to experiment
+            cursor.execute("""
+                INSERT INTO ml_experiments_distance_measurements (experiment_id, distance_function_id)
+                VALUES (%s, %s)
+            """, (self.current_experiment, func_id))
+
+            self.db_conn.commit()
+
+            print(f"✅ Added {func_name} ({display_name}) to experiment {self.current_experiment}")
+
+        except Exception as e:
+            print(f"❌ Error adding distance metric: {e}")
+            self.db_conn.rollback()
+
+    def cmd_remove_distance_metric(self, args):
+        """Remove distance metric from current experiment
+
+        Usage: remove-distance-metric [options]
+
+        Options:
+            --metric <name>       Remove specific metric (e.g., wasserstein)
+            --all-except <list>   Remove all except specified metrics (comma-separated)
+
+        Examples:
+            remove-distance-metric --metric wasserstein
+            remove-distance-metric --all-except L1,L2,cosine,pearson
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        metric_name = None
+        keep_only = None
+
+        if '--metric' in args:
+            idx = args.index('--metric')
+            if idx + 1 < len(args):
+                metric_name = args[idx + 1]
+
+        if '--all-except' in args:
+            idx = args.index('--all-except')
+            if idx + 1 < len(args):
+                keep_only = [m.strip() for m in args[idx + 1].split(',')]
+
+        if not metric_name and not keep_only:
+            print("❌ Error: --metric or --all-except is required")
+            print("\nUsage:")
+            print("  remove-distance-metric --metric <metric_name>")
+            print("  remove-distance-metric --all-except L1,L2,cosine,pearson")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            if keep_only:
+                # Remove all except specified metrics
+                print(f"\n🔄 Removing all distance metrics except: {', '.join(keep_only)}")
+
+                # Get IDs of metrics to keep
+                placeholders = ','.join(['%s'] * len(keep_only))
+                cursor.execute(f"""
+                    SELECT distance_function_id, function_name
+                    FROM ml_distance_functions_lut
+                    WHERE function_name IN ({placeholders})
+                """, keep_only)
+
+                keep_ids = cursor.fetchall()
+
+                if not keep_ids:
+                    print(f"❌ None of the specified metrics found: {', '.join(keep_only)}")
+                    return
+
+                print(f"ℹ️  Keeping {len(keep_ids)} metrics:")
+                for func_id, func_name in keep_ids:
+                    print(f"   - {func_name}")
+
+                # Delete all except these
+                keep_id_list = [func_id for func_id, _ in keep_ids]
+                placeholders = ','.join(['%s'] * len(keep_id_list))
+                cursor.execute(f"""
+                    DELETE FROM ml_experiments_distance_measurements
+                    WHERE experiment_id = %s
+                    AND distance_function_id NOT IN ({placeholders})
+                    RETURNING distance_function_id
+                """, [self.current_experiment] + keep_id_list)
+
+                deleted = cursor.fetchall()
+                self.db_conn.commit()
+
+                print(f"\n✅ Removed {len(deleted)} distance metrics from experiment {self.current_experiment}")
+
+            else:
+                # Remove specific metric
+                cursor.execute("""
+                    SELECT distance_function_id, function_name, display_name
+                    FROM ml_distance_functions_lut
+                    WHERE function_name = %s
+                """, (metric_name,))
+
+                function = cursor.fetchone()
+
+                if not function:
+                    print(f"❌ Distance function '{metric_name}' not found")
+                    return
+
+                func_id, func_name, display_name = function
+
+                cursor.execute("""
+                    DELETE FROM ml_experiments_distance_measurements
+                    WHERE experiment_id = %s AND distance_function_id = %s
+                    RETURNING experiment_distance_id
+                """, (self.current_experiment, func_id))
+
+                deleted = cursor.fetchone()
+
+                if not deleted:
+                    print(f"⚠️  {func_name} ({display_name}) was not configured for experiment {self.current_experiment}")
+                    return
+
+                self.db_conn.commit()
+
+                print(f"✅ Removed {func_name} ({display_name}) from experiment {self.current_experiment}")
+
+        except Exception as e:
+            print(f"❌ Error removing distance metric: {e}")
+            self.db_conn.rollback()
+            import traceback
+            traceback.print_exc()
+
+    def cmd_clean_distance_tables(self, args):
+        """Clean unconfigured empty distance tables for current experiment
+
+        Usage: clean-distance-tables [options]
+
+        Options:
+            --dry-run    Show what would be deleted without actually deleting
+            --force      Skip confirmation prompt
+
+        This command removes distance result tables that are:
+        1. NOT configured in ml_experiments_distance_measurements for current experiment
+        2. Have 0 rows (empty tables)
+
+        Tables with data are NEVER deleted (safety check).
+
+        Examples:
+            clean-distance-tables                # Interactive mode
+            clean-distance-tables --dry-run      # Show what would be deleted
+            clean-distance-tables --force        # Skip confirmation
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+
+        print(f"\n🔄 Scanning distance tables for experiment {self.current_experiment}...")
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get configured distance metrics for this experiment
+            cursor.execute("""
+                SELECT df.result_table_prefix
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+            """, (self.current_experiment,))
+
+            configured_prefixes = [row[0] for row in cursor.fetchall()]
+            configured_tables = [f"experiment_{self.current_experiment:03d}_{prefix}" for prefix in configured_prefixes]
+            # PostgreSQL lowercases table names, so normalize for comparison
+            configured_tables_lower = [t.lower() for t in configured_tables]
+
+            print(f"📊 Found {len(configured_tables)} configured distance tables")
+
+            # Get all distance tables for this experiment
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_name LIKE %s
+                ORDER BY table_name
+            """, (f"experiment_{self.current_experiment:03d}_distance_%",))
+
+            all_tables = [row[0] for row in cursor.fetchall()]
+
+            print(f"📁 Found {len(all_tables)} total distance tables in database")
+
+            # Find unconfigured tables (case-insensitive comparison)
+            unconfigured_tables = [t for t in all_tables if t.lower() not in configured_tables_lower]
+
+            if not unconfigured_tables:
+                print("\n✅ No unconfigured distance tables found. All tables match configuration.")
+                return
+
+            print(f"\n⚠️  Found {len(unconfigured_tables)} unconfigured tables:")
+
+            # Check row counts and categorize
+            empty_tables = []
+            non_empty_tables = []
+
+            for table_name in unconfigured_tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+
+                if row_count == 0:
+                    empty_tables.append(table_name)
+                    print(f"   🗑️  {table_name}: 0 rows (can be deleted)")
+                else:
+                    non_empty_tables.append((table_name, row_count))
+                    print(f"   ⚠️  {table_name}: {row_count:,} rows (WILL NOT DELETE - has data)")
+
+            if not empty_tables:
+                print("\n✅ No empty unconfigured tables to clean.")
+                if non_empty_tables:
+                    print(f"\nℹ️  {len(non_empty_tables)} tables have data and were not deleted.")
+                return
+
+            print(f"\n📋 Summary:")
+            print(f"   Empty tables to delete: {len(empty_tables)}")
+            print(f"   Tables with data (protected): {len(non_empty_tables)}")
+
+            if dry_run:
+                print("\n🔍 DRY RUN - No tables will be deleted")
+                print("\nWould delete:")
+                for table in empty_tables:
+                    print(f"   - {table}")
+                return
+
+            # Confirmation prompt
+            if not force:
+                print(f"\n⚠️  About to delete {len(empty_tables)} empty unconfigured tables")
+                response = input("Continue? (yes/no): ").strip().lower()
+                if response not in ['yes', 'y']:
+                    print("❌ Cancelled")
+                    return
+
+            # Delete empty unconfigured tables
+            deleted_count = 0
+            for table_name in empty_tables:
+                try:
+                    cursor.execute(f"DROP TABLE {table_name} CASCADE")
+                    self.db_conn.commit()
+                    print(f"✅ Deleted: {table_name}")
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"❌ Error deleting {table_name}: {e}")
+                    self.db_conn.rollback()
+
+            print(f"\n✅ Cleaned {deleted_count} empty unconfigured distance tables")
+
+            if non_empty_tables:
+                print(f"\nℹ️  {len(non_empty_tables)} tables with data were preserved")
+
+        except Exception as e:
+            print(f"❌ Error cleaning distance tables: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_show_distance_functions(self, args):
+        """Show all distance functions in ml_distance_functions_lut
+
+        Usage: show-distance-functions [--active-only]
+
+        Options:
+            --active-only    Only show functions where is_active = true
+
+        Displays all distance functions available in the system.
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        active_only = '--active-only' in args
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if pairwise_metric_name column exists
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'ml_distance_functions_lut'
+                AND column_name = 'pairwise_metric_name'
+            """)
+
+            has_pairwise_column = cursor.fetchone() is not None
+
+            if has_pairwise_column:
+                # Query with pairwise_metric_name
+                query = """
+                    SELECT distance_function_id, function_name, display_name,
+                           library_name, function_import, pairwise_metric_name,
+                           result_table_prefix, is_active
+                    FROM ml_distance_functions_lut
+                """
+            else:
+                # Query without pairwise_metric_name (backward compatible)
+                query = """
+                    SELECT distance_function_id, function_name, display_name,
+                           library_name, function_import,
+                           result_table_prefix, is_active
+                    FROM ml_distance_functions_lut
+                """
+
+            if active_only:
+                query += " WHERE is_active = true"
+
+            query += " ORDER BY distance_function_id"
+
+            cursor.execute(query)
+            functions = cursor.fetchall()
+
+            if not functions:
+                print("\n❌ No distance functions found in ml_distance_functions_lut")
+                return
+
+            # Show warning if pairwise_metric_name column doesn't exist
+            if not has_pairwise_column:
+                print("\n⚠️  WARNING: pairwise_metric_name column not found!")
+                print("   Run this SQL script to add it:")
+                print("   psql -h localhost -p 5432 -d arc_detection -f /Users/kjensen/Documents/GitHub/mldp/mldp_cli/sql/update_distance_functions_lut.sql")
+                print()
+
+            print(f"\n📊 Distance Functions in ml_distance_functions_lut:")
+            if active_only:
+                print("(Showing only active functions)")
+            print()
+
+            if has_pairwise_column:
+                print(f"{'ID':<4} | {'Name':<20} | {'Display Name':<30} | {'Pairwise Metric':<15} | {'Active':<6}")
+                print("-" * 95)
+
+                for func in functions:
+                    func_id, name, display, library, func_import, pairwise, prefix, active = func
+                    pairwise_str = pairwise or 'N/A'
+                    active_str = '✅' if active else '❌'
+                    print(f"{func_id:<4} | {name:<20} | {display:<30} | {pairwise_str:<15} | {active_str:<6}")
+            else:
+                # Without pairwise_metric_name column
+                print(f"{'ID':<4} | {'Name':<20} | {'Display Name':<30} | {'Library':<30} | {'Active':<6}")
+                print("-" * 100)
+
+                for func in functions:
+                    func_id, name, display, library, func_import, prefix, active = func
+                    library_str = library or 'N/A'
+                    active_str = '✅' if active else '❌'
+                    print(f"{func_id:<4} | {name:<20} | {display:<30} | {library_str:<30} | {active_str:<6}")
+
+            print(f"\nTotal: {len(functions)} functions")
+
+            # Show additional details if not many
+            if len(functions) <= 5:
+                print("\nDetailed Information:")
+                for func in functions:
+                    if has_pairwise_column:
+                        func_id, name, display, library, func_import, pairwise, prefix, active = func
+                    else:
+                        func_id, name, display, library, func_import, prefix, active = func
+                        pairwise = None
+
+                    print(f"\n{name} (ID: {func_id}):")
+                    print(f"  Display: {display}")
+                    print(f"  Library: {library or 'N/A'}")
+                    print(f"  Function: {func_import or 'N/A'}")
+                    if has_pairwise_column:
+                        print(f"  Pairwise Metric: {pairwise or 'N/A'}")
+                    print(f"  Table Prefix: {prefix}")
+                    print(f"  Active: {'Yes' if active else 'No'}")
+
+        except Exception as e:
+            print(f"❌ Error showing distance functions: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_update_distance_function(self, args):
+        """Update distance function in ml_distance_functions_lut
+
+        Usage: update-distance-function <function_name> [options]
+
+        Options:
+            --pairwise-metric <name>    Set pairwise metric name for sklearn.metrics.pairwise_distances
+            --library <name>            Set library name
+            --function-import <name>    Set function import name
+            --description <text>        Set description
+            --active <true|false>       Set is_active flag
+
+        Examples:
+            update-distance-function pearson --pairwise-metric correlation
+            update-distance-function manhattan --pairwise-metric manhattan --library sklearn.metrics.pairwise --function-import pairwise_distances
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        if not args or args[0].startswith('--'):
+            print("❌ Error: function_name is required")
+            print("\nUsage: update-distance-function <function_name> [options]")
+            return
+
+        function_name = args[0]
+        updates = {}
+
+        i = 1
+        while i < len(args):
+            if args[i] == '--pairwise-metric' and i + 1 < len(args):
+                updates['pairwise_metric_name'] = args[i + 1]
+                i += 2
+            elif args[i] == '--library' and i + 1 < len(args):
+                updates['library_name'] = args[i + 1]
+                i += 2
+            elif args[i] == '--function-import' and i + 1 < len(args):
+                updates['function_import'] = args[i + 1]
+                i += 2
+            elif args[i] == '--description' and i + 1 < len(args):
+                updates['description'] = args[i + 1]
+                i += 2
+            elif args[i] == '--active' and i + 1 < len(args):
+                updates['is_active'] = args[i + 1].lower() in ['true', '1', 'yes']
+                i += 2
+            else:
+                i += 1
+
+        if not updates:
+            print("❌ Error: At least one update option is required")
+            print("\nAvailable options: --pairwise-metric, --library, --function-import, --description, --active")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if function exists
+            cursor.execute("""
+                SELECT distance_function_id, function_name, display_name
+                FROM ml_distance_functions_lut
+                WHERE function_name = %s
+            """, (function_name,))
+
+            function = cursor.fetchone()
+
+            if not function:
+                print(f"❌ Distance function '{function_name}' not found in ml_distance_functions_lut")
+                return
+
+            func_id, func_name, display_name = function
+
+            # Build UPDATE query
+            set_clauses = []
+            values = []
+
+            for key, value in updates.items():
+                set_clauses.append(f"{key} = %s")
+                values.append(value)
+
+            values.append(func_id)
+
+            update_query = f"""
+                UPDATE ml_distance_functions_lut
+                SET {', '.join(set_clauses)}, updated_at = NOW()
+                WHERE distance_function_id = %s
+            """
+
+            cursor.execute(update_query, values)
+            self.db_conn.commit()
+
+            print(f"✅ Updated {func_name} ({display_name})")
+            print("\nUpdated fields:")
+            for key, value in updates.items():
+                print(f"  {key}: {value}")
+
+        except Exception as e:
+            print(f"❌ Error updating distance function: {e}")
+            self.db_conn.rollback()
+            import traceback
+            traceback.print_exc()
+
     def cmd_generate_feature_fileset(self, args):
         """Generate feature files from segment data"""
         if not self.db_conn:
@@ -4379,16 +5116,145 @@ class MLDPShell:
                 
             except Exception as e:
                 print(f"❌ Error validating {filepath.name}: {e}")
-    
+
+    def cmd_feature_plot(self, args):
+        """Plot feature files with statistical visualization
+
+        Usage: feature-plot [options]
+
+        Options:
+            --file <path>           Path to feature file (.npy)
+            --output-folder <path>  Output directory for plots
+            --save <filename>       Save to specific filename (overrides --output-folder)
+
+        Examples:
+            feature-plot --file /path/to/feature.npy
+            feature-plot --file /path/to/feature.npy --output-folder ~/plots/
+            feature-plot --file /path/to/feature.npy --save ~/plots/my_feature.png
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from pathlib import Path
+
+        # Parse arguments
+        parts = args if isinstance(args, list) else args.split()
+
+        file_path = None
+        output_folder = None
+        save_path = None
+
+        i = 0
+        while i < len(parts):
+            if parts[i] == '--file' and i + 1 < len(parts):
+                file_path = parts[i + 1]
+                i += 2
+            elif parts[i] == '--output-folder' and i + 1 < len(parts):
+                output_folder = parts[i + 1]
+                i += 2
+            elif parts[i] == '--save' and i + 1 < len(parts):
+                save_path = parts[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        # Validate required parameters
+        if not file_path:
+            print("❌ Error: --file is required")
+            print("\nUsage: feature-plot --file <path> [--output-folder <path>] [--save <filename>]")
+            print("\nExample:")
+            print("  feature-plot --file /Volumes/ArcData/V3_database/experiment041/feature_files/S000512/TADC8/D000015/SID00012527_F00000238_D000015_TADC8_S008192_R000512_FS0001_N_00000064.npy")
+            return
+
+        file_path = Path(file_path)
+        if not file_path.exists():
+            print(f"❌ Error: File not found: {file_path}")
+            return
+
+        # Determine save location
+        if save_path:
+            save_location = Path(save_path)
+        elif output_folder:
+            output_dir = Path(output_folder)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            save_location = output_dir / f"{file_path.stem}_plot.png"
+        else:
+            save_location = None
+
+        # Load and validate data
+        try:
+            data = np.load(file_path)
+        except Exception as e:
+            print(f"❌ Error loading file: {e}")
+            return
+
+        if data.ndim != 2:
+            print(f"❌ Error: Expected 2D array (windows × features), got shape {data.shape}")
+            return
+
+        filename = file_path.name
+        print(f"\n📊 Feature File: {filename}")
+        print(f"   Shape: {data.shape}")
+        print(f"   Windows: {data.shape[0]:,}")
+        print(f"   Features: {data.shape[1]}")
+        print()
+
+        # Create plot
+        fig, axes = plt.subplots(data.shape[1], 1, figsize=(14, 2.5 * data.shape[1]), sharex=True)
+        if data.shape[1] == 1:
+            axes = [axes]
+
+        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E']
+
+        for i in range(data.shape[1]):
+            color = colors[i % len(colors)]
+            axes[i].plot(data[:, i], linewidth=1, color=color)
+            axes[i].set_ylabel(f'Feature {i}', fontsize=10, fontweight='bold')
+            axes[i].grid(True, alpha=0.3, linestyle='--')
+
+            # Add statistics
+            mean = np.mean(data[:, i])
+            std = np.std(data[:, i])
+            min_val = np.min(data[:, i])
+            max_val = np.max(data[:, i])
+            axes[i].text(0.02, 0.95,
+                        f'μ={mean:.2f}, σ={std:.2f}, min={min_val:.2f}, max={max_val:.2f}',
+                        transform=axes[i].transAxes,
+                        verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+                        fontsize=8)
+
+        axes[-1].set_xlabel('Window', fontsize=12, fontweight='bold')
+        plt.suptitle(f'Feature File: {filename}', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+
+        if save_location:
+            plt.savefig(save_location, dpi=150, bbox_inches='tight')
+            print(f"💾 Saved plot to: {save_location}")
+            plt.close()
+        else:
+            plt.show()
+
+        print("\n✅ Feature plotting complete!")
+
     def cmd_segment_plot(self, args):
         """Plot segment files with statistical analysis
-        
+
         Usage: segment-plot [options]
-        
+
+        Options:
+            --amplitude-method <method>   Select amplitude processing: raw, minmax, zscore (default: raw)
+            --original-segment <id>       Original segment ID to plot
+            --result-segment-size <size>  Result segment size
+            --types <types>               Data types (RAW, ADC6, ADC8, etc.)
+            --decimations <list>          Decimation factors (0, 7, 15, etc.)
+            --output-folder <path>        Output directory for plots (required)
+
         Examples:
             segment-plot --original-segment 104075 --decimations 0 --output-folder ~/plots/
             segment-plot --result-segment-size 131072 --types RAW --output-folder ~/plots/
             segment-plot --file-labels 200,201 --num-points 500 --peak-detect --output-folder ~/plots/
+            segment-plot --original-segment 104075 --amplitude-method minmax --output-folder ~/plots/
+            segment-plot --original-segment 104075 --amplitude-method zscore --output-folder ~/plots/
         """
         try:
             from segment_file_plotter import plot_segment_files
@@ -4433,7 +5299,8 @@ class MLDPShell:
             'format': 'png',
             'title': None,
             'plot_style': 'cleaning',
-            'output_folder': None
+            'output_folder': None,
+            'amplitude_method': 'raw'
         }
         
         # Parse command line arguments
@@ -4555,6 +5422,9 @@ class MLDPShell:
             elif parts[i] == '--plot-style' and i + 1 < len(parts):
                 params['plot_style'] = parts[i + 1]
                 i += 2
+            elif parts[i] == '--amplitude-method' and i + 1 < len(parts):
+                params['amplitude_method'] = parts[i + 1]
+                i += 2
             elif parts[i] == '--output-folder' and i + 1 < len(parts):
                 params['output_folder'] = parts[i + 1]
                 i += 2
@@ -4580,6 +5450,7 @@ class MLDPShell:
         print(f"Experiment: {params['experiment_id']}")
         print(f"Decimations: {params['decimations']}")
         print(f"Types: {params['types']}")
+        print(f"Amplitude method: {params['amplitude_method']}")
         print(f"Num points: {params['num_points']}")
         print(f"Peak detect: {params['peak_detect']}")
         

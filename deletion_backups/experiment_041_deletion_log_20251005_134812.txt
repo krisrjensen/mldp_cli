@@ -1,0 +1,13 @@
+Experiment 041 Segment File Deletion
+Timestamp: 20251005_134812
+Mode: EXECUTE
+Base path: /Volumes/ArcData/V3_database/experiment041/segment_files
+Total files: 110826
+Disk usage: 43G
+
+
+Deletion Results:
+  Deleted: 110826 files
+  Failed: 0 files
+  Disk usage after: 220K
+  Completion time: 20251005_135132

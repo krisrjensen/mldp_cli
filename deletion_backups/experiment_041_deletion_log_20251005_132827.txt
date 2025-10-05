@@ -1,0 +1,7 @@
+Experiment 041 Segment File Deletion
+Timestamp: 20251005_132827
+Mode: DRY RUN
+Base path: /Volumes/ArcData/V3_database/experiment041/segment_files
+Total files: 110826
+Disk usage: 43G
+

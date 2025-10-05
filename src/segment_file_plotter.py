@@ -3,9 +3,10 @@
 Filename: segment_file_plotter.py
 Author(s): Kristophor Jensen
 Date Created: 20250902_100000
-Date Revised: 20250902_100000
-File version: 0.0.0.1
+Date Revised: 20251005_142500
+File version: 1.0.0.0
 Description: Enhanced segment file plotter with statistical analysis for MLDP CLI
+             Updated to support multi-column amplitude-processed segment files
 """
 
 import numpy as np
@@ -474,29 +475,81 @@ class EnhancedSegmentPlotter:
         else:
             return 'all'
     
-    def load_segment_data(self, file_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def load_segment_data(self, file_path: Path, amplitude_method: str = 'raw') -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Load segment data from file
-        
+
+        Args:
+            file_path: Path to segment file
+            amplitude_method: Which amplitude processing to use
+                - 'raw': Raw voltage/current (columns 0-1)
+                - 'minmax' or '0': Minmax normalized (columns 2-3)
+                - 'zscore' or '1': Zscore normalized (columns 4-5)
+                - 'amplitude_0': First amplitude method (columns 2-3)
+                - 'amplitude_1': Second amplitude method (columns 4-5)
+
         Returns:
             time, voltage, current arrays
         """
         data = np.load(file_path)
-        
+
         # Parse filename to get decimation factor
-        # Format: {segment_id}_{file_id}_D{dec}_T{type}_S{size}.npy
+        # New format: SID{seg}_F{file}_D{dec}_T{type}_S{orig}_R{res}.npy
+        # Old format: {segment_id}_{file_id}_D{dec}_T{type}_S{size}.npy
         filename = file_path.stem
-        parts = filename.split('_')
-        decimation = int(parts[2][1:])  # Remove 'D' prefix
-        
-        # Assume data format: [voltage, current] or single channel
-        if data.ndim == 2 and data.shape[1] == 2:
-            voltage = data[:, 0]
-            current = data[:, 1]
+
+        # Try new naming convention first
+        if filename.startswith('SID'):
+            import re
+            match = re.search(r'D(\d+)', filename)
+            decimation = int(match.group(1)) if match else 0
         else:
+            # Old naming convention
+            parts = filename.split('_')
+            decimation = int(parts[2][1:])  # Remove 'D' prefix
+
+        # Handle different data formats
+        if data.ndim == 2:
+            if data.shape[1] == 2:
+                # Legacy 2-column format: [voltage, current]
+                voltage = data[:, 0]
+                current = data[:, 1]
+            elif data.shape[1] >= 6:
+                # New multi-column format with amplitude processing
+                # Columns: [raw_v, raw_i, amp0_v, amp0_i, amp1_v, amp1_i, ...]
+
+                # Map amplitude method to column indices
+                if amplitude_method in ['raw', 'none']:
+                    col_start = 0
+                elif amplitude_method in ['minmax', 'amplitude_0', '0']:
+                    col_start = 2
+                elif amplitude_method in ['zscore', 'amplitude_1', '1']:
+                    col_start = 4
+                elif amplitude_method.startswith('amplitude_'):
+                    # Extract index from 'amplitude_N'
+                    idx = int(amplitude_method.split('_')[1])
+                    col_start = 2 + (idx * 2)
+                else:
+                    logger.warning(f"Unknown amplitude method '{amplitude_method}', using raw")
+                    col_start = 0
+
+                # Validate column indices
+                if col_start + 1 < data.shape[1]:
+                    voltage = data[:, col_start]
+                    current = data[:, col_start + 1]
+                else:
+                    logger.warning(f"Column index {col_start} out of range for shape {data.shape}, using raw")
+                    voltage = data[:, 0]
+                    current = data[:, 1]
+            else:
+                # Single column or unexpected format
+                voltage = data[:, 0]
+                current = np.zeros_like(voltage)
+        else:
+            # 1D array
             voltage = data.flatten()
-            current = np.zeros_like(voltage)  # No current data
-        
+            current = np.zeros_like(voltage)
+
         # Calculate effective sample rate after decimation
         # Original sample rate is 5 MSPS (5MHz), decimation reduces this
         # Decimation factor is 2^n - 1, so we keep every (decimation+1)th sample
@@ -504,11 +557,11 @@ class EnhancedSegmentPlotter:
             effective_sample_rate = 5e6  # 5 MSPS
         else:
             effective_sample_rate = 5e6 / (decimation + 1)
-        
+
         # Generate time array with correct sample rate
         # This preserves the total time span of the original segment
         time = np.arange(len(voltage)) / effective_sample_rate
-        
+
         return time, voltage, current
     
     def plot_segments(self, output_folder: Path, plot_options: Dict[str, Any]):
@@ -547,8 +600,9 @@ class EnhancedSegmentPlotter:
         # Handle subplot organization
         if plot_options.get('no_subplots', False):
             # Create separate file for each plot
+            amplitude_method = plot_options.get('amplitude_method', 'raw')
             for file_path in files:
-                time, voltage, current = self.load_segment_data(file_path)
+                time, voltage, current = self.load_segment_data(file_path, amplitude_method)
                 
                 # Create plot based on style
                 if style == 'cleaning':
@@ -575,16 +629,17 @@ class EnhancedSegmentPlotter:
             max_subplot = plot_options.get('max_subplot', (3, 3))
             
             pages = self.organize_subplots(files, grouping, max_subplot)
-            
+            amplitude_method = plot_options.get('amplitude_method', 'raw')
+
             for page_idx, page in enumerate(pages):
                 # Calculate better figure size based on grid
                 fig_width = min(8 * page['grid'][1], 24)  # Max 24 inches wide
                 fig_height = min(6 * page['grid'][0], 18)  # Max 18 inches tall
-                
+
                 fig, axes = plt.subplots(page['grid'][0], page['grid'][1],
-                                       figsize=(fig_width, fig_height), 
+                                       figsize=(fig_width, fig_height),
                                        constrained_layout=True)
-                
+
                 # Flatten axes for easier iteration
                 if page['grid'][0] == 1 and page['grid'][1] == 1:
                     axes = [axes]
@@ -592,10 +647,10 @@ class EnhancedSegmentPlotter:
                     axes = axes.flatten()
                 else:
                     axes = axes.flatten()
-                
+
                 for idx, config in enumerate(page['configs']):
                     ax = axes[idx]
-                    time, voltage, current = self.load_segment_data(config['path'])
+                    time, voltage, current = self.load_segment_data(config['path'], amplitude_method)
                     
                     # Plot based on grouping type
                     self.plot_with_statistics(ax, time, voltage, plot_options)
