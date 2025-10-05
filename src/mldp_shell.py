@@ -2426,24 +2426,63 @@ class MLDPShell:
             print(f"❌ Error creating feature set: {e}")
 
     def cmd_add_features_to_set(self, args):
-        """Add features to an existing feature set"""
+        """Add features to an existing feature set with optional per-feature overrides"""
         if not args or len(args) < 2 or '--features' not in args:
-            print("Usage: add-features-to-set <feature_set_id> --features <feature_id1,feature_id2,...>")
+            print("Usage: add-features-to-set <feature_set_id> --features <feature_id1,feature_id2,...> [--channels <ch1,ch2,...>] [--n-values <n1,n2,...>]")
             print("\nExample: add-features-to-set 15 --features 1,2,3,4")
+            print("         add-features-to-set 15 --features 2,2,2,2 --channels load_voltage,source_current,impedance,power")
+            print("         add-features-to-set 15 --features 2,5 --channels impedance,null --n-values 128,null")
             print("\nUse 'list-features' to see available feature IDs")
+            print("\nChannels: source_current, load_voltage, impedance, power, null (inherit from set)")
             return
 
         try:
             feature_set_id = int(args[0])
 
             features = []
-            idx = args.index('--features')
-            if idx + 1 < len(args):
-                features = [int(f.strip()) for f in args[idx + 1].split(',')]
+            channels = []
+            n_values = []
+
+            # Parse --features
+            if '--features' in args:
+                idx = args.index('--features')
+                if idx + 1 < len(args):
+                    features = [int(f.strip()) for f in args[idx + 1].split(',')]
+
+            # Parse --channels
+            if '--channels' in args:
+                idx = args.index('--channels')
+                if idx + 1 < len(args):
+                    channels = [ch.strip() if ch.strip().lower() not in ['default', 'null', 'none'] else None
+                               for ch in args[idx + 1].split(',')]
+
+            # Parse --n-values
+            if '--n-values' in args:
+                idx = args.index('--n-values')
+                if idx + 1 < len(args):
+                    n_values = [int(n.strip()) if n.strip().lower() not in ['default', 'null', 'none'] else None
+                               for n in args[idx + 1].split(',')]
 
             if not features:
                 print("❌ No features specified")
                 return
+
+            # Validate counts match
+            if channels and len(channels) != len(features):
+                print(f"❌ Channel count ({len(channels)}) must match feature count ({len(features)})")
+                return
+
+            if n_values and len(n_values) != len(features):
+                print(f"❌ N-value count ({len(n_values)}) must match feature count ({len(features)})")
+                return
+
+            # Validate channels
+            valid_channels = ['source_current', 'load_voltage', 'impedance', 'power', 'source_current,load_voltage']
+            for ch in channels:
+                if ch is not None and ch not in valid_channels:
+                    print(f"❌ Invalid channel: {ch}")
+                    print(f"   Must be one of: {', '.join(valid_channels)}")
+                    return
 
             import psycopg2
             import psycopg2.extras
@@ -2483,12 +2522,23 @@ class MLDPShell:
             added = []
             skipped = []
             for i, feature_id in enumerate(features, 1):
+                channel = channels[i-1] if channels and (i-1) < len(channels) else None
+                n_value = n_values[i-1] if n_values and (i-1) < len(n_values) else None
+
                 try:
                     cursor.execute("""
-                        INSERT INTO ml_feature_set_features (feature_set_id, feature_id, feature_order)
-                        VALUES (%s, %s, %s)
-                    """, (feature_set_id, feature_id, max_order + i))
-                    added.append(valid_features[feature_id])
+                        INSERT INTO ml_feature_set_features
+                        (feature_set_id, feature_id, feature_order, data_channel, n_value_override)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (feature_set_id, feature_id, max_order + i, channel, n_value))
+
+                    override_info = []
+                    if channel:
+                        override_info.append(f"ch={channel}")
+                    if n_value:
+                        override_info.append(f"n={n_value}")
+                    info = f" [{', '.join(override_info)}]" if override_info else ""
+                    added.append(f"{valid_features[feature_id]}{info}")
                     conn.commit()
                 except psycopg2.IntegrityError:
                     skipped.append(valid_features[feature_id])
@@ -2582,6 +2632,111 @@ class MLDPShell:
         except Exception as e:
             print(f"❌ Error removing features: {e}")
 
+    def cmd_update_feature_in_set(self, args):
+        """Update feature assignment in a feature set"""
+        if not args or len(args) < 2:
+            print("Usage: update-feature-in-set <feature_set_id> <feature_id> [--channel <ch>] [--n-value <n>] [--order <order>]")
+            print("\nExamples:")
+            print("  update-feature-in-set 15 2 --channel impedance")
+            print("  update-feature-in-set 15 2 --n-value 256")
+            print("  update-feature-in-set 15 2 --channel null  (clear override, inherit from set)")
+            print("  update-feature-in-set 15 2 --channel power --n-value 512 --order 3")
+            return
+
+        try:
+            feature_set_id = int(args[0])
+            feature_id = int(args[1])
+
+            updates = {}
+            i = 2
+            while i < len(args):
+                if args[i] == '--channel' and i + 1 < len(args):
+                    value = args[i + 1]
+                    updates['data_channel'] = None if value.lower() in ['null', 'none', 'default'] else value
+                    i += 2
+                elif args[i] == '--n-value' and i + 1 < len(args):
+                    value = args[i + 1]
+                    updates['n_value_override'] = None if value.lower() in ['null', 'none', 'default'] else int(value)
+                    i += 2
+                elif args[i] == '--order' and i + 1 < len(args):
+                    updates['feature_order'] = int(args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+
+            if not updates:
+                print("❌ No updates specified")
+                return
+
+            # Validate channel if provided
+            if 'data_channel' in updates and updates['data_channel'] is not None:
+                valid_channels = ['source_current', 'load_voltage', 'impedance', 'power', 'source_current,load_voltage']
+                if updates['data_channel'] not in valid_channels:
+                    print(f"❌ Invalid channel: {updates['data_channel']}")
+                    print(f"   Must be one of: {', '.join(valid_channels)}")
+                    return
+
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Build UPDATE query
+            set_clause = ', '.join([f"{k} = %s" for k in updates.keys()])
+            values = list(updates.values())
+
+            cursor.execute(f"""
+                UPDATE ml_feature_set_features
+                SET {set_clause}
+                WHERE feature_set_id = %s AND feature_id = %s
+            """, values + [feature_set_id, feature_id])
+
+            if cursor.rowcount == 0:
+                print(f"❌ Feature {feature_id} not found in set {feature_set_id}")
+                cursor.close()
+                conn.close()
+                return
+
+            conn.commit()
+
+            # Show updated configuration
+            cursor.execute("""
+                SELECT
+                    fl.feature_name,
+                    fsf.feature_order,
+                    fsf.data_channel as feature_channel,
+                    fsf.n_value_override,
+                    efs.data_channel as set_channel,
+                    efs.n_value as set_n_value
+                FROM ml_feature_set_features fsf
+                JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                JOIN ml_experiments_feature_sets efs ON fsf.feature_set_id = efs.feature_set_id
+                WHERE fsf.feature_set_id = %s AND fsf.feature_id = %s
+                LIMIT 1
+            """, (feature_set_id, feature_id))
+
+            row = cursor.fetchone()
+            if row:
+                effective_channel = row['feature_channel'] or row['set_channel']
+                effective_n = row['n_value_override'] or row['set_n_value']
+
+                print(f"✅ Updated {row['feature_name']} in set {feature_set_id} (order {row['feature_order']})")
+                print(f"   Channel: {effective_channel} {'(override)' if row['feature_channel'] else '(inherit)'}")
+                print(f"   N-value: {effective_n} {'(override)' if row['n_value_override'] else '(inherit)'}")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("❌ Invalid feature set ID or feature ID")
+        except Exception as e:
+            print(f"❌ Error updating feature: {e}")
+
     def cmd_clone_feature_set(self, args):
         """Create a copy of an existing feature set"""
         if not args or len(args) < 2 or '--name' not in args:
@@ -2664,9 +2819,10 @@ class MLDPShell:
     def cmd_link_feature_set(self, args):
         """Link a feature set to an experiment with configuration"""
         if not args or len(args) < 2:
-            print("Usage: link-feature-set <experiment_id> <feature_set_id> [--n-value <n>] [--channel <channel>] [--priority <p>]")
-            print("\nChannels: load_voltage, source_current")
-            print("\nExample: link-feature-set 41 6 --n-value 64 --channel load_voltage --priority 1")
+            print("Usage: link-feature-set <experiment_id> <feature_set_id> [--n-value <n>] [--channel <channel>] [--priority <p>] [--windowing <strategy>]")
+            print("\nChannels: load_voltage, source_current, impedance, power")
+            print("Windowing: non_overlapping (default), sliding_window")
+            print("\nExample: link-feature-set 41 6 --n-value 64 --channel load_voltage --priority 1 --windowing non_overlapping")
             return
 
         try:
@@ -2676,6 +2832,7 @@ class MLDPShell:
             n_value = None
             channel = 'load_voltage'
             priority = None
+            windowing_strategy = 'non_overlapping'
 
             i = 2
             while i < len(args):
@@ -2687,6 +2844,13 @@ class MLDPShell:
                     i += 2
                 elif args[i] == '--priority' and i + 1 < len(args):
                     priority = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--windowing' and i + 1 < len(args):
+                    windowing_strategy = args[i + 1]
+                    if windowing_strategy not in ['non_overlapping', 'sliding_window']:
+                        print(f"❌ Invalid windowing strategy: {windowing_strategy}")
+                        print("   Must be 'non_overlapping' or 'sliding_window'")
+                        return
                     i += 2
                 else:
                     i += 1
@@ -2714,9 +2878,9 @@ class MLDPShell:
 
             cursor.execute("""
                 INSERT INTO ml_experiments_feature_sets
-                (experiment_feature_set_id, experiment_id, feature_set_id, n_value, priority_order, is_active, data_channel)
-                VALUES (%s, %s, %s, %s, %s, true, %s)
-            """, (efs_id, experiment_id, feature_set_id, n_value, priority, channel))
+                (experiment_feature_set_id, experiment_id, feature_set_id, n_value, priority_order, is_active, data_channel, windowing_strategy)
+                VALUES (%s, %s, %s, %s, %s, true, %s, %s)
+            """, (efs_id, experiment_id, feature_set_id, n_value, priority, channel, windowing_strategy))
 
             conn.commit()
             print(f"✅ Linked feature set {feature_set_id} to experiment {experiment_id}")
@@ -2724,6 +2888,7 @@ class MLDPShell:
             if n_value:
                 print(f"   N-value: {n_value}")
             print(f"   Priority: {priority}")
+            print(f"   Windowing: {windowing_strategy}")
 
             cursor.close()
             conn.close()
@@ -2816,7 +2981,8 @@ class MLDPShell:
     def cmd_update_feature_link(self, args):
         """Update properties of an experiment-feature set link"""
         if not args or len(args) < 2:
-            print("Usage: update-feature-link <experiment_id> <feature_set_id> [--n-value <n>] [--priority <p>] [--active <bool>]")
+            print("Usage: update-feature-link <experiment_id> <feature_set_id> [--n-value <n>] [--priority <p>] [--active <bool>] [--windowing <strategy>]")
+            print("\nWindowing: non_overlapping, sliding_window")
             return
 
         try:
@@ -2835,6 +3001,14 @@ class MLDPShell:
                     i += 2
                 elif args[i] == '--active' and i + 1 < len(args):
                     updates['is_active'] = args[i + 1].lower() in ['true', '1', 'yes']
+                    i += 2
+                elif args[i] == '--windowing' and i + 1 < len(args):
+                    windowing_strategy = args[i + 1]
+                    if windowing_strategy not in ['non_overlapping', 'sliding_window']:
+                        print(f"❌ Invalid windowing strategy: {windowing_strategy}")
+                        print("   Must be 'non_overlapping' or 'sliding_window'")
+                        return
+                    updates['windowing_strategy'] = windowing_strategy
                     i += 2
                 else:
                     i += 1
@@ -2903,6 +3077,7 @@ class MLDPShell:
             print(f"\n🧬 Feature Configuration for Experiment {experiment_id}:")
             print("=" * 80)
 
+            # First get feature sets
             cursor.execute("""
                 SELECT
                     efs.priority_order,
@@ -2912,51 +3087,76 @@ class MLDPShell:
                     efs.n_value,
                     efs.data_channel,
                     efs.is_active,
-                    fs.description,
-                    ARRAY_AGG(fl.feature_name ORDER BY fsf.feature_order) as features
+                    efs.windowing_strategy,
+                    fs.description
                 FROM ml_experiments_feature_sets efs
                 JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
-                LEFT JOIN ml_feature_set_features fsf ON fs.feature_set_id = fsf.feature_set_id
-                LEFT JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
                 WHERE efs.experiment_id = %s
-                GROUP BY efs.priority_order, fs.feature_set_id, fs.feature_set_name,
-                         fs.category, efs.n_value, efs.data_channel, efs.is_active, fs.description
                 ORDER BY efs.priority_order
             """, (experiment_id,))
 
-            results = cursor.fetchall()
+            feature_sets = cursor.fetchall()
 
-            if not results:
+            # Get features for each set with overrides
+            feature_details = {}
+            for fs in feature_sets:
+                cursor.execute("""
+                    SELECT
+                        fl.feature_name,
+                        fsf.feature_order,
+                        fsf.data_channel as feature_channel,
+                        fsf.n_value_override,
+                        COALESCE(fsf.data_channel, %s) as effective_channel,
+                        COALESCE(fsf.n_value_override, %s) as effective_n_value
+                    FROM ml_feature_set_features fsf
+                    JOIN ml_features_lut fl ON fsf.feature_id = fl.feature_id
+                    WHERE fsf.feature_set_id = %s
+                    ORDER BY fsf.feature_order
+                """, (fs['data_channel'], fs['n_value'], fs['feature_set_id']))
+                feature_details[fs['feature_set_id']] = cursor.fetchall()
+
+            if not feature_sets:
                 print("No feature sets configured for this experiment")
                 print("\nAdd feature sets using:")
                 print("  link-feature-set <exp_id> <fs_id> [options]")
                 print("  bulk-link-feature-sets <exp_id> --sets <ids> [options]")
                 return
 
-            print(f"{'Pri':<4} {'ID':<4} {'Name':<25} {'N-Val':<8} {'Channel':<15} {'Features':<30}")
-            print("-" * 80)
-
-            for row in results:
+            # Display feature sets with detailed features
+            for row in feature_sets:
                 status = "✓" if row['is_active'] else "✗"
-                n_val = str(row['n_value']) if row['n_value'] else '-'
-                features = ', '.join(row['features']) if row['features'] and row['features'][0] else 'No features'
-
-                if len(features) > 30:
-                    features = features[:27] + '...'
-
-                print(f"{row['priority_order']:<4} {row['feature_set_id']:<4} {row['feature_set_name'][:24]:<25} "
-                      f"{n_val:<8} {row['data_channel']:<15} {features}")
+                print(f"\n[{row['feature_set_id']}] {row['feature_set_name']} (Priority: {row['priority_order']}, Status: {status})")
+                print(f"    Default Channel: {row['data_channel'] or 'N/A'}")
+                print(f"    Default N-value: {row['n_value'] or 'N/A'}")
+                print(f"    Windowing: {row['windowing_strategy']}")
 
                 if row['description'] and row['description'] != f"{row['feature_set_name']} feature set":
-                    print(f"     {row['description'][:70]}")
+                    print(f"    Description: {row['description']}")
 
-            print("-" * 80)
-            print(f"Total: {len(results)} feature sets configured")
+                # Show features with overrides
+                features = feature_details.get(row['feature_set_id'], [])
+                if features:
+                    print(f"    Features ({len(features)}):")
+                    for feat in features:
+                        # Build override indicators
+                        overrides = []
+                        if feat['feature_channel']:
+                            overrides.append(f"ch={feat['feature_channel']}")
+                        if feat['n_value_override']:
+                            overrides.append(f"n={feat['n_value_override']}")
 
-            active = sum(1 for r in results if r['is_active'])
-            with_n = sum(1 for r in results if r['n_value'])
+                        override_str = f" [{', '.join(overrides)}]" if overrides else ""
+                        print(f"      {feat['feature_order']}. {feat['feature_name']}({feat['effective_channel']}, n={feat['effective_n_value']}){override_str}")
+                else:
+                    print(f"    Features: None configured")
 
-            print(f"\nStatus: {active} active, {len(results) - active} inactive")
+            print("\n" + "=" * 80)
+            print(f"Total: {len(feature_sets)} feature sets configured")
+
+            active = sum(1 for r in feature_sets if r['is_active'])
+            with_n = sum(1 for r in feature_sets if r['n_value'])
+
+            print(f"Status: {active} active, {len(feature_sets) - active} inactive")
             print(f"N-values: {with_n} sets have window sizes configured")
 
             cursor.close()
@@ -3503,12 +3703,52 @@ class MLDPShell:
         if not self.db_conn:
             print("❌ Not connected to database. Use 'connect' first.")
             return
-        
+
+        # Show help if requested or if no experiment set
+        if '--help' in args or not self.current_experiment:
+            print("\nUsage: generate-feature-fileset [options]")
+            print("\nThis command extracts features from ALL segment files (all decimation levels).")
+            print("\nBy default, processes ALL segment files and ALL active feature sets.")
+            print("\nOptions:")
+            print("  --feature-sets <list>    Comma-separated feature set IDs (default: all active)")
+            print("  --max-segments N         Maximum segment FILES to process (default: all)")
+            print("  --force                  Force re-extraction of existing features")
+            print("\nExamples:")
+            print("  generate-feature-fileset")
+            print("  generate-feature-fileset --feature-sets 1,2,3")
+            print("  generate-feature-fileset --max-segments 1000")
+            print("  generate-feature-fileset --force")
+            print("\n📝 Pipeline Order:")
+            print("  1. select-files          - Select files for training (DB)")
+            print("  2. select-segments       - Select segments for training (DB)")
+            print("  3. generate-training-data - Create training data tables (DB)")
+            print("  4. generate-segment-fileset - Create physical segment files (Disk)")
+            print("  5. generate-feature-fileset - Extract features from segments (Disk)")
+            print("\n📁 Input Structure:")
+            print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
+            print("\n📁 Output Structure:")
+            print("  experiment{NNN}/feature_files/S{size}/T{type}/D{decimation}/*_FS{id}[_N_{n}].npy")
+            print("\n📊 Processing Details:")
+            print("  - Processes ALL decimation levels (S000512 to S524288)")
+            print("  - Processes ALL ADC types (TRAW, TADC6, TADC8, TADC10, TADC12, TADC14)")
+            print("  - Mirrors segment_files/ directory structure exactly")
+            print("  - Tracks original_segment_length AND stored_segment_length")
+            print("  - Enables decimation/information-loss analysis")
+            print("\n⚙️  Database Records:")
+            print("  Each extraction creates a record in experiment_{NNN}_feature_fileset with:")
+            print("    - segment_id, file_id, feature_set_id, n_value")
+            print("    - original_segment_length (from data_segments)")
+            print("    - stored_segment_length (from filesystem path)")
+            print("    - adc_type, adc_division")
+            print("    - feature_file_path, num_chunks, extraction_time")
+            if not self.current_experiment:
+                print("\n⚠️  No experiment selected. Use 'set experiment <id>' first.")
+            return
+
         feature_set_ids = None  # Default: all configured feature sets
         max_segments = None
-        use_mpcctl = False  # Default to Python extraction for now
-        parallel_jobs = 4
-        
+        force_reextract = False
+
         # Parse arguments
         i = 0
         while i < len(args):
@@ -3518,50 +3758,36 @@ class MLDPShell:
             elif args[i] == '--max-segments' and i + 1 < len(args):
                 max_segments = int(args[i + 1])
                 i += 2
-            elif args[i] == '--use-mpcctl':
-                use_mpcctl = True
+            elif args[i] == '--force':
+                force_reextract = True
                 i += 1
-            elif args[i] == '--parallel' and i + 1 < len(args):
-                parallel_jobs = int(args[i + 1])
-                i += 2
-            elif args[i] == '--help':
-                print("\nUsage: generate-feature-fileset [options]")
-                print("\nOptions:")
-                print("  --feature-sets IDS         Comma-separated feature set IDs (default: all)")
-                print("  --max-segments N           Maximum segments to process")
-                print("  --use-mpcctl               Use mpcctl for extraction (default: Python)")
-                print("  --parallel N               Number of parallel workers (default: 4)")
-                print("\nExample:")
-                print("  generate-feature-fileset --feature-sets 1,2,3 --max-segments 100")
-                print("  generate-feature-fileset --use-mpcctl --parallel 8")
-                print("\nNote: Feature sets include their configured N values for chunking")
-                return
             else:
                 i += 1
-        
+
         print(f"🔄 Generating feature files for experiment {self.current_experiment}...")
         if feature_set_ids:
             print(f"   Feature sets: {feature_set_ids}")
         else:
             print(f"   Feature sets: All configured sets")
         if max_segments:
-            print(f"   Max segments: {max_segments}")
-        print(f"   Extraction method: {'mpcctl' if use_mpcctl else 'Python'}")
-        print(f"   Parallel jobs: {parallel_jobs}")
-        
+            print(f"   Max segment files: {max_segments:,}")
+        else:
+            print(f"   Max segment files: All")
+        if force_reextract:
+            print(f"   Mode: Force re-extraction")
+
         try:
             # Import the feature extractor module
             from experiment_feature_extractor import ExperimentFeatureExtractor
-            
+
             # Create extractor instance
             extractor = ExperimentFeatureExtractor(self.current_experiment, self.db_conn)
-            
+
             # Extract features
             result = extractor.extract_features(
                 feature_set_ids=feature_set_ids,
                 max_segments=max_segments,
-                use_mpcctl=use_mpcctl,
-                parallel_jobs=parallel_jobs
+                force_reextract=force_reextract
             )
             
             if result['success']:
@@ -3922,8 +4148,9 @@ class MLDPShell:
         Note: This is different from generate-training-data which only
         creates database tables for tracking which segments to use.
         """
-        if not args:
-            print("\nUsage: generate-segment-fileset <experiment_id> [options]")
+        # Show help if requested
+        if '--help' in args:
+            print("\nUsage: generate-segment-fileset [options]")
             print("\nThis command generates physical segment files from raw data.")
             print("\nBy default, uses the experiment's configured data types and decimations.")
             print("\nOptions:")
@@ -3932,9 +4159,9 @@ class MLDPShell:
             print("  --max-segments N         Maximum segments to process")
             print("\nNote: If no --data-types or --decimations are specified, uses experiment config.")
             print("\nExamples:")
-            print("  generate-segment-fileset 41 --data-types RAW")
-            print("  generate-segment-fileset 41 --data-types RAW,ADC14 --decimations 0,7,15")
-            print("  generate-segment-fileset 18 --files 1-10 --types ADC14,ADC12  (exp18 legacy)")
+            print("  generate-segment-fileset")
+            print("  generate-segment-fileset --data-types RAW")
+            print("  generate-segment-fileset --data-types RAW,ADC14 --decimations 0,7,15")
             print("\n📝 Pipeline Order:")
             print("  1. select-files          - Select files for training (DB)")
             print("  2. select-segments       - Select segments for training (DB)")
@@ -3945,7 +4172,20 @@ class MLDPShell:
             print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
             return
 
-        experiment_id = int(args[0])
+        # Determine experiment_id: use current experiment or first arg if it's a number
+        experiment_id = None
+        arg_offset = 0
+
+        if args and args[0].isdigit():
+            # Legacy support: first arg is experiment_id
+            experiment_id = int(args[0])
+            arg_offset = 1
+        elif self.current_experiment:
+            # Use current experiment set via 'set experiment'
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
 
         # Special handling for experiment 18 with legacy code
         if experiment_id == 18 and '--files' in args:
@@ -3962,7 +4202,7 @@ class MLDPShell:
         max_segments = None
         use_experiment_config = True
 
-        i = 1
+        i = arg_offset
         while i < len(args):
             if args[i] == '--data-types' and i + 1 < len(args):
                 data_types = [dt.upper() for dt in args[i + 1].split(',')]
