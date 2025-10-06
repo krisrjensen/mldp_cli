@@ -4461,10 +4461,12 @@ class MLDPShell:
             print("  --status                 Show progress")
             print("\nOptions for --start:")
             print("  --workers N              Number of worker processes (default: 16)")
+            print("  --feature_sets 1,2,3     Comma-separated list of feature set IDs to use")
             print("  --log                    Create log file (yyyymmdd_hhmmss_mpcctl_distance_calculation.log)")
             print("  --verbose                Show verbose output in CLI")
             print("\nExamples:")
             print("  mpcctl-distance-function --start --workers 20")
+            print("  mpcctl-distance-function --start --workers 2 --feature_sets 1,2,3,4,5")
             print("  mpcctl-distance-function --start --workers 20 --log --verbose")
             print("  mpcctl-distance-function --status")
             print("  mpcctl-distance-function --pause")
@@ -4482,6 +4484,7 @@ class MLDPShell:
             workers = 16
             log_enabled = '--log' in args
             verbose = '--verbose' in args
+            feature_set_filter = None
 
             for i, arg in enumerate(args):
                 if arg == '--workers' and i + 1 < len(args):
@@ -4489,6 +4492,14 @@ class MLDPShell:
                         workers = int(args[i + 1])
                     except ValueError:
                         print(f"❌ Invalid workers value: {args[i + 1]}")
+                        return
+                elif arg == '--feature_sets' and i + 1 < len(args):
+                    try:
+                        feature_set_filter = [int(x.strip()) for x in args[i + 1].split(',')]
+                        print(f"📊 Filtering to feature sets: {feature_set_filter}")
+                    except ValueError:
+                        print(f"❌ Invalid feature_sets value: {args[i + 1]}")
+                        print("   Expected format: --feature_sets 1,2,3,4,5")
                         return
 
             # Import required modules
@@ -4520,13 +4531,15 @@ class MLDPShell:
             manager = mp.Process(
                 target=manager_process,
                 args=(self.current_experiment, workers, feature_base_path,
-                      db_config, log_file, verbose, mpcctl_base_dir)
+                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter)
             )
             manager.start()
 
             print(f"🚀 Distance calculation started in background")
             print(f"   Experiment: {self.current_experiment}")
             print(f"   Workers: {workers}")
+            if feature_set_filter:
+                print(f"   Feature sets: {feature_set_filter}")
             if log_file:
                 print(f"   Log file: {log_file}")
             print(f"\n📊 Monitor progress:")
