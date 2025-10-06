@@ -77,6 +77,7 @@ class MLDPCompleter(Completer):
             'clean-distance-tables': ['--dry-run', '--force'],
             'show-distance-functions': ['--active-only'],
             'update-distance-function': ['--pairwise-metric', '--library', '--function-import', '--description', '--active'],
+            'mpcctl-distance-function': ['--start', '--pause', '--continue', '--stop', '--status', '--workers', '--log', '--verbose', '--help'],
 
             # Analysis
             'stats': ['l1', 'l2', 'cosine', 'pearson'],
@@ -270,6 +271,8 @@ class MLDPShell:
             # Distance function LUT management
             'show-distance-functions': self.cmd_show_distance_functions,
             'update-distance-function': self.cmd_update_distance_function,
+            # MPCCTL distance calculation
+            'mpcctl-distance-function': self.cmd_mpcctl_distance_function,
         }
     
     def get_prompt(self):
@@ -4434,6 +4437,232 @@ class MLDPShell:
             self.db_conn.rollback()
             import traceback
             traceback.print_exc()
+
+    def cmd_mpcctl_distance_function(self, args):
+        """Control MPCCTL distance calculation with background execution."""
+
+        if '--help' in args:
+            print("\nUsage: mpcctl-distance-function [options]")
+            print("\nBackground distance calculation with pause/resume/stop control.")
+            print("\nCommands:")
+            print("  --start                  Start distance calculation in background")
+            print("  --pause                  Pause running calculation")
+            print("  --continue               Resume paused calculation")
+            print("  --stop                   Stop calculation")
+            print("  --status                 Show progress")
+            print("\nOptions for --start:")
+            print("  --workers N              Number of worker processes (default: 16)")
+            print("  --log                    Create log file (yyyymmdd_hhmmss_mpcctl_distance_calculation.log)")
+            print("  --verbose                Show verbose output in CLI")
+            print("\nExamples:")
+            print("  mpcctl-distance-function --start --workers 20")
+            print("  mpcctl-distance-function --start --workers 20 --log --verbose")
+            print("  mpcctl-distance-function --status")
+            print("  mpcctl-distance-function --pause")
+            print("  mpcctl-distance-function --continue")
+            print("  mpcctl-distance-function --stop")
+            return
+
+        if '--start' in args:
+            # Start distance calculation in background
+            if not self.current_experiment:
+                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                return
+
+            # Parse options
+            workers = 16
+            log_enabled = '--log' in args
+            verbose = '--verbose' in args
+
+            for i, arg in enumerate(args):
+                if arg == '--workers' and i + 1 < len(args):
+                    try:
+                        workers = int(args[i + 1])
+                    except ValueError:
+                        print(f"❌ Invalid workers value: {args[i + 1]}")
+                        return
+
+            # Import required modules
+            import multiprocessing as mp
+            from pathlib import Path
+            from datetime import datetime
+            import sys
+            sys.path.insert(0, '/Users/kjensen/Documents/GitHub/mldp/mldp_distance')
+            from mpcctl_cli_distance_calculator import manager_process
+
+            # Prepare configuration
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            feature_base_path = Path('/Volumes/ArcData/V3_database/experiment041/feature_files')
+            mpcctl_base_dir = Path('/Volumes/ArcData/V3_database/experiment041')
+
+            # Create log file if requested
+            log_file = None
+            if log_enabled:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_file = Path(f"{timestamp}_mpcctl_distance_calculation.log")
+
+            # Spawn manager process in background (daemon)
+            manager = mp.Process(
+                target=manager_process,
+                args=(self.current_experiment, workers, feature_base_path,
+                      db_config, log_file, verbose, mpcctl_base_dir),
+                daemon=True
+            )
+            manager.start()
+
+            print(f"🚀 Distance calculation started in background")
+            print(f"   Experiment: {self.current_experiment}")
+            print(f"   Workers: {workers}")
+            if log_file:
+                print(f"   Log file: {log_file}")
+            print(f"\n📊 Monitor progress:")
+            print(f"   mpcctl-distance-function --status")
+            print(f"\n⏸️  Control:")
+            print(f"   mpcctl-distance-function --pause")
+            print(f"   mpcctl-distance-function --continue")
+            print(f"   mpcctl-distance-function --stop")
+
+        elif '--status' in args:
+            # Show progress
+            from pathlib import Path
+            import json
+
+            state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
+            if not state_file.exists():
+                print("❌ No active distance calculation found")
+                print("   Start with: mpcctl-distance-function --start --workers 20")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                progress = state.get('progress', {})
+                status = state.get('status', 'unknown')
+
+                # Progress bar
+                bar_width = 50
+                percent = progress.get('percent_complete', 0)
+                filled = int(bar_width * percent / 100)
+                bar = '█' * filled + '░' * (bar_width - filled)
+
+                # Format time
+                eta_seconds = progress.get('estimated_time_remaining_seconds', 0)
+                eta_minutes = eta_seconds // 60
+                eta_seconds_remainder = eta_seconds % 60
+
+                print(f"\n📊 Distance Calculation Progress")
+                print(f"   Status: {status}")
+                print(f"   [{bar}] {percent:.1f}%")
+                print(f"   Completed: {progress.get('completed_pairs', 0):,} / {progress.get('total_pairs', 0):,} pairs")
+                print(f"   Rate: {progress.get('pairs_per_second', 0):.0f} pairs/sec")
+                print(f"   ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                print(f"   Workers: {state.get('workers_count', 0)}")
+
+                if state.get('log_file'):
+                    print(f"   Log: {state['log_file']}")
+
+            except Exception as e:
+                print(f"❌ Error reading status: {e}")
+
+        elif '--pause' in args:
+            # Send pause command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
+            if not state_file.exists():
+                print("❌ No active distance calculation found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'pause',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("⏸️  Pause signal sent")
+                print("   Workers will pause after current pair")
+                print("   Use 'mpcctl-distance-function --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending pause signal: {e}")
+
+        elif '--continue' in args:
+            # Send resume command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
+            if not state_file.exists():
+                print("❌ No active distance calculation found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'resume',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("▶️  Resume signal sent")
+                print("   Workers will continue processing")
+                print("   Use 'mpcctl-distance-function --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending resume signal: {e}")
+
+        elif '--stop' in args:
+            # Send stop command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
+            if not state_file.exists():
+                print("❌ No active distance calculation found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'stop',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("⏹️  Stop signal sent")
+                print("   Workers will exit gracefully after current pair")
+                print("   Use 'mpcctl-distance-function --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending stop signal: {e}")
+
+        else:
+            print("❌ Unknown option. Use --help for usage information.")
 
     def cmd_generate_feature_fileset(self, args):
         """Generate feature files from segment data"""
