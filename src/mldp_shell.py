@@ -3807,26 +3807,34 @@ class MLDPShell:
                             skipped_count += 1
                             continue
 
-                    # Create distance result table
+                    # Create distance result table with composite primary key
                     create_sql = f"""
                         CREATE TABLE {table_name} (
-                            distance_id BIGSERIAL PRIMARY KEY,
                             pair_id INTEGER NOT NULL,
+                            decimation_factor INTEGER NOT NULL,
+                            data_type_id INTEGER NOT NULL,
                             amplitude_processing_method_id INTEGER NOT NULL,
+                            experiment_feature_set_id BIGINT NOT NULL,
+                            feature_set_feature_id BIGINT NOT NULL,
                             distance_s DOUBLE PRECISION,
                             distance_i DOUBLE PRECISION,
                             distance_j DOUBLE PRECISION,
                             distance_k DOUBLE PRECISION,
-                            created_at TIMESTAMP DEFAULT NOW()
+                            created_at TIMESTAMP DEFAULT NOW(),
+                            PRIMARY KEY (pair_id, decimation_factor, data_type_id,
+                                       amplitude_processing_method_id, experiment_feature_set_id,
+                                       feature_set_feature_id)
                         )
                     """
 
                     cursor.execute(create_sql)
 
-                    # Create indexes
+                    # Create indexes for common query patterns
                     cursor.execute(f"CREATE INDEX idx_{table_name}_pair ON {table_name}(pair_id)")
-                    cursor.execute(f"CREATE INDEX idx_{table_name}_amp ON {table_name}(amplitude_processing_method_id)")
-                    cursor.execute(f"CREATE INDEX idx_{table_name}_pair_amp ON {table_name}(pair_id, amplitude_processing_method_id)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_decimation ON {table_name}(decimation_factor)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_data_type ON {table_name}(data_type_id)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_feature_set ON {table_name}(experiment_feature_set_id)")
+                    cursor.execute(f"CREATE INDEX idx_{table_name}_pair_decimation ON {table_name}(pair_id, decimation_factor)")
 
                     self.db_conn.commit()
 
