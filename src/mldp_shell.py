@@ -3783,7 +3783,8 @@ class MLDPShell:
             error_count = 0
 
             for func_id, func_name, table_prefix, display_name in distance_functions:
-                table_name = f"experiment_{self.current_experiment:03d}_{table_prefix}"
+                # PostgreSQL stores table names in lowercase, so normalize
+                table_name = f"experiment_{self.current_experiment:03d}_{table_prefix}".lower()
 
                 try:
                     # Check if table exists
