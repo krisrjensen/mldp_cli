@@ -4507,12 +4507,11 @@ class MLDPShell:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 log_file = Path(f"{timestamp}_mpcctl_distance_calculation.log")
 
-            # Spawn manager process in background (daemon)
+            # Spawn manager process in background (non-daemon so it can spawn workers)
             manager = mp.Process(
                 target=manager_process,
                 args=(self.current_experiment, workers, feature_base_path,
-                      db_config, log_file, verbose, mpcctl_base_dir),
-                daemon=True
+                      db_config, log_file, verbose, mpcctl_base_dir)
             )
             manager.start()
 
