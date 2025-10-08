@@ -336,6 +336,74 @@ class ExperimentConfigurator:
         finally:
             self.disconnect()
     
+    def remove_data_type(self, data_type_id: int) -> bool:
+        """
+        Remove a data type from the experiment.
+
+        Args:
+            data_type_id: ID of the data type to remove
+
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Remove from junction table
+            self.cursor.execute("""
+                DELETE FROM ml_experiments_data_types
+                WHERE experiment_id = %s AND data_type_id = %s
+            """, (self.experiment_id, data_type_id))
+
+            self.conn.commit()
+            self.logger.info(f"Removed data type {data_type_id} from experiment {self.experiment_id}")
+            return True
+
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error removing data type: {e}")
+            return False
+        finally:
+            self.disconnect()
+
+    def add_data_type(self, data_type_id: int) -> bool:
+        """
+        Add a data type to the experiment.
+
+        Args:
+            data_type_id: ID of the data type to add
+
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Check if already exists
+            self.cursor.execute("""
+                SELECT 1 FROM ml_experiments_data_types
+                WHERE experiment_id = %s AND data_type_id = %s
+            """, (self.experiment_id, data_type_id))
+
+            if self.cursor.fetchone():
+                self.logger.warning(f"Data type {data_type_id} already in experiment {self.experiment_id}")
+                return False
+
+            # Add to junction table
+            self.cursor.execute("""
+                INSERT INTO ml_experiments_data_types (experiment_id, data_type_id)
+                VALUES (%s, %s)
+            """, (self.experiment_id, data_type_id))
+
+            self.conn.commit()
+            self.logger.info(f"Added data type {data_type_id} to experiment {self.experiment_id}")
+            return True
+
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error adding data type: {e}")
+            return False
+        finally:
+            self.disconnect()
+
     def update_segment_selection_config(self, config_updates: Dict[str, Any]) -> bool:
         """
         Update segment selection configuration (JSONB field).

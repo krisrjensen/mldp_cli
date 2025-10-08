@@ -59,6 +59,8 @@ class MLDPCompleter(Completer):
             # Distance commands
             'calculate': ['--segment-size', '--distance-type', '--workers', '8192', '16384', '32768', 'euclidean', 'l1', 'l2', 'cosine'],
             'insert_distances': ['--input-folder', '--distance-type', 'l1', 'l2', 'cosine', 'pearson'],
+            'mpcctl-distance-function': ['--start', '--status', '--pause', '--continue', '--stop', '--workers', '--feature_sets', '--log', '--verbose'],
+            'mpcctl-distance-insert': ['--start', '--status', '--pause', '--continue', '--stop', '--list-processes', '--kill', '--kill-all', '--workers', '--distances', '--method', '--batch-size', '--log', '--verbose'],
             
             # Visualization
             'heatmap': ['--version', '--output-dir', '1', '2', '3', '4', '5', '6', '7'],
@@ -92,6 +94,9 @@ class MLDPCompleter(Completer):
             'remove-feature-set': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
             'clear-feature-sets': [],
             'list-feature-sets': [],
+            'remove-data-type': ['1', '2', '3', '4', '5', '6', '7'],
+            'add-data-type': ['1', '2', '3', '4', '5', '6', '7'],
+            'list-data-types': [],
             'show-all-feature-sets': [],
             # New feature management commands
             'create-feature': ['--name', '--category', '--behavior', '--description', 'electrical', 'statistical', 'spectral', 'temporal', 'compute', 'driver', 'derived', 'aggregate', 'transform'],
@@ -221,6 +226,9 @@ class MLDPShell:
             'remove-feature-set': self.cmd_remove_feature_set,
             'clear-feature-sets': self.cmd_clear_feature_sets,
             'list-feature-sets': self.cmd_list_feature_sets,
+            'remove-data-type': self.cmd_remove_data_type,
+            'add-data-type': self.cmd_add_data_type,
+            'list-data-types': self.cmd_list_data_types,
             'show-all-feature-sets': self.cmd_show_all_feature_sets,
             # New feature management commands
             'create-feature': self.cmd_create_feature,
@@ -273,6 +281,7 @@ class MLDPShell:
             'update-distance-function': self.cmd_update_distance_function,
             # MPCCTL distance calculation
             'mpcctl-distance-function': self.cmd_mpcctl_distance_function,
+            'mpcctl-distance-insert': self.cmd_mpcctl_distance_insert,
         }
     
     def get_prompt(self):
@@ -1442,6 +1451,9 @@ class MLDPShell:
   show-all-feature-sets                Show ALL feature sets in database
   remove-feature-set <id>              Remove a feature set from experiment
   clear-feature-sets                   Remove ALL feature sets from experiment
+  list-data-types                      List data types for current experiment
+  add-data-type <id>                   Add a data type to current experiment
+  remove-data-type <id>                Remove a data type from current experiment
   select-files [--max-files N]        Select files for training data
   remove-file-labels <label1>...      Remove files with specified labels from training data
   remove-files <id1> <id2>...         Remove specific files by ID from training data
@@ -1452,6 +1464,10 @@ class MLDPShell:
   insert_distances [options]          Insert distances into database
   stats [distance_type]               Show distance statistics
   closest [N]                         Find N closest segment pairs
+
+🔄 MPCCTL DISTANCE PIPELINE:
+  mpcctl-distance-function            Calculate distances (--start/--status/--pause/--continue/--stop)
+  mpcctl-distance-insert              Insert distances to DB (--start/--status/--pause/--continue/--stop)
 
 🎨 VISUALIZATION:
   heatmap [--version N]               Generate distance heatmap
@@ -1938,7 +1954,134 @@ class MLDPShell:
             print(f"❌ Could not import configurator: {e}")
         except Exception as e:
             print(f"❌ Error clearing feature sets: {e}")
-    
+
+    def cmd_remove_data_type(self, args):
+        """Remove a data type from current experiment"""
+        if not args:
+            print("Usage: remove-data-type <data_type_id>")
+            print("\nData Type IDs:")
+            print("  1 = raw")
+            print("  2 = adc8")
+            print("  3 = adc10")
+            print("  4 = adc12")
+            print("  5 = adc24")
+            print("  6 = adc6")
+            print("  7 = adc14")
+            return
+
+        try:
+            data_type_id = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid data type ID: {args[0]}")
+            return
+
+        try:
+            from experiment_configurator import ExperimentConfigurator
+
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+
+            print(f"🔄 Removing data type {data_type_id} from experiment {self.current_experiment}...")
+            if configurator.remove_data_type(data_type_id):
+                print(f"✅ Data type {data_type_id} removed")
+            else:
+                print(f"❌ Failed to remove data type")
+
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error removing data type: {e}")
+
+    def cmd_add_data_type(self, args):
+        """Add a data type to current experiment"""
+        if not args:
+            print("Usage: add-data-type <data_type_id>")
+            print("\nData Type IDs:")
+            print("  1 = raw")
+            print("  2 = adc8")
+            print("  3 = adc10")
+            print("  4 = adc12")
+            print("  5 = adc24")
+            print("  6 = adc6")
+            print("  7 = adc14")
+            return
+
+        try:
+            data_type_id = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid data type ID: {args[0]}")
+            return
+
+        try:
+            from experiment_configurator import ExperimentConfigurator
+
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+
+            print(f"🔄 Adding data type {data_type_id} to experiment {self.current_experiment}...")
+            if configurator.add_data_type(data_type_id):
+                print(f"✅ Data type {data_type_id} added")
+            else:
+                print(f"❌ Data type already exists or failed to add")
+
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error adding data type: {e}")
+
+    def cmd_list_data_types(self, args):
+        """List data types for current experiment"""
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host='localhost',
+                port=5432,
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT edt.data_type_id, dt.data_type_name, dt.description
+                FROM ml_experiments_data_types edt
+                JOIN ml_data_types_lut dt ON edt.data_type_id = dt.data_type_id
+                WHERE edt.experiment_id = %s
+                ORDER BY edt.data_type_id
+            """, (self.current_experiment,))
+
+            data_types = cursor.fetchall()
+
+            if not data_types:
+                print(f"\n❌ No data types configured for experiment {self.current_experiment}")
+                return
+
+            print(f"\n📊 Data Types for Experiment {self.current_experiment}:")
+            print(f"\n{'ID':<5} {'Name':<15} {'Description':<50}")
+            print("-" * 72)
+            for dt_id, dt_name, dt_desc in data_types:
+                desc = (dt_desc[:47] + '...') if dt_desc and len(dt_desc) > 50 else (dt_desc or '')
+                print(f"{dt_id:<5} {dt_name:<15} {desc:<50}")
+
+            print(f"\nTotal: {len(data_types)} data types")
+            print("\nUse 'remove-data-type <id>' to remove a specific type")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error listing data types: {e}")
+
     def cmd_list_feature_sets(self, args):
         """List feature sets for current experiment"""
         try:
@@ -4681,6 +4824,431 @@ class MLDPShell:
 
             except Exception as e:
                 print(f"❌ Error sending stop signal: {e}")
+
+        else:
+            print("❌ Unknown option. Use --help for usage information.")
+
+    def cmd_mpcctl_distance_insert(self, args):
+        """Control MPCCTL distance database insertion with background execution."""
+
+        if '--help' in args:
+            print("\nUsage: mpcctl-distance-insert [options]")
+            print("\nBackground database insertion with pause/resume/stop control.")
+            print("\nCommands:")
+            print("  --start                  Start database insertion in background")
+            print("  --pause                  Pause running insertion")
+            print("  --continue               Resume paused insertion")
+            print("  --stop                   Stop insertion")
+            print("  --status                 Show progress")
+            print("  --list-processes         List active mpcctl processes with PIDs")
+            print("  --kill <PID>             Kill specific process by PID")
+            print("  --kill-all               Kill all mpcctl distance insert processes")
+            print("\nOptions for --start:")
+            print("  --workers N              Number of worker processes (default: 4)")
+            print("  --distances <list>       Comma-separated distance functions (default: all)")
+            print("                           Options: manhattan, euclidean, cosine, pearson")
+            print("  --method <type>          Insertion method: copy (fast) or insert (safe)")
+            print("                           Default: copy")
+            print("  --batch-size N           Files per batch (default: 100)")
+            print("  --log                    Create log file")
+            print("  --verbose                Show verbose output")
+            print("\nExamples:")
+            print("  mpcctl-distance-insert --start --workers 4")
+            print("  mpcctl-distance-insert --start --workers 2 --distances manhattan,euclidean")
+            print("  mpcctl-distance-insert --start --method copy --log --verbose")
+            print("  mpcctl-distance-insert --status")
+            print("  mpcctl-distance-insert --list-processes")
+            print("  mpcctl-distance-insert --kill 12345")
+            print("  mpcctl-distance-insert --kill-all")
+            print("  mpcctl-distance-insert --pause")
+            print("  mpcctl-distance-insert --continue")
+            print("  mpcctl-distance-insert --stop")
+            print("\nMethods:")
+            print("  copy   - PostgreSQL COPY (10x faster, requires clean data)")
+            print("  insert - INSERT with ON CONFLICT (slower, handles duplicates)")
+            print("\nExpected Records:")
+            print("  Per distance table: 2,083,954,560 records")
+            print("  Total (4 tables):   8,335,818,240 records")
+            return
+
+        if '--start' in args:
+            # Start database insertion in background
+            if not self.current_experiment:
+                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                return
+
+            # Parse options
+            workers = 4
+            distances = None
+            method = 'copy'
+            batch_size = 100
+            log_enabled = '--log' in args
+            verbose = '--verbose' in args
+
+            for i, arg in enumerate(args):
+                if arg == '--workers' and i + 1 < len(args):
+                    try:
+                        workers = int(args[i + 1])
+                    except ValueError:
+                        print(f"❌ Invalid workers value: {args[i + 1]}")
+                        return
+                elif arg == '--distances' and i + 1 < len(args):
+                    distances = args[i + 1]
+                elif arg == '--method' and i + 1 < len(args):
+                    method = args[i + 1]
+                    if method not in ['copy', 'insert']:
+                        print(f"❌ Invalid method: {method}")
+                        print("   Use 'copy' or 'insert'")
+                        return
+                elif arg == '--batch-size' and i + 1 < len(args):
+                    try:
+                        batch_size = int(args[i + 1])
+                    except ValueError:
+                        print(f"❌ Invalid batch size: {args[i + 1]}")
+                        return
+
+            # Import required modules
+            import multiprocessing as mp
+            from pathlib import Path
+            from datetime import datetime
+            import sys
+            sys.path.insert(0, '/Users/kjensen/Documents/GitHub/mldp/mldp_distance')
+            from mpcctl_distance_db_insert import manager_process
+
+            # Prepare configuration
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            processed_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.processed')
+            mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}')
+
+            # Create log file if requested
+            log_file = None
+            if log_enabled:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_file = Path(f"{timestamp}_mpcctl_distance_insert.log")
+
+            # Spawn manager process in background (non-daemon so it can spawn workers)
+            manager = mp.Process(
+                target=manager_process,
+                args=(self.current_experiment, workers, processed_dir, db_config,
+                      distances, method, batch_size, log_file, verbose, mpcctl_base_dir)
+            )
+            manager.start()
+
+            # Don't wait for it - let it run in background
+            # User can exit shell and process continues
+
+            print(f"🚀 Distance insertion started in background")
+            print(f"   Experiment: {self.current_experiment}")
+            print(f"   Workers: {workers}")
+            if distances:
+                print(f"   Distance functions: {distances}")
+            print(f"   Method: {method}")
+            print(f"   Batch size: {batch_size}")
+            if log_file:
+                print(f"   Log file: {log_file}")
+            print(f"\n📊 Monitor progress:")
+            print(f"   mpcctl-distance-insert --status")
+            print(f"\n⏸️  Control:")
+            print(f"   mpcctl-distance-insert --pause")
+            print(f"   mpcctl-distance-insert --continue")
+            print(f"   mpcctl-distance-insert --stop")
+
+        elif '--status' in args:
+            # Show status from state file
+            from pathlib import Path
+            import json
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/distance_insert/state.json')
+            if not state_file.exists():
+                print("❌ No active distance insertion found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                print(f"\n📊 Distance Insertion Status - Experiment {state.get('experiment_id', 'N/A')}")
+                print(f"   Status: {state.get('status', 'unknown')}")
+                print(f"   Manager PID: {state.get('manager_pid', 'N/A')}")
+                print(f"   Workers: {state.get('workers_count', 'N/A')}")
+
+                if 'progress' in state:
+                    prog = state['progress']
+                    print(f"\n📈 Progress:")
+                    print(f"   Total files: {prog.get('total_files', 'N/A'):,}")
+                    print(f"   Completed files: {prog.get('completed_files', 'N/A'):,}")
+                    print(f"   Percent complete: {prog.get('percent_complete', 'N/A')}%")
+                    print(f"   Records inserted: {prog.get('records_inserted', 'N/A'):,}")
+                    if 'files_per_second' in prog:
+                        print(f"   Files/second: {prog.get('files_per_second', 'N/A'):.1f}")
+                    if 'estimated_time_remaining_seconds' in prog:
+                        print(f"   Est. time remaining: {prog.get('estimated_time_remaining_seconds', 'N/A')}s")
+
+                if 'metrics' in state:
+                    metrics = state['metrics']
+                    print(f"\n🔧 Configuration:")
+                    print(f"   Distance functions: {metrics.get('distance_functions', [])}")
+                    print(f"   Method: {metrics.get('method', 'N/A')}")
+                    print(f"   Batch size: {metrics.get('batch_size', 'N/A')}")
+
+            except Exception as e:
+                print(f"❌ Error reading state: {e}")
+
+        elif '--pause' in args:
+            # Send pause command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
+            if not state_file.exists():
+                print("❌ No active distance insertion found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'pause',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("⏸️  Pause signal sent")
+                print("   Workers will pause after current batch")
+                print("   Use 'mpcctl-distance-insert --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending pause signal: {e}")
+
+        elif '--continue' in args:
+            # Send resume command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
+            if not state_file.exists():
+                print("❌ No active distance insertion found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'resume',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("▶️  Resume signal sent")
+                print("   Workers will continue processing")
+                print("   Use 'mpcctl-distance-insert --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending resume signal: {e}")
+
+        elif '--stop' in args:
+            # Send stop command
+            from pathlib import Path
+            import json
+            from datetime import datetime
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
+            if not state_file.exists():
+                print("❌ No active distance insertion found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                state['control'] = {
+                    'command': 'stop',
+                    'command_time': datetime.now().strftime('%Y%m%d_%H%M%S')
+                }
+
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+                print("⏹️  Stop signal sent")
+                print("   Workers will exit gracefully after current batch")
+                print("   Use 'mpcctl-distance-insert --status' to verify")
+
+            except Exception as e:
+                print(f"❌ Error sending stop signal: {e}")
+
+        elif '--list-processes' in args:
+            # List all mpcctl distance insert processes
+            import subprocess
+            from pathlib import Path
+            import json
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
+
+            print(f"\n🔍 MPCCTL Distance Insert Processes (Experiment {self.current_experiment}):")
+            print("=" * 70)
+
+            # Check state file for manager PID
+            manager_pid = None
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r') as f:
+                        state = json.load(f)
+                    manager_pid = state.get('manager_pid')
+                    print(f"\nManager Process:")
+                    print(f"  PID: {manager_pid}")
+                    print(f"  Status: {state.get('status', 'unknown')}")
+                    print(f"  Workers: {state.get('workers_count', 0)}")
+                    print(f"  Start Time: {state.get('start_time', 'unknown')}")
+                except Exception as e:
+                    print(f"  ⚠️  Error reading state file: {e}")
+            else:
+                print(f"\n  ℹ️  No active manager process (no state file)")
+
+            # List all Python processes containing mpcctl_distance_db_insert
+            try:
+                result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
+                processes = []
+                for line in result.stdout.split('\n'):
+                    if 'mpcctl_distance_db_insert' in line or (manager_pid and str(manager_pid) in line):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            processes.append({'pid': parts[1], 'line': line})
+
+                if processes:
+                    print(f"\n\nActive Processes:")
+                    for proc in processes:
+                        print(f"  PID {proc['pid']}: {proc['line'][80:]}" if len(proc['line']) > 80 else f"  PID {proc['pid']}")
+                else:
+                    print(f"\n  ℹ️  No active worker processes found")
+
+            except Exception as e:
+                print(f"  ⚠️  Error listing processes: {e}")
+
+            print()
+
+        elif '--kill' in args:
+            # Kill specific PID
+            import signal
+            import os
+
+            # Get PID from arguments
+            pid = None
+            for i, arg in enumerate(args):
+                if arg == '--kill' and i + 1 < len(args):
+                    try:
+                        pid = int(args[i + 1])
+                    except ValueError:
+                        print(f"❌ Invalid PID: {args[i + 1]}")
+                        return
+
+            if pid is None:
+                print("❌ No PID specified. Usage: mpcctl-distance-insert --kill <PID>")
+                return
+
+            try:
+                os.kill(pid, signal.SIGTERM)
+                print(f"⚠️  Sent SIGTERM to PID {pid}")
+                print(f"   Process will terminate gracefully")
+            except ProcessLookupError:
+                print(f"❌ No process found with PID {pid}")
+            except PermissionError:
+                print(f"❌ Permission denied to kill PID {pid}")
+            except Exception as e:
+                print(f"❌ Error killing process {pid}: {e}")
+
+        elif '--kill-all' in args:
+            # Kill all mpcctl distance insert processes
+            import subprocess
+            import signal
+            import os
+            from pathlib import Path
+            import json
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
+
+            # Get manager PID from state file
+            manager_pid = None
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r') as f:
+                        state = json.load(f)
+                    manager_pid = state.get('manager_pid')
+                except:
+                    pass
+
+            # Find all related processes (manager + all spawn_main workers)
+            pids_to_kill = []
+            try:
+                result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
+                for line in result.stdout.split('\n'):
+                    # Kill manager process, all spawn_main workers, and distance insert processes
+                    if ('mpcctl_distance_db_insert' in line or
+                        'spawn_main' in line or
+                        (manager_pid and str(manager_pid) in line)):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            try:
+                                pid = int(parts[1])
+                                # Avoid killing ourselves (the CLI process)
+                                if pid != os.getpid():
+                                    pids_to_kill.append(pid)
+                            except ValueError:
+                                continue
+            except Exception as e:
+                print(f"❌ Error finding processes: {e}")
+                return
+
+            if not pids_to_kill:
+                print("ℹ️  No mpcctl-distance-insert processes found")
+                return
+
+            print(f"⚠️  Found {len(pids_to_kill)} process(es) to kill:")
+            for pid in pids_to_kill:
+                print(f"   PID {pid}")
+
+            # Confirm
+            response = input("\nKill all these processes? (yes/no): ").strip().lower()
+            if response not in ['yes', 'y']:
+                print("❌ Cancelled")
+                return
+
+            # Kill all processes
+            killed = 0
+            for pid in pids_to_kill:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    print(f"✅ Killed PID {pid}")
+                    killed += 1
+                except ProcessLookupError:
+                    print(f"⚠️  PID {pid} already terminated")
+                except PermissionError:
+                    print(f"❌ Permission denied for PID {pid}")
+                except Exception as e:
+                    print(f"❌ Error killing PID {pid}: {e}")
+
+            print(f"\n✅ Killed {killed}/{len(pids_to_kill)} processes")
+
+            # Clean up state file
+            if state_file.exists():
+                try:
+                    os.remove(state_file)
+                    print(f"✅ Removed state file")
+                except Exception as e:
+                    print(f"⚠️  Could not remove state file: {e}")
 
         else:
             print("❌ Unknown option. Use --help for usage information.")
