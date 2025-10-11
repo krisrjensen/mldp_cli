@@ -3,10 +3,19 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20250901_240000
-File version: 0.0.0.1
+Date Revised: 20251011_000000
+File version: 2.0.0.13
 Description: Advanced interactive shell for MLDP with prompt_toolkit
+
+Version Format: MAJOR.MINOR.COMMIT.CHANGE
+- MAJOR: User-controlled major releases (currently 2)
+- MINOR: User-controlled minor releases (currently 0)
+- COMMIT: Increments on every git commit/push (currently 0)
+- CHANGE: Increments on every code modification (currently 1)
 """
+
+# Version tracking
+VERSION = "2.0.0.13"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -45,6 +54,7 @@ class MLDPCompleter(Completer):
             # Database commands
             'connect': ['localhost', '5432', 'arc_detection', 'kjensen'],
             'query': ['SELECT', 'FROM', 'WHERE', 'LIMIT', 'ORDER BY', 'GROUP BY'],
+            'sql': ['SELECT', 'DROP', 'TRUNCATE', 'UPDATE', 'INSERT', 'DELETE', 'ALTER', 'CREATE', 'FROM', 'WHERE', 'CASCADE'],
             'tables': [],
             'browser': [],
             
@@ -88,6 +98,8 @@ class MLDPCompleter(Completer):
             # Experiments
             'select-segments': ['41', '42', '43'],
             'update-decimations': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
+            'add-decimation': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
+            'remove-decimation': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
             'update-segment-sizes': ['128', '256', '512', '1024', '2048', '4096', '8192', '16384', '32768', '65536', '131072', '262144'],
             'update-amplitude-methods': ['minmax', 'zscore', 'maxabs', 'robust', 'TRAW', 'TADC14', 'TADC12', 'TADC10', 'TADC8', 'TADC6'],
             'create-feature-set': ['--name', '--features', '--n-value', 'voltage', 'current', 'impedance', 'power'],
@@ -97,6 +109,9 @@ class MLDPCompleter(Completer):
             'remove-data-type': ['1', '2', '3', '4', '5', '6', '7'],
             'add-data-type': ['1', '2', '3', '4', '5', '6', '7'],
             'list-data-types': [],
+            'list-all-data-types': [],
+            'list-amplitude-methods': [],
+            'list-all-amplitude-methods': [],
             'show-all-feature-sets': [],
             # New feature management commands
             'create-feature': ['--name', '--category', '--behavior', '--description', 'electrical', 'statistical', 'spectral', 'temporal', 'compute', 'driver', 'derived', 'aggregate', 'transform'],
@@ -117,7 +132,14 @@ class MLDPCompleter(Completer):
             'remove-files': ['--label', '--file-ids'],
             'remove-file-labels': ['trash', 'voltage_only', 'arc_short_gap', 'arc_extinguish', 'other'],
             'remove-segments': ['--label', '--segment-ids'],
-            
+
+            # Data management commands
+            'get-experiment-data-path': [],
+            'set-experiment-data-path': ['--reset'],
+            'clean-segment-files': ['--dry-run'],
+            'clean-feature-files': ['--dry-run', '--force', '--files-and-tables', '--files-only', '--tables-only'],
+            'clean-distance-work-files': ['--dry-run', '--force'],
+
             # Settings
             'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
             'show': [],
@@ -194,6 +216,7 @@ class MLDPShell:
         self.commands = {
             'connect': self.cmd_connect,
             'query': self.cmd_query,
+            'sql': self.cmd_sql,
             'tables': self.cmd_tables,
             'browser': self.cmd_browser,
             # Experiment commands
@@ -219,6 +242,8 @@ class MLDPShell:
             'time': self.cmd_time,
             'select-segments': self.cmd_select_segments,
             'update-decimations': self.cmd_update_decimations,
+            'add-decimation': self.cmd_add_decimation,
+            'remove-decimation': self.cmd_remove_decimation,
             'update-segment-sizes': self.cmd_update_segment_sizes,
             'update-amplitude-methods': self.cmd_update_amplitude_methods,
             'create-feature-set': self.cmd_create_feature_set,
@@ -229,6 +254,9 @@ class MLDPShell:
             'remove-data-type': self.cmd_remove_data_type,
             'add-data-type': self.cmd_add_data_type,
             'list-data-types': self.cmd_list_data_types,
+            'list-all-data-types': self.cmd_list_all_data_types,
+            'list-amplitude-methods': self.cmd_list_amplitude_methods,
+            'list-all-amplitude-methods': self.cmd_list_all_amplitude_methods,
             'show-all-feature-sets': self.cmd_show_all_feature_sets,
             # New feature management commands
             'create-feature': self.cmd_create_feature,
@@ -270,6 +298,12 @@ class MLDPShell:
             'validate-segments': self.cmd_validate_segments,
             'segment-plot': self.cmd_segment_plot,
             'feature-plot': self.cmd_feature_plot,
+            # Data path and cleanup commands
+            'get-experiment-data-path': self.cmd_get_experiment_data_path,
+            'set-experiment-data-path': self.cmd_set_experiment_data_path,
+            'clean-segment-files': self.cmd_clean_segment_files,
+            'clean-feature-files': self.cmd_clean_feature_files,
+            'clean-distance-work-files': self.cmd_clean_distance_work_files,
             # Distance calculation commands
             'init-distance-tables': self.cmd_init_distance_tables,
             'show-distance-metrics': self.cmd_show_distance_metrics,
@@ -299,15 +333,20 @@ class MLDPShell:
     def print_banner(self):
         """Print welcome banner"""
         clear()
-        print("""
+        # Calculate padding for centered version
+        version_text = f"MLDP Interactive Shell v{VERSION}"
+        version_padding = (78 - len(version_text)) // 2
+
+        print(f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                         MLDP Interactive Shell v2.0                          ║
-║                  Machine Learning Data Processing Platform                    ║
+║{' ' * version_padding}{version_text}{' ' * (78 - len(version_text) - version_padding)}║
+║      Machine Learning Data Processing Platform - Arc Data Version            ║
+║                         Author: Kris Jensen                                  ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  • Tab completion and auto-suggestions available                             ║
 ║  • Type 'help' for commands or 'help <command>' for details                  ║
 ║  • Current settings shown in prompt: mldp[exp18:l2]>                         ║
-║  • Type 'exit' or Ctrl-D to leave                                           ║
+║  • Type 'exit' or Ctrl-D to leave                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """)
         
@@ -1481,6 +1520,12 @@ class MLDPShell:
   generate-segment-fileset            Generate physical segment files from raw data
   generate-feature-fileset            Extract features and save to disk
 
+📂 DATA MANAGEMENT:
+  get-experiment-data-path            Show paths and file counts for experiment data
+  set-experiment-data-path <path>     Set custom data storage paths (or --reset for default)
+  clean-segment-files                 Delete segment files (supports --dry-run, --force)
+  clean-feature-files                 Delete feature files and truncate DB table
+
 🔍 SEGMENT COMMANDS:
   segment-generate                    Generate segments from raw data
   show-segment-status                 Show segment generation status
@@ -1501,6 +1546,7 @@ class MLDPShell:
   servers <command>                   Server management (start/stop/status/etc)
 
 🛠️  UTILITIES:
+  sql <query>                         Execute SQL query (SELECT/DROP/UPDATE/INSERT)
   verify                              Verify MLDP tools
   clear                               Clear screen
   export <filename>                   Export query results (.csv or .json)
@@ -1647,35 +1693,105 @@ class MLDPShell:
             print("Usage: update-decimations <decimation1> <decimation2> ...")
             print("Example: update-decimations 0 7 15")
             return
-        
+
         try:
             decimations = [int(arg) for arg in args]
         except ValueError:
             print(f"❌ Invalid decimation values. Must be integers.")
             return
-        
+
         try:
             from experiment_configurator import ExperimentConfigurator
-            
+
             db_config = {
                 'host': 'localhost',
                 'database': 'arc_detection',
                 'user': 'kjensen'
             }
-            
+
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
-            
+
             print(f"🔄 Updating decimations for experiment {self.current_experiment}...")
             if configurator.update_decimations(decimations):
                 print(f"✅ Decimations updated: {decimations}")
             else:
                 print(f"❌ Failed to update decimations")
-                
+
         except ImportError as e:
             print(f"❌ Could not import configurator: {e}")
         except Exception as e:
             print(f"❌ Error updating decimations: {e}")
-    
+
+    def cmd_add_decimation(self, args):
+        """Add a single decimation factor to current experiment"""
+        if not args or len(args) != 1:
+            print("Usage: add-decimation <decimation_factor>")
+            print("Example: add-decimation 31")
+            return
+
+        try:
+            decimation = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid decimation value. Must be an integer.")
+            return
+
+        try:
+            from experiment_configurator import ExperimentConfigurator
+
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+
+            print(f"➕ Adding decimation {decimation} to experiment {self.current_experiment}...")
+            if configurator.add_decimation(decimation):
+                print(f"✅ Decimation {decimation} added successfully")
+            else:
+                print(f"⚠️  Decimation {decimation} already exists or failed to add")
+
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error adding decimation: {e}")
+
+    def cmd_remove_decimation(self, args):
+        """Remove a single decimation factor from current experiment"""
+        if not args or len(args) != 1:
+            print("Usage: remove-decimation <decimation_factor>")
+            print("Example: remove-decimation 15")
+            return
+
+        try:
+            decimation = int(args[0])
+        except ValueError:
+            print(f"❌ Invalid decimation value. Must be an integer.")
+            return
+
+        try:
+            from experiment_configurator import ExperimentConfigurator
+
+            db_config = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+
+            print(f"➖ Removing decimation {decimation} from experiment {self.current_experiment}...")
+            if configurator.remove_decimation(decimation):
+                print(f"✅ Decimation {decimation} removed successfully")
+            else:
+                print(f"⚠️  Decimation {decimation} not found in experiment or failed to remove")
+
+        except ImportError as e:
+            print(f"❌ Could not import configurator: {e}")
+        except Exception as e:
+            print(f"❌ Error removing decimation: {e}")
+
     def cmd_update_segment_sizes(self, args):
         """Update segment sizes for current experiment"""
         if not args:
@@ -2082,6 +2198,133 @@ class MLDPShell:
         except Exception as e:
             print(f"❌ Error listing data types: {e}")
 
+    def cmd_list_all_data_types(self, args):
+        """List ALL available data types from ml_data_types_lut"""
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host='localhost',
+                port=5432,
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT data_type_id, data_type_name, description
+                FROM ml_data_types_lut
+                ORDER BY data_type_id
+            """)
+
+            data_types = cursor.fetchall()
+
+            if not data_types:
+                print(f"\n❌ No data types found in ml_data_types_lut")
+                return
+
+            print(f"\n📊 All Available Data Types:")
+            print(f"\n{'ID':<5} {'Name':<15} {'Description':<50}")
+            print("-" * 72)
+            for dt_id, dt_name, dt_desc in data_types:
+                desc = (dt_desc[:47] + '...') if dt_desc and len(dt_desc) > 50 else (dt_desc or '')
+                print(f"{dt_id:<5} {dt_name:<15} {desc:<50}")
+
+            print(f"\nTotal: {len(data_types)} data types")
+            print("\nUse 'add-data-type <id>' to add a type to current experiment")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error listing all data types: {e}")
+
+    def cmd_list_amplitude_methods(self, args):
+        """List amplitude methods for current experiment"""
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host='localhost',
+                port=5432,
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT eam.method_id, am.method_name, am.function_name, am.description
+                FROM ml_experiments_amplitude_methods eam
+                JOIN ml_amplitude_normalization_lut am ON eam.method_id = am.method_id
+                WHERE eam.experiment_id = %s
+                ORDER BY eam.method_id
+            """, (self.current_experiment,))
+
+            methods = cursor.fetchall()
+
+            if not methods:
+                print(f"\n❌ No amplitude methods configured for experiment {self.current_experiment}")
+                return
+
+            print(f"\n📊 Amplitude Methods for Experiment {self.current_experiment}:")
+            print(f"\n{'ID':<5} {'Name':<15} {'Function':<40} {'Description':<30}")
+            print("-" * 95)
+            for method_id, method_name, func_name, desc in methods:
+                func_str = (func_name[:37] + '...') if func_name and len(func_name) > 40 else (func_name or '')
+                desc_str = (desc[:27] + '...') if desc and len(desc) > 30 else (desc or '')
+                print(f"{method_id:<5} {method_name:<15} {func_str:<40} {desc_str:<30}")
+
+            print(f"\nTotal: {len(methods)} amplitude methods")
+            print("\nUse 'update-amplitude-methods <name1> <name2> ...' to update")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error listing amplitude methods: {e}")
+
+    def cmd_list_all_amplitude_methods(self, args):
+        """List ALL available amplitude methods from ml_amplitude_normalization_lut"""
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host='localhost',
+                port=5432,
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT method_id, method_name, function_name, description
+                FROM ml_amplitude_normalization_lut
+                ORDER BY method_id
+            """)
+
+            methods = cursor.fetchall()
+
+            if not methods:
+                print(f"\n❌ No amplitude methods found in ml_amplitude_normalization_lut")
+                return
+
+            print(f"\n📊 All Available Amplitude Methods:")
+            print(f"\n{'ID':<5} {'Name':<15} {'Function':<40} {'Description':<30}")
+            print("-" * 95)
+            for method_id, method_name, func_name, desc in methods:
+                func_str = (func_name[:37] + '...') if func_name and len(func_name) > 40 else (func_name or '')
+                desc_str = (desc[:27] + '...') if desc and len(desc) > 30 else (desc or '')
+                print(f"{method_id:<5} {method_name:<15} {func_str:<40} {desc_str:<30}")
+
+            print(f"\nTotal: {len(methods)} amplitude methods")
+            print("\nUse 'update-amplitude-methods <name1> <name2> ...' to configure for current experiment")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            print(f"❌ Error listing all amplitude methods: {e}")
+
     def cmd_list_feature_sets(self, args):
         """List feature sets for current experiment"""
         try:
@@ -2109,8 +2352,9 @@ class MLDPShell:
                 print(f"• ID {fs.get('id', '?')}: {fs['name']}")
                 print(f"  Features: {fs['features']}")
                 print(f"  Data channel: {fs.get('data_channel', 'load_voltage')}")
-                if fs['n_values']:
-                    print(f"  N values: {fs['n_values']}")
+                n_value = fs.get('n_value')
+                if n_value:
+                    print(f"  N value: {n_value}")
             
             print("-" * 60)
             print(f"Total: {len(feature_sets)} feature sets")
@@ -3921,6 +4165,48 @@ class MLDPShell:
             print(f"📊 Found {len(distance_functions)} active distance functions")
             print()
 
+            # If --drop-existing is specified, first check which tables exist and get confirmation
+            if drop_existing:
+                tables_to_drop = []
+                for func_id, func_name, table_prefix, display_name in distance_functions:
+                    table_name = f"experiment_{self.current_experiment:03d}_{table_prefix}".lower()
+
+                    # Check if table exists and get row count
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = %s
+                        )
+                    """, (table_name,))
+
+                    if cursor.fetchone()[0]:
+                        # Get row count
+                        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        row_count = cursor.fetchone()[0]
+                        tables_to_drop.append((table_name, display_name, row_count))
+
+                if tables_to_drop:
+                    print(f"\n⚠️  WARNING: The following tables will be PERMANENTLY DELETED:")
+                    print()
+                    total_rows = 0
+                    for table_name, display_name, row_count in tables_to_drop:
+                        print(f"   📊 {table_name}")
+                        print(f"      ({display_name}): {row_count:,} records")
+                        total_rows += row_count
+                    print()
+                    print(f"   🔢 Total records to delete: {total_rows:,}")
+                    print()
+                    print(f"⚠️  This action CANNOT be undone!")
+                    print(f"⚠️  ALL distance data for experiment {self.current_experiment} will be lost!")
+                    print()
+                    response = input("Type 'DROP' to confirm deletion: ").strip()
+
+                    if response != 'DROP':
+                        print("❌ Cancelled - no tables were dropped")
+                        return
+                    print()
+
             created_count = 0
             skipped_count = 0
             error_count = 0
@@ -4371,6 +4657,808 @@ class MLDPShell:
             print(f"❌ Error cleaning distance tables: {e}")
             import traceback
             traceback.print_exc()
+
+    def cmd_get_experiment_data_path(self, args):
+        """Get the data path for an experiment
+
+        Usage: get-experiment-data-path [experiment_id]
+
+        Shows the configured data paths for segment files and feature files.
+        If no experiment_id is provided, uses current experiment.
+
+        Examples:
+            get-experiment-data-path         # Current experiment
+            get-experiment-data-path 41      # Experiment 41
+        """
+        # Determine experiment_id
+        if args and args[0].isdigit():
+            experiment_id = int(args[0])
+        elif self.current_experiment:
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
+
+        from pathlib import Path
+
+        # Check database for custom paths
+        custom_segment_path = None
+        custom_feature_path = None
+
+        if self.db_conn:
+            try:
+                cursor = self.db_conn.cursor()
+                cursor.execute("""
+                    SELECT segment_data_base_path, feature_data_base_path
+                    FROM ml_experiments
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                result = cursor.fetchone()
+                if result:
+                    custom_segment_path = result[0]
+                    custom_feature_path = result[1]
+                cursor.close()
+            except Exception as e:
+                print(f"⚠️  Warning: Could not read custom paths from database: {e}")
+
+        # Use custom paths if configured, otherwise use defaults
+        if custom_segment_path and custom_feature_path:
+            segment_path = Path(custom_segment_path)
+            feature_path = Path(custom_feature_path)
+            base_path = segment_path.parent
+            using_custom = True
+        else:
+            base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}')
+            segment_path = base_path / 'segment_files'
+            feature_path = base_path / 'feature_files'
+            using_custom = False
+
+        print(f"\n📁 Data paths for experiment {experiment_id}:")
+        if using_custom:
+            print(f"   ⚙️  Using CUSTOM paths from database")
+        else:
+            print(f"   ⚙️  Using DEFAULT path pattern")
+        print(f"   Base:     {base_path}")
+        print(f"   Segments: {segment_path}")
+        print(f"   Features: {feature_path}")
+        print()
+        print(f"Status:")
+        print(f"   Base exists:     {'✅' if base_path.exists() else '❌'}")
+        print(f"   Segments exist:  {'✅' if segment_path.exists() else '❌'}")
+        print(f"   Features exist:  {'✅' if feature_path.exists() else '❌'}")
+
+        # Count files if directories exist
+        if segment_path.exists():
+            segment_count = sum(1 for _ in segment_path.glob('**/*.npy'))
+            print(f"   Segment files:   {segment_count:,}")
+
+        if feature_path.exists():
+            feature_count = sum(1 for _ in feature_path.glob('**/*.npy'))
+            print(f"   Feature files:   {feature_count:,}")
+
+    def cmd_set_experiment_data_path(self, args):
+        """Set/configure the data path for an experiment
+
+        Usage: set-experiment-data-path <path> [experiment_id]
+                set-experiment-data-path --reset [experiment_id]
+
+        This command sets a custom base data path for an experiment.
+        By default, experiments use: /Volumes/ArcData/V3_database/experiment{NNN}/
+
+        The path is stored in the database and used by generators.
+        Use --reset to clear custom path and use default.
+
+        Examples:
+            set-experiment-data-path /custom/path 41
+            set-experiment-data-path --reset 41
+        """
+        if not args:
+            print("❌ Usage: set-experiment-data-path <path> [experiment_id]")
+            print("   Or:    set-experiment-data-path --reset [experiment_id]")
+            return
+
+        # Check for --reset flag
+        reset_mode = args[0] == '--reset'
+
+        if reset_mode:
+            custom_path = None
+            args = args[1:]  # Remove --reset from args
+        else:
+            custom_path = args[0]
+            args = args[1:]
+
+        # Get experiment ID
+        if args and args[0].isdigit():
+            experiment_id = int(args[0])
+        elif self.current_experiment:
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
+
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            if reset_mode:
+                # Reset to default (NULL = use default path pattern)
+                cursor.execute("""
+                    UPDATE ml_experiments
+                    SET segment_data_base_path = NULL,
+                        feature_data_base_path = NULL
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                self.db_conn.commit()
+
+                print(f"\n✅ Reset experiment {experiment_id} to use default data paths")
+                print(f"   Default pattern: /Volumes/ArcData/V3_database/experiment{experiment_id:03d}/")
+            else:
+                # Validate path format
+                from pathlib import Path
+                path_obj = Path(custom_path)
+
+                if not path_obj.is_absolute():
+                    print(f"❌ Path must be absolute: {custom_path}")
+                    return
+
+                # Set custom paths
+                segment_path = f"{custom_path}/experiment{experiment_id:03d}/segment_files"
+                feature_path = f"{custom_path}/experiment{experiment_id:03d}/feature_files"
+
+                cursor.execute("""
+                    UPDATE ml_experiments
+                    SET segment_data_base_path = %s,
+                        feature_data_base_path = %s
+                    WHERE experiment_id = %s
+                """, (segment_path, feature_path, experiment_id))
+                self.db_conn.commit()
+
+                print(f"\n✅ Updated experiment {experiment_id} data paths:")
+                print(f"   Segment path: {segment_path}")
+                print(f"   Feature path: {feature_path}")
+                print()
+                print(f"📝 Note: Paths are stored in database and will be used by generators.")
+                print(f"   Make sure the parent directory exists and is writable.")
+
+            cursor.close()
+
+        except Exception as e:
+            print(f"❌ Error updating data path: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
+
+    def cmd_clean_segment_files(self, args):
+        """Delete segment files for an experiment
+
+        Usage: clean-segment-files [options] [experiment_id]
+
+        Options:
+            --dry-run    Show what would be deleted without actually deleting
+
+        This command deletes all segment files AND directories for an experiment.
+        USE WITH CAUTION - This cannot be undone!
+
+        You will be shown what will be deleted and must type 'DELETE' to confirm.
+
+        Examples:
+            clean-segment-files                    # Current experiment, requires 'DELETE'
+            clean-segment-files --dry-run          # Show what would be deleted
+            clean-segment-files 41                 # Delete experiment 41 segments
+        """
+        # Parse arguments
+        dry_run = '--dry-run' in args
+
+        # Remove flags from args to find experiment_id
+        args_clean = [a for a in args if not a.startswith('--')]
+
+        # Determine experiment_id
+        if args_clean and args_clean[0].isdigit():
+            experiment_id = int(args_clean[0])
+        elif self.current_experiment:
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
+
+        from pathlib import Path
+
+        # Read custom paths from database if configured
+        custom_segment_path = None
+        if self.db_conn:
+            try:
+                cursor = self.db_conn.cursor()
+                cursor.execute("""
+                    SELECT segment_data_base_path
+                    FROM ml_experiments
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                result = cursor.fetchone()
+                if result:
+                    custom_segment_path = result[0]
+                cursor.close()
+            except Exception as e:
+                self.db_conn.rollback()
+                print(f"⚠️  Warning: Could not read custom path from database: {e}")
+
+        # Use custom path if configured, otherwise use default
+        if custom_segment_path:
+            segment_path = Path(custom_segment_path)
+        else:
+            segment_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/segment_files')
+
+        if not segment_path.exists():
+            print(f"ℹ️  No segment files directory found for experiment {experiment_id}")
+            print(f"   Path: {segment_path}")
+            return
+
+        # Count ALL files (not just .npy) to ensure complete cleanup
+        all_files = [f for f in segment_path.rglob('*') if f.is_file()]
+        file_count = len(all_files)
+
+        # Also count just .npy files for reporting
+        npy_files = [f for f in all_files if f.suffix == '.npy']
+        npy_count = len(npy_files)
+        other_files = file_count - npy_count
+
+        # Count directories (excluding the base path itself)
+        all_dirs = [d for d in segment_path.rglob('*') if d.is_dir()]
+        dir_count = len(all_dirs)
+
+        # Check if there's anything to clean
+        if file_count == 0 and dir_count == 0:
+            print(f"✅ Segment folder already empty for experiment {experiment_id}")
+            print(f"   Path: {segment_path}")
+            return
+
+        # Calculate total size (only if files exist)
+        if file_count > 0:
+            total_size = sum(f.stat().st_size for f in all_files)
+            size_mb = total_size / (1024 * 1024)
+            size_gb = size_mb / 1024
+        else:
+            total_size = 0
+            size_mb = 0
+            size_gb = 0
+
+        print(f"\n📁 Segment files for experiment {experiment_id}:")
+        print(f"   Path: {segment_path}")
+        print(f"   Files: {file_count:,}")
+        if npy_count > 0:
+            print(f"   - Segment files (.npy): {npy_count:,}")
+        if other_files > 0:
+            print(f"   - Other files (.DS_Store, etc.): {other_files:,}")
+        if file_count > 0:
+            print(f"   Size: {size_gb:.2f} GB ({size_mb:.2f} MB)")
+        print(f"   Directories: {dir_count:,}")
+
+        if dry_run:
+            print("\n🔍 DRY RUN - No files or directories will be deleted")
+            if file_count > 0:
+                print("\nSample files that would be deleted:")
+                for f in all_files[:10]:
+                    print(f"   - {f.name}")
+                if len(all_files) > 10:
+                    print(f"   ... and {len(all_files) - 10:,} more files")
+            if dir_count > 0:
+                print(f"\nWould remove {dir_count:,} directories")
+            return
+
+        # ALWAYS require confirmation for destructive operations
+        print(f"\n⚠️  WARNING: This will permanently delete:")
+        if file_count > 0:
+            print(f"   - {file_count:,} files ({size_gb:.2f} GB)")
+        if dir_count > 0:
+            print(f"   - {dir_count:,} directories")
+        print(f"⚠️  This action CANNOT be undone!")
+        response = input("\nType 'DELETE' to confirm: ").strip()
+        if response != 'DELETE':
+            print("❌ Cancelled")
+            return
+
+        # Delete ALL files (including .DS_Store, etc.)
+        if file_count > 0:
+            print(f"\n🗑️  Deleting all files...")
+            deleted_count = 0
+            failed_count = 0
+
+            for file_path in all_files:
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                    if deleted_count % 1000 == 0:
+                        print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
+                except Exception as e:
+                    print(f"❌ Error deleting {file_path.name}: {e}")
+                    failed_count += 1
+
+            print(f"✅ Deleted {deleted_count:,} files")
+            if npy_count > 0:
+                print(f"   - Segment files (.npy): {npy_count:,}")
+            if other_files > 0:
+                print(f"   - Other files: {other_files:,}")
+            if failed_count > 0:
+                print(f"⚠️  Failed to delete {failed_count} files")
+
+        # Also delete progress checkpoint
+        progress_file = segment_path / 'generation_progress.json'
+        if progress_file.exists():
+            try:
+                progress_file.unlink()
+                print(f"✅ Deleted progress checkpoint")
+            except Exception as e:
+                print(f"⚠️  Could not delete progress checkpoint: {e}")
+
+        # Delete all empty directories to completely clean the folder structure
+        print(f"\n🗑️  Removing empty directories...")
+        import shutil
+        dirs_removed = 0
+
+        # Get all subdirectories, sorted by depth (deepest first)
+        all_dirs = sorted([d for d in segment_path.rglob('*') if d.is_dir()],
+                         key=lambda p: len(p.parts), reverse=True)
+
+        for directory in all_dirs:
+            try:
+                # Only remove if empty
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+                    dirs_removed += 1
+            except Exception as e:
+                # Ignore errors (directory might not be empty or might be in use)
+                pass
+
+        if dirs_removed > 0:
+            print(f"✅ Removed {dirs_removed} empty directories")
+
+        # Verify folder is completely empty
+        remaining_items = list(segment_path.iterdir())
+        if remaining_items:
+            print(f"\n⚠️  Warning: {len(remaining_items)} items remaining in {segment_path}:")
+            for item in remaining_items[:5]:
+                print(f"   - {item.name}")
+            if len(remaining_items) > 5:
+                print(f"   ... and {len(remaining_items) - 5} more items")
+        else:
+            print(f"\n✅ Segment folder completely empty: {segment_path}")
+
+    def cmd_clean_feature_files(self, args):
+        """Delete feature files for an experiment
+
+        Usage: clean-feature-files [options] [experiment_id]
+
+        Options:
+            --dry-run              Show what would be deleted without actually deleting
+            --force                Skip confirmation prompt
+            --files-and-tables     Delete files AND truncate table (default)
+            --files-only           Delete files only, leave table
+            --tables-only          Truncate table only, leave files
+
+        This command deletes all feature files for an experiment.
+        USE WITH CAUTION - This cannot be undone!
+
+        Examples:
+            clean-feature-files                    # Current experiment, files and tables
+            clean-feature-files --dry-run          # Show what would be deleted
+            clean-feature-files --force 41         # Delete experiment 41 features
+            clean-feature-files --files-only       # Delete files, keep table
+            clean-feature-files --tables-only      # Truncate table, keep files
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+        files_only = '--files-only' in args
+        tables_only = '--tables-only' in args
+        files_and_tables = '--files-and-tables' in args
+
+        # Default behavior: clean both files and tables
+        if not files_only and not tables_only and not files_and_tables:
+            files_and_tables = True
+
+        # Validate mutually exclusive options
+        mode_count = sum([files_only, tables_only, files_and_tables])
+        if mode_count > 1:
+            print("❌ Error: --files-only, --tables-only, and --files-and-tables are mutually exclusive")
+            return
+
+        # Determine what to clean
+        clean_files = files_only or files_and_tables
+        clean_tables = tables_only or files_and_tables
+
+        # Remove flags from args to find experiment_id
+        args_clean = [a for a in args if not a.startswith('--')]
+
+        # Determine experiment_id
+        if args_clean and args_clean[0].isdigit():
+            experiment_id = int(args_clean[0])
+        elif self.current_experiment:
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
+
+        from pathlib import Path
+
+        # Read custom paths from database if configured
+        custom_feature_path = None
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute("""
+                SELECT feature_data_base_path
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            result = cursor.fetchone()
+            if result:
+                custom_feature_path = result[0]
+            cursor.close()
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"⚠️  Warning: Could not read custom path from database: {e}")
+
+        # Use custom path if configured, otherwise use default
+        if custom_feature_path:
+            feature_path = Path(custom_feature_path)
+        else:
+            feature_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/feature_files')
+
+        # Count files
+        file_count = 0
+        total_size = 0
+        if feature_path.exists():
+            feature_files = list(feature_path.glob('**/*.npy'))
+            file_count = len(feature_files)
+            if file_count > 0:
+                total_size = sum(f.stat().st_size for f in feature_files)
+
+        # Check database records
+        cursor = self.db_conn.cursor()
+        table_name = f"experiment_{experiment_id:03d}_feature_fileset"
+
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            db_count = cursor.fetchone()[0]
+        except Exception:
+            db_count = 0
+            print(f"ℹ️  No feature table found: {table_name}")
+
+        size_mb = total_size / (1024 * 1024)
+        size_gb = size_mb / 1024
+
+        print(f"\n📁 Feature files for experiment {experiment_id}:")
+        print(f"   Path: {feature_path}")
+        print(f"   Files on disk: {file_count:,}")
+        print(f"   Database records: {db_count:,}")
+        if file_count > 0:
+            print(f"   Size: {size_gb:.2f} GB ({size_mb:.2f} MB)")
+
+        # Check if anything to clean based on mode
+        if clean_files and file_count == 0 and clean_tables and db_count == 0:
+            print(f"\nℹ️  No feature files or database records found")
+            return
+        if clean_files and not clean_tables and file_count == 0:
+            print(f"\nℹ️  No feature files found")
+            return
+        if clean_tables and not clean_files and db_count == 0:
+            print(f"\nℹ️  No database records found")
+            return
+
+        if dry_run:
+            print("\n🔍 DRY RUN - No files or data will be deleted")
+            if clean_files and file_count > 0:
+                print("\nSample files that would be deleted:")
+                for f in feature_files[:10]:
+                    print(f"   - {f.name}")
+                if len(feature_files) > 10:
+                    print(f"   ... and {len(feature_files) - 10:,} more files")
+            if clean_tables and db_count > 0:
+                print(f"\nWould truncate table: {table_name} ({db_count:,} records)")
+            return
+
+        # Confirmation prompt
+        if not force:
+            print(f"\n⚠️  WARNING: This will permanently delete:")
+            if clean_files and file_count > 0:
+                print(f"   - {file_count:,} feature files ({size_gb:.2f} GB)")
+            if clean_tables and db_count > 0:
+                print(f"   - {db_count:,} database records from {table_name}")
+            print(f"⚠️  This action CANNOT be undone!")
+            response = input("\nType 'DELETE' to confirm: ").strip()
+            if response != 'DELETE':
+                print("❌ Cancelled")
+                return
+
+        # Delete files
+        if clean_files and file_count > 0:
+            print(f"\n🗑️  Deleting feature files...")
+            deleted_count = 0
+            failed_count = 0
+
+            for feature_file in feature_files:
+                try:
+                    feature_file.unlink()
+                    deleted_count += 1
+                    if deleted_count % 1000 == 0:
+                        print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
+                except Exception as e:
+                    print(f"❌ Error deleting {feature_file.name}: {e}")
+                    failed_count += 1
+
+            print(f"✅ Deleted {deleted_count:,} feature files")
+            if failed_count > 0:
+                print(f"⚠️  Failed to delete {failed_count} files")
+
+        # Truncate database table
+        if clean_tables and db_count > 0:
+            try:
+                cursor.execute(f"TRUNCATE TABLE {table_name}")
+                self.db_conn.commit()
+                print(f"✅ Truncated table {table_name} ({db_count:,} records)")
+            except Exception as e:
+                print(f"❌ Error truncating table: {e}")
+                self.db_conn.rollback()
+
+    def cmd_sql(self, args):
+        """Execute SQL query with appropriate confirmation
+
+        Usage: sql <query>
+
+        Confirmation rules:
+        - SELECT: No confirmation needed
+        - DROP/TRUNCATE: Must type 'DROP' or 'TRUNCATE' to confirm
+        - INSERT/UPDATE: Requires (N/y) confirmation
+        - Other queries: Requires (N/y) confirmation
+
+        Examples:
+            sql SELECT * FROM ml_experiments LIMIT 5
+            sql DROP TABLE experiment_041_feature_fileset CASCADE
+            sql UPDATE ml_experiments SET is_active = true WHERE experiment_id = 41
+            sql INSERT INTO ml_experiments (experiment_name) VALUES ('test')
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not args:
+            print("❌ No SQL query provided.")
+            print("Usage: sql <query>")
+            return
+
+        # Join all args into a single query
+        query = ' '.join(args).strip()
+
+        # Remove trailing semicolon if present
+        if query.endswith(';'):
+            query = query[:-1]
+
+        # Determine query type by looking at first word
+        query_upper = query.upper().strip()
+        first_word = query_upper.split()[0] if query_upper else ''
+
+        # Confirmation logic based on query type
+        if first_word == 'SELECT':
+            # No confirmation needed for SELECT
+            pass
+        elif first_word in ('DROP', 'TRUNCATE'):
+            # Require typing the word for destructive operations
+            print(f"\n⚠️  WARNING: You are about to execute a {first_word} query:")
+            print(f"   {query}")
+            print(f"\n⚠️  This action CANNOT be undone!")
+            response = input(f"\nType '{first_word}' to confirm: ").strip()
+            if response != first_word:
+                print("❌ Cancelled")
+                return
+        elif first_word in ('INSERT', 'UPDATE', 'DELETE'):
+            # Require (N/y) confirmation for data modification
+            print(f"\n⚠️  You are about to execute a {first_word} query:")
+            print(f"   {query}")
+            response = input("\nContinue? (N/y): ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("❌ Cancelled")
+                return
+        else:
+            # Other queries require confirmation
+            print(f"\n⚠️  You are about to execute:")
+            print(f"   {query}")
+            response = input("\nContinue? (N/y): ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("❌ Cancelled")
+                return
+
+        # Execute query
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute(query)
+
+            # If it's a SELECT query, fetch and display results
+            if first_word == 'SELECT':
+                results = cursor.fetchall()
+                if results:
+                    # Get column names
+                    col_names = [desc[0] for desc in cursor.description]
+
+                    # Print header
+                    print(f"\n📊 Results ({len(results)} rows):")
+                    print("─" * 80)
+                    print(" | ".join(col_names))
+                    print("─" * 80)
+
+                    # Print rows
+                    for row in results[:100]:  # Limit to first 100 rows
+                        print(" | ".join(str(val) for val in row))
+
+                    if len(results) > 100:
+                        print(f"\n... and {len(results) - 100} more rows")
+                    print("─" * 80)
+                else:
+                    print("\n✅ Query returned 0 rows")
+            else:
+                # For non-SELECT queries, commit and show affected rows
+                self.db_conn.commit()
+                if cursor.rowcount >= 0:
+                    print(f"\n✅ Query executed successfully. Rows affected: {cursor.rowcount}")
+                else:
+                    print(f"\n✅ Query executed successfully")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n❌ Error executing query: {e}")
+        finally:
+            cursor.close()
+
+    def cmd_clean_distance_work_files(self, args):
+        """Delete mpcctl distance calculation work files
+
+        Usage: clean-distance-work-files [options] [experiment_id]
+
+        Options:
+            --dry-run    Show what would be deleted without actually deleting
+            --force      Skip confirmation prompt
+
+        This command deletes mpcctl state and work files:
+            - .mpcctl_state.json
+            - .mpcctl/ directory
+            - .processed/ directory
+
+        These files are created during distance calculation and can be
+        safely deleted after distances are computed and inserted into the database.
+
+        Examples:
+            clean-distance-work-files                    # Current experiment, interactive
+            clean-distance-work-files --dry-run          # Show what would be deleted
+            clean-distance-work-files --force 41         # Delete experiment 41 work files
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+
+        # Remove flags from args to find experiment_id
+        args_clean = [a for a in args if not a.startswith('--')]
+
+        # Determine experiment_id
+        if args_clean and args_clean[0].isdigit():
+            experiment_id = int(args_clean[0])
+        elif self.current_experiment:
+            experiment_id = self.current_experiment
+        else:
+            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            return
+
+        from pathlib import Path
+        import shutil
+
+        # Read custom paths from database if configured
+        # MPCCTL files are in the experiment root (parent of feature_files)
+        custom_feature_path = None
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute("""
+                SELECT feature_data_base_path
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            result = cursor.fetchone()
+            if result:
+                custom_feature_path = result[0]
+            cursor.close()
+        except Exception as e:
+            print(f"⚠️  Warning: Could not read custom path from database: {e}")
+
+        # Use custom path if configured, otherwise use default
+        # MPCCTL work files are in the parent directory of feature_files
+        if custom_feature_path:
+            experiment_root = Path(custom_feature_path).parent
+        else:
+            experiment_root = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}')
+
+        if not experiment_root.exists():
+            print(f"❌ Experiment root path does not exist: {experiment_root}")
+            return
+
+        # Check for mpcctl work files (in experiment root)
+        state_file = experiment_root / '.mpcctl_state.json'
+        mpcctl_dir = experiment_root / '.mpcctl'
+        processed_dir = experiment_root / '.processed'
+
+        items_to_delete = []
+        total_size = 0
+
+        if state_file.exists():
+            size = state_file.stat().st_size
+            items_to_delete.append(('.mpcctl_state.json', state_file, size, 'file'))
+            total_size += size
+
+        if mpcctl_dir.exists():
+            dir_size = sum(f.stat().st_size for f in mpcctl_dir.glob('**/*') if f.is_file())
+            file_count = len(list(mpcctl_dir.glob('**/*')))
+            items_to_delete.append(('.mpcctl/', mpcctl_dir, dir_size, f'directory ({file_count} files)'))
+            total_size += dir_size
+
+        if processed_dir.exists():
+            dir_size = sum(f.stat().st_size for f in processed_dir.glob('**/*') if f.is_file())
+            file_count = len(list(processed_dir.glob('**/*')))
+            items_to_delete.append(('.processed/', processed_dir, dir_size, f'directory ({file_count} files)'))
+            total_size += dir_size
+
+        # Show what will be deleted
+        if not items_to_delete:
+            print(f"\n✅ No mpcctl work files found in {experiment_root}")
+            return
+
+        print(f"\n📂 Location: {experiment_root}")
+        print(f"\n🗑️  The following mpcctl work files will be deleted:")
+        print(f"\n{'Name':<30} {'Type':<25} {'Size':<15}")
+        print("-" * 72)
+
+        for name, path, size, item_type in items_to_delete:
+            size_mb = size / (1024 * 1024)
+            print(f"{name:<30} {item_type:<25} {size_mb:>10.2f} MB")
+
+        print("-" * 72)
+        print(f"{'Total:':<30} {len(items_to_delete)} items {total_size / (1024 * 1024):>10.2f} MB")
+
+        if dry_run:
+            print("\n✅ Dry run complete - no files were deleted")
+            return
+
+        # Confirmation
+        if not force:
+            print(f"\n⚠️  This will permanently delete {len(items_to_delete)} items from experiment {experiment_id}")
+            response = input("Type 'DELETE' to confirm: ").strip()
+            if response != 'DELETE':
+                print("❌ Cancelled")
+                return
+
+        # Delete items
+        print(f"\n🗑️  Deleting mpcctl work files...")
+        deleted_count = 0
+        failed_count = 0
+
+        for name, path, size, item_type in items_to_delete:
+            try:
+                if path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    shutil.rmtree(path)
+                deleted_count += 1
+                print(f"   ✅ Deleted {name}")
+            except Exception as e:
+                print(f"   ❌ Error deleting {name}: {e}")
+                failed_count += 1
+
+        print(f"\n✅ Deleted {deleted_count} items")
+        if failed_count > 0:
+            print(f"⚠️  Failed to delete {failed_count} items")
 
     def cmd_show_distance_functions(self, args):
         """Show all distance functions in ml_distance_functions_lut

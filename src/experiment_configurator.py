@@ -45,10 +45,10 @@ class ExperimentConfigurator:
     def update_decimations(self, decimation_factors: List[int]) -> bool:
         """
         Update decimation factors for the experiment.
-        
+
         Args:
             decimation_factors: List of decimation factors (e.g., [0, 7, 15])
-            
+
         Returns:
             Success status
         """
@@ -56,46 +56,154 @@ class ExperimentConfigurator:
         try:
             # Clear existing decimations
             self.cursor.execute("""
-                DELETE FROM ml_experiment_decimation_junction 
+                DELETE FROM ml_experiment_decimation_junction
                 WHERE experiment_id = %s
             """, (self.experiment_id,))
-            
+
             # Get decimation IDs for the factors
             for factor in decimation_factors:
                 # Check if decimation exists in LUT
                 self.cursor.execute("""
-                    SELECT decimation_id FROM ml_experiment_decimation_lut 
+                    SELECT decimation_id FROM ml_experiment_decimation_lut
                     WHERE decimation_factor = %s
                 """, (factor,))
                 result = self.cursor.fetchone()
-                
+
                 if not result:
                     # Create new decimation entry
                     dec_id = self.get_next_id('ml_experiment_decimation_lut', 'decimation_id')
                     sample_rate = 5000000 // (factor + 1) if factor > 0 else 5000000
                     self.cursor.execute("""
-                        INSERT INTO ml_experiment_decimation_lut 
+                        INSERT INTO ml_experiment_decimation_lut
                         (decimation_id, decimation_factor, equivalent_sample_rate_hz, description)
                         VALUES (%s, %s, %s, %s)
                     """, (dec_id, factor, sample_rate, f"Decimation factor {factor}"))
                 else:
                     dec_id = result['decimation_id']
-                
+
                 # Add to junction table
                 junction_id = self.get_next_id('ml_experiment_decimation_junction', 'experiment_decimation_id')
                 self.cursor.execute("""
-                    INSERT INTO ml_experiment_decimation_junction 
+                    INSERT INTO ml_experiment_decimation_junction
                     (experiment_decimation_id, experiment_id, decimation_id)
                     VALUES (%s, %s, %s)
                 """, (junction_id, self.experiment_id, dec_id))
-            
+
             self.conn.commit()
             self.logger.info(f"Updated decimations for experiment {self.experiment_id}: {decimation_factors}")
             return True
-            
+
         except Exception as e:
             self.conn.rollback()
             self.logger.error(f"Error updating decimations: {e}")
+            return False
+        finally:
+            self.disconnect()
+
+    def add_decimation(self, decimation_factor: int) -> bool:
+        """
+        Add a single decimation factor to the experiment.
+
+        Args:
+            decimation_factor: Decimation factor to add (e.g., 31, 63)
+
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Check if decimation exists in LUT
+            self.cursor.execute("""
+                SELECT decimation_id FROM ml_experiment_decimation_lut
+                WHERE decimation_factor = %s
+            """, (decimation_factor,))
+            result = self.cursor.fetchone()
+
+            if not result:
+                # Create new decimation entry in LUT
+                dec_id = self.get_next_id('ml_experiment_decimation_lut', 'decimation_id')
+                sample_rate = 5000000 // (decimation_factor + 1) if decimation_factor > 0 else 5000000
+                self.cursor.execute("""
+                    INSERT INTO ml_experiment_decimation_lut
+                    (decimation_id, decimation_factor, equivalent_sample_rate_hz, description)
+                    VALUES (%s, %s, %s, %s)
+                """, (dec_id, decimation_factor, sample_rate, f"Decimation factor {decimation_factor}"))
+            else:
+                dec_id = result['decimation_id']
+
+            # Check if already in experiment
+            self.cursor.execute("""
+                SELECT 1 FROM ml_experiment_decimation_junction
+                WHERE experiment_id = %s AND decimation_id = %s
+            """, (self.experiment_id, dec_id))
+
+            if self.cursor.fetchone():
+                self.logger.warning(f"Decimation factor {decimation_factor} already in experiment {self.experiment_id}")
+                return False
+
+            # Add to junction table
+            junction_id = self.get_next_id('ml_experiment_decimation_junction', 'experiment_decimation_id')
+            self.cursor.execute("""
+                INSERT INTO ml_experiment_decimation_junction
+                (experiment_decimation_id, experiment_id, decimation_id)
+                VALUES (%s, %s, %s)
+            """, (junction_id, self.experiment_id, dec_id))
+
+            self.conn.commit()
+            self.logger.info(f"Added decimation factor {decimation_factor} to experiment {self.experiment_id}")
+            return True
+
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error adding decimation: {e}")
+            return False
+        finally:
+            self.disconnect()
+
+    def remove_decimation(self, decimation_factor: int) -> bool:
+        """
+        Remove a single decimation factor from the experiment.
+
+        Args:
+            decimation_factor: Decimation factor to remove (e.g., 7, 15)
+
+        Returns:
+            Success status
+        """
+        self.connect()
+        try:
+            # Get decimation ID from LUT
+            self.cursor.execute("""
+                SELECT decimation_id FROM ml_experiment_decimation_lut
+                WHERE decimation_factor = %s
+            """, (decimation_factor,))
+            result = self.cursor.fetchone()
+
+            if not result:
+                self.logger.warning(f"Decimation factor {decimation_factor} not found in LUT")
+                return False
+
+            dec_id = result['decimation_id']
+
+            # Remove from junction table
+            self.cursor.execute("""
+                DELETE FROM ml_experiment_decimation_junction
+                WHERE experiment_id = %s AND decimation_id = %s
+            """, (self.experiment_id, dec_id))
+
+            rows_deleted = self.cursor.rowcount
+
+            if rows_deleted == 0:
+                self.logger.warning(f"Decimation factor {decimation_factor} not in experiment {self.experiment_id}")
+                return False
+
+            self.conn.commit()
+            self.logger.info(f"Removed decimation factor {decimation_factor} from experiment {self.experiment_id}")
+            return True
+
+        except Exception as e:
+            self.conn.rollback()
+            self.logger.error(f"Error removing decimation: {e}")
             return False
         finally:
             self.disconnect()
@@ -387,11 +495,14 @@ class ExperimentConfigurator:
                 self.logger.warning(f"Data type {data_type_id} already in experiment {self.experiment_id}")
                 return False
 
+            # Get next ID for junction table
+            junction_id = self.get_next_id('ml_experiments_data_types', 'experiment_data_type_id')
+
             # Add to junction table
             self.cursor.execute("""
-                INSERT INTO ml_experiments_data_types (experiment_id, data_type_id)
-                VALUES (%s, %s)
-            """, (self.experiment_id, data_type_id))
+                INSERT INTO ml_experiments_data_types (experiment_data_type_id, experiment_id, data_type_id)
+                VALUES (%s, %s, %s)
+            """, (junction_id, self.experiment_id, data_type_id))
 
             self.conn.commit()
             self.logger.info(f"Added data type {data_type_id} to experiment {self.experiment_id}")

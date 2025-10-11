@@ -49,10 +49,37 @@ class ExperimentSegmentFilesetGeneratorV2:
         self.experiment_id = experiment_id
         self.db_config = db_config
 
-        # Base paths
-        self.base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}')
-        self.segment_path = self.base_path / 'segment_files'
-        self.feature_path = self.base_path / 'feature_files'
+        # Read custom paths from database (if configured)
+        custom_segment_path = None
+        custom_feature_path = None
+        try:
+            conn = psycopg2.connect(**db_config)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT segment_data_base_path, feature_data_base_path
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            result = cursor.fetchone()
+            if result:
+                custom_segment_path = result[0]
+                custom_feature_path = result[1]
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Could not read custom paths from database: {e}")
+
+        # Use custom paths if configured, otherwise use defaults
+        if custom_segment_path and custom_feature_path:
+            self.segment_path = Path(custom_segment_path)
+            self.feature_path = Path(custom_feature_path)
+            self.base_path = self.segment_path.parent
+            logger.info(f"Using CUSTOM data paths from database")
+        else:
+            self.base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}')
+            self.segment_path = self.base_path / 'segment_files'
+            self.feature_path = self.base_path / 'feature_files'
+            logger.info(f"Using DEFAULT data path pattern")
 
         # Source data paths
         self.fileset_path = Path('/Volumes/ArcData/V3_database/fileset')
@@ -234,14 +261,55 @@ class ExperimentSegmentFilesetGeneratorV2:
 
     def get_adc_data(self, source_data: np.ndarray, data_type: str) -> np.ndarray:
         """
-        Get ADC data for the specific data type.
-        Note: ADC data is pre-quantized and stored in adc_data folder,
-        so we don't convert here - we load the correct file instead.
-        This function is kept for potential future use.
+        Apply bit shifting to create different ADC resolutions.
+
+        Source data from adc_data/ is 12-bit baseline (columns 0,1).
+        Different ADC types are created by bit shifting.
+
+        Args:
+            source_data: ADC data with columns [voltage_12bit, current_12bit, ...]
+            data_type: Target ADC type (RAW, TADC14, TADC12, TADC10, TADC8, TADC6)
+                      Also accepts lowercase and without 'T' prefix (adc8, adc12, etc.)
+
+        Returns:
+            ADC data at target bit depth (voltage, current columns only)
         """
-        # This function is no longer needed as we load from the correct source
-        # But keeping it as placeholder for potential post-processing
-        return source_data
+        # Normalize data type name: uppercase and ensure 'T' prefix
+        data_type_normalized = data_type.upper()
+        if data_type_normalized.startswith('ADC') and not data_type_normalized.startswith('TADC'):
+            data_type_normalized = 'T' + data_type_normalized
+
+        # RAW data - no conversion needed
+        if data_type_normalized in ('RAW', 'TRAW'):
+            return source_data
+
+        # Extract voltage and current from columns [0, 1] (12-bit baseline)
+        adc_data = source_data[:, [0, 1]]
+
+        # Apply bit shifting based on target ADC type
+        if data_type_normalized == 'TADC14':
+            # TADC14: Use 12-bit baseline (left-shifting adds no information)
+            return np.clip(adc_data, 0, 4095).astype(np.uint16)
+
+        elif data_type_normalized == 'TADC12':
+            # Baseline 12-bit - no shift needed
+            return np.clip(adc_data, 0, 4095).astype(np.uint16)
+
+        elif data_type_normalized == 'TADC10':
+            # 12-bit → 10-bit: Right-shift by 2
+            return (adc_data >> 2).astype(np.uint16)
+
+        elif data_type_normalized == 'TADC8':
+            # 12-bit → 8-bit: Right-shift by 4
+            return (adc_data >> 4).astype(np.uint8)
+
+        elif data_type_normalized == 'TADC6':
+            # 12-bit → 6-bit: Right-shift by 6
+            return (adc_data >> 6).astype(np.uint8)
+
+        else:
+            logger.warning(f"Unknown ADC type: {data_type} (normalized: {data_type_normalized}), returning 12-bit baseline")
+            return np.clip(adc_data, 0, 4095).astype(np.uint16)
 
     def get_segment_file_path(self, segment_info: Dict, original_size: int,
                              resulting_size: int, data_type: str, decimation: int) -> Path:
@@ -312,17 +380,20 @@ class ExperimentSegmentFilesetGeneratorV2:
                     dec_data = segment_data
                     actual_size = original_size
 
+                # Apply ADC bit depth conversion
+                adc_data = self.get_adc_data(dec_data, data_type)
+
                 # Apply amplitude processing to create multi-column output
                 # Format: [raw_voltage, raw_current, method1_voltage, method1_current, method2_voltage, method2_current, ...]
                 try:
                     output_columns = []
 
-                    # Always start with raw voltage/current pair
-                    output_columns.extend([dec_data[:, 0], dec_data[:, 1]])
+                    # Always start with raw voltage/current pair (ADC-converted)
+                    output_columns.extend([adc_data[:, 0], adc_data[:, 1]])
 
-                    # Add each amplitude processing method
+                    # Add each amplitude processing method (applied to ADC-converted data)
                     for method_config in self.amplitude_methods:
-                        amplitude_processed = self._apply_amplitude_processing(dec_data, method_config)
+                        amplitude_processed = self._apply_amplitude_processing(adc_data, method_config)
                         output_columns.extend([amplitude_processed[:, 0], amplitude_processed[:, 1]])
 
                     # Combine into final array

@@ -3,10 +3,11 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251005_135000
-File version: 1.1.0.0
+Date Revised: 20251011_000000
+File version: 1.2.0.0
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
+             Updated to use normalized database schema with foreign keys
 """
 
 import psycopg2
@@ -29,50 +30,106 @@ class ExperimentFeatureExtractor:
         self.db_conn = db_conn
         self.segment_table = f"experiment_{experiment_id:03d}_segment_training_data"
         self.feature_table = f"experiment_{experiment_id:03d}_feature_fileset"
-        
-        # Base paths for data
-        self.base_segment_path = Path("/Volumes/ArcData/V3_database")
-        self.base_feature_path = Path("/Volumes/ArcData/V3_database")
+
+        # Read custom paths from database (if configured)
+        custom_segment_path = None
+        custom_feature_path = None
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute("""
+                SELECT segment_data_base_path, feature_data_base_path
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            result = cursor.fetchone()
+            if result:
+                custom_segment_path = result[0]
+                custom_feature_path = result[1]
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"Could not read custom paths from database: {e}")
+
+        # Use custom paths if configured, otherwise use defaults
+        if custom_segment_path and custom_feature_path:
+            # Custom paths are full paths like "/custom/path/experiment041/segment_files"
+            # Extract the base directory
+            self.base_segment_path = Path(custom_segment_path).parent.parent
+            self.base_feature_path = Path(custom_feature_path).parent.parent
+            logger.info(f"Using CUSTOM data paths from database")
+            logger.info(f"  Segment base: {self.base_segment_path}")
+            logger.info(f"  Feature base: {self.base_feature_path}")
+        else:
+            # Default: /Volumes/ArcData/V3_database/
+            self.base_segment_path = Path("/Volumes/ArcData/V3_database")
+            self.base_feature_path = Path("/Volumes/ArcData/V3_database")
+            logger.info(f"Using DEFAULT data paths")
         
     def create_feature_fileset_table(self):
-        """Create the feature fileset tracking table"""
+        """Create the feature fileset tracking table with normalized schema"""
         cursor = self.db_conn.cursor()
         try:
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.feature_table} (
-                    feature_file_id SERIAL PRIMARY KEY,
-                    experiment_id INTEGER NOT NULL,
                     segment_id INTEGER NOT NULL,
-                    file_id INTEGER NOT NULL,
-                    feature_set_id INTEGER NOT NULL,
-                    n_value INTEGER,
-                    feature_file_path TEXT,
-                    num_chunks INTEGER,
-                    extraction_status VARCHAR(50),
-                    extraction_time FLOAT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(experiment_id, segment_id, feature_set_id, n_value)
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    amplitude_processing_method_id INTEGER NOT NULL,
+                    experiment_feature_set_id BIGINT NOT NULL,
+                    feature_set_feature_id BIGINT NOT NULL,
+                    feature_file_path TEXT NOT NULL,
+                    extraction_status_id INTEGER NOT NULL DEFAULT 1,
+                    extraction_time_seconds FLOAT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (segment_id, decimation_factor, data_type_id, amplitude_processing_method_id, experiment_feature_set_id, feature_set_feature_id),
+                    FOREIGN KEY (segment_id) REFERENCES data_segments(segment_id) ON DELETE CASCADE,
+                    FOREIGN KEY (data_type_id) REFERENCES ml_data_types_lut(data_type_id),
+                    FOREIGN KEY (amplitude_processing_method_id) REFERENCES ml_experiments_amplitude_methods(experiment_amplitude_id) ON DELETE CASCADE,
+                    FOREIGN KEY (experiment_feature_set_id) REFERENCES ml_experiments_feature_sets(experiment_feature_set_id) ON DELETE CASCADE,
+                    FOREIGN KEY (feature_set_feature_id) REFERENCES ml_feature_set_features(feature_set_feature_id) ON DELETE CASCADE,
+                    FOREIGN KEY (extraction_status_id) REFERENCES ml_extraction_status_lut(status_id)
                 )
             """)
-            
+
             # Create indexes
             cursor.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_segment 
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_segment
                 ON {self.feature_table}(segment_id)
             """)
             cursor.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_feature_set 
-                ON {self.feature_table}(feature_set_id)
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_data_type
+                ON {self.feature_table}(data_type_id)
             """)
             cursor.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_status 
-                ON {self.feature_table}(extraction_status)
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_decimation
+                ON {self.feature_table}(decimation_factor)
             """)
-            
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_amplitude
+                ON {self.feature_table}(amplitude_processing_method_id)
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_feature_set
+                ON {self.feature_table}(experiment_feature_set_id)
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_feature
+                ON {self.feature_table}(feature_set_feature_id)
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_status
+                ON {self.feature_table}(extraction_status_id)
+            """)
+
+            # Composite index for distance calculation lookups
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.feature_table}_lookup
+                ON {self.feature_table}(segment_id, data_type_id, decimation_factor, amplitude_processing_method_id)
+            """)
+
             self.db_conn.commit()
             logger.info(f"Created/verified table: {self.feature_table}")
             return True
-            
+
         except psycopg2.Error as e:
             self.db_conn.rollback()
             logger.error(f"Error creating feature table: {e}")
@@ -85,7 +142,7 @@ class ExperimentFeatureExtractor:
         cursor = self.db_conn.cursor(cursor_factory=RealDictCursor)
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     efs.*,
                     fs.feature_set_name,
                     fs.category
@@ -94,12 +151,96 @@ class ExperimentFeatureExtractor:
                 WHERE efs.experiment_id = %s
                 ORDER BY efs.priority_order, efs.feature_set_id
             """, (self.experiment_id,))
-            
+
             return [dict(row) for row in cursor]
-            
+
         except psycopg2.Error as e:
             logger.error(f"Error getting feature sets: {e}")
             return []
+        finally:
+            cursor.close()
+
+    def _get_data_type_id(self, adc_type: str) -> int:
+        """Convert adc_type string (e.g., 'TADC8') to data_type_id
+
+        Args:
+            adc_type: ADC type string like 'TADC8', 'TADC10', 'TRAW', etc.
+
+        Returns:
+            data_type_id from ml_data_types_lut
+
+        Raises:
+            ValueError: If adc_type is not found in lookup table
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            # Remove 'T' prefix if present (TADC8 → ADC8)
+            type_name = adc_type.upper().replace('T', '')
+
+            cursor.execute("""
+                SELECT data_type_id
+                FROM ml_data_types_lut
+                WHERE UPPER(data_type_name) = %s
+            """, (type_name,))
+
+            result = cursor.fetchone()
+            if not result:
+                raise ValueError(f"Unknown data type: {adc_type} (cleaned: {type_name})")
+
+            return result[0]
+        finally:
+            cursor.close()
+
+    def _get_experiment_feature_set_id(self, feature_set_id: int) -> int:
+        """Get experiment_feature_set_id from feature_set_id for current experiment
+
+        Args:
+            feature_set_id: Feature set ID from ml_feature_sets_lut
+
+        Returns:
+            experiment_feature_set_id from ml_experiments_feature_sets junction table
+
+        Raises:
+            ValueError: If feature set not configured for this experiment
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT experiment_feature_set_id
+                FROM ml_experiments_feature_sets
+                WHERE experiment_id = %s AND feature_set_id = %s
+            """, (self.experiment_id, feature_set_id))
+
+            result = cursor.fetchone()
+            if not result:
+                raise ValueError(
+                    f"Feature set {feature_set_id} not configured for experiment {self.experiment_id}"
+                )
+
+            return result[0]
+        finally:
+            cursor.close()
+
+    def _get_amplitude_method_ids(self) -> List[int]:
+        """Get list of amplitude_processing_method_ids configured for this experiment
+
+        Returns:
+            List of experiment_amplitude_id values from ml_experiments_amplitude_methods
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT experiment_amplitude_id
+                FROM ml_experiments_amplitude_methods
+                WHERE experiment_id = %s
+                ORDER BY experiment_amplitude_id
+            """, (self.experiment_id,))
+
+            results = cursor.fetchall()
+            if not results:
+                raise ValueError(f"No amplitude methods configured for experiment {self.experiment_id}")
+
+            return [row[0] for row in results]
         finally:
             cursor.close()
     
@@ -252,6 +393,10 @@ class ExperimentFeatureExtractor:
             segment_metadata = segment_metadata[:max_segments]
             logger.info(f"Limited to {max_segments:,} files")
 
+        # Get amplitude method IDs for this experiment
+        amplitude_method_ids = self._get_amplitude_method_ids()
+        logger.info(f"Amplitude methods configured: {len(amplitude_method_ids)}")
+
         # Get feature sets with overrides
         if feature_set_ids:
             feature_sets = [
@@ -277,9 +422,10 @@ class ExperimentFeatureExtractor:
         logger.info("Loading existing extractions into memory...")
         cursor = self.db_conn.cursor()
         cursor.execute(f"""
-            SELECT segment_id, feature_set_id, adc_type, stored_segment_length
+            SELECT segment_id, decimation_factor, data_type_id, amplitude_processing_method_id,
+                   experiment_feature_set_id, feature_set_feature_id
             FROM {self.feature_table}
-            WHERE extraction_status = 'completed'
+            WHERE extraction_status_id = 3
         """)
         existing_extractions = set(cursor.fetchall())
         cursor.close()
@@ -324,10 +470,23 @@ class ExperimentFeatureExtractor:
                 fs_name = fs['feature_set_name']
 
                 try:
+                    # Convert to normalized IDs once per iteration
+                    data_type_id = self._get_data_type_id(meta['adc_type'])
+                    experiment_feature_set_id = self._get_experiment_feature_set_id(fs_id)
+                    decimation_factor = int(meta['division'].replace('D', ''))
+
+                    # Get feature_set_feature_id values for this feature set
+                    feature_set_feature_ids = [f['feature_set_feature_id'] for f in fs['features']]
+
                     # Check if already exists (using in-memory set for speed)
+                    # Check if ALL (amplitude_method, feature) combinations exist
                     if not force_reextract:
-                        key = (meta['segment_id'], fs_id, meta['adc_type'], meta['stored_size'])
-                        if key in existing_extractions:
+                        all_exist = all(
+                            (meta['segment_id'], decimation_factor, data_type_id, amp_id, experiment_feature_set_id, feat_id) in existing_extractions
+                            for amp_id in amplitude_method_ids
+                            for feat_id in feature_set_feature_ids
+                        )
+                        if all_exist:
                             continue
 
                     start_time = datetime.now()
@@ -346,20 +505,18 @@ class ExperimentFeatureExtractor:
                     # Save
                     np.save(output_path, feature_array)
 
-                    # Record to database with ALL metadata
+                    # Record to database with normalized schema (one row per amplitude_method × feature)
                     extraction_time = (datetime.now() - start_time).total_seconds()
+
                     self._store_extraction_result(
                         segment_id=meta['segment_id'],
-                        file_id=meta['file_id'],
-                        feature_set_id=fs_id,
-                        n_value=fs['set_n_value'],
+                        decimation_factor=decimation_factor,
+                        data_type_id=data_type_id,
+                        amplitude_method_ids=amplitude_method_ids,
+                        experiment_feature_set_id=experiment_feature_set_id,
+                        feature_set_feature_ids=feature_set_feature_ids,
                         feature_file_path=str(output_path),
-                        num_chunks=feature_array.shape[0],
-                        extraction_time=extraction_time,
-                        stored_segment_length=meta['stored_size'],
-                        adc_type=meta['adc_type'],
-                        adc_division=meta['division'],
-                        original_segment_length=meta['original_length']
+                        extraction_time=extraction_time
                     )
 
                     total_extracted += 1
@@ -391,41 +548,39 @@ class ExperimentFeatureExtractor:
             'failed_extractions': failed_extractions[:10]
         }
 
-    def _check_existing_extraction(self, segment_id: int, feature_set_id: int,
-                                   adc_type: str = None, stored_segment_length: int = None) -> bool:
-        """Check if extraction already exists for specific ADC type and stored size"""
+    def _check_existing_extraction(self, segment_id: int,
+                                   decimation_factor: int,
+                                   data_type_id: int,
+                                   amplitude_processing_method_id: int,
+                                   experiment_feature_set_id: int,
+                                   feature_set_feature_id: int) -> bool:
+        """Check if extraction already exists with normalized schema
+
+        Args:
+            segment_id: Segment ID
+            decimation_factor: Decimation factor (0, 7, 15, 31, 63, etc.)
+            data_type_id: Data type ID from ml_data_types_lut
+            amplitude_processing_method_id: Amplitude method ID from ml_experiments_amplitude_methods
+            experiment_feature_set_id: Junction table ID from ml_experiments_feature_sets
+            feature_set_feature_id: Feature ID from ml_feature_set_features
+
+        Returns:
+            True if extraction exists and is completed, False otherwise
+        """
         cursor = self.db_conn.cursor()
         try:
-            if adc_type is not None and stored_segment_length is not None:
-                # Check for specific ADC type AND stored size (complete check)
-                cursor.execute(f"""
-                    SELECT 1 FROM {self.feature_table}
-                    WHERE segment_id = %s
-                      AND feature_set_id = %s
-                      AND adc_type = %s
-                      AND stored_segment_length = %s
-                      AND extraction_status = 'completed'
-                    LIMIT 1
-                """, (segment_id, feature_set_id, adc_type, stored_segment_length))
-            elif adc_type is not None:
-                # Check for specific ADC type only (legacy)
-                cursor.execute(f"""
-                    SELECT 1 FROM {self.feature_table}
-                    WHERE segment_id = %s
-                      AND feature_set_id = %s
-                      AND adc_type = %s
-                      AND extraction_status = 'completed'
-                    LIMIT 1
-                """, (segment_id, feature_set_id, adc_type))
-            else:
-                # Legacy check (any ADC type)
-                cursor.execute(f"""
-                    SELECT 1 FROM {self.feature_table}
-                    WHERE segment_id = %s
-                      AND feature_set_id = %s
-                      AND extraction_status = 'completed'
-                    LIMIT 1
-                """, (segment_id, feature_set_id))
+            cursor.execute(f"""
+                SELECT 1 FROM {self.feature_table}
+                WHERE segment_id = %s
+                  AND decimation_factor = %s
+                  AND data_type_id = %s
+                  AND amplitude_processing_method_id = %s
+                  AND experiment_feature_set_id = %s
+                  AND feature_set_feature_id = %s
+                  AND extraction_status_id = 3
+                LIMIT 1
+            """, (segment_id, decimation_factor, data_type_id, amplitude_processing_method_id,
+                  experiment_feature_set_id, feature_set_feature_id))
             return cursor.fetchone() is not None
         finally:
             cursor.close()
@@ -977,38 +1132,50 @@ class ExperimentFeatureExtractor:
         
         return feature_path.parent / new_name
     
-    def _store_extraction_result(self, segment_id: int, file_id: int,
-                                 feature_set_id: int, n_value: int,
-                                 feature_file_path: str, num_chunks: int,
-                                 extraction_time: float,
-                                 stored_segment_length: int = None,
-                                 adc_type: str = None,
-                                 adc_division: str = None,
-                                 original_segment_length: int = None):
-        """Store extraction result in database"""
+    def _store_extraction_result(self, segment_id: int,
+                                 decimation_factor: int,
+                                 data_type_id: int,
+                                 amplitude_method_ids: List[int],
+                                 experiment_feature_set_id: int,
+                                 feature_set_feature_ids: List[int],
+                                 feature_file_path: str,
+                                 extraction_time: float):
+        """Store extraction result in database with normalized schema
+
+        Inserts one row per (amplitude_method, feature) combination. All rows
+        share the same file path (the file contains all features as columns).
+
+        Args:
+            segment_id: Segment ID from data_segments table
+            decimation_factor: Decimation factor (0, 7, 15, 31, 63, etc.)
+            data_type_id: Data type ID from ml_data_types_lut
+            amplitude_method_ids: List of amplitude method IDs for this experiment
+            experiment_feature_set_id: Junction table ID from ml_experiments_feature_sets
+            feature_set_feature_ids: List of feature_set_feature_id values for this feature set
+            feature_file_path: Path to feature file on disk (same for all combinations)
+            extraction_time: Time taken to extract features (seconds)
+        """
         cursor = self.db_conn.cursor()
         try:
-            cursor.execute(f"""
-                INSERT INTO {self.feature_table}
-                (experiment_id, segment_id, file_id, feature_set_id, n_value,
-                 feature_file_path, num_chunks, extraction_status, extraction_time,
-                 stored_segment_length, adc_type, adc_division, original_segment_length)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (experiment_id, segment_id, feature_set_id, n_value, adc_type)
-                DO UPDATE SET
-                    feature_file_path = EXCLUDED.feature_file_path,
-                    num_chunks = EXCLUDED.num_chunks,
-                    extraction_status = EXCLUDED.extraction_status,
-                    extraction_time = EXCLUDED.extraction_time,
-                    stored_segment_length = EXCLUDED.stored_segment_length,
-                    adc_division = EXCLUDED.adc_division,
-                    original_segment_length = EXCLUDED.original_segment_length,
-                    created_at = CURRENT_TIMESTAMP
-            """, (
-                self.experiment_id, segment_id, file_id, feature_set_id, n_value,
-                feature_file_path, num_chunks, 'completed', extraction_time,
-                stored_segment_length, adc_type, adc_division, original_segment_length
-            ))
+            # Insert one row per (amplitude_method, feature) combination
+            for amplitude_method_id in amplitude_method_ids:
+                for feature_set_feature_id in feature_set_feature_ids:
+                    cursor.execute(f"""
+                        INSERT INTO {self.feature_table}
+                        (segment_id, decimation_factor, data_type_id, amplitude_processing_method_id,
+                         experiment_feature_set_id, feature_set_feature_id, feature_file_path,
+                         extraction_status_id, extraction_time_seconds)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 3, %s)
+                        ON CONFLICT (segment_id, decimation_factor, data_type_id, amplitude_processing_method_id,
+                                     experiment_feature_set_id, feature_set_feature_id)
+                        DO UPDATE SET
+                            feature_file_path = EXCLUDED.feature_file_path,
+                            extraction_status_id = 3,
+                            extraction_time_seconds = EXCLUDED.extraction_time_seconds,
+                            created_at = NOW()
+                    """, (segment_id, decimation_factor, data_type_id, amplitude_method_id,
+                          experiment_feature_set_id, feature_set_feature_id, feature_file_path,
+                          extraction_time))
 
             self.db_conn.commit()
 
