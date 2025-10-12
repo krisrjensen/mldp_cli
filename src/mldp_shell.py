@@ -3,38 +3,37 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_163000
-File version: 2.0.5.0
+Date Revised: 20251012_165000
+File version: 2.0.6.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 5)
+- COMMIT: Increments on every git commit/push (currently 6)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this commit (5):
+Changes in this commit (6):
+Phase 7: Execution Pipeline
+1. Added mpcctl-execute-experiment command (NEW: complete pipeline execution)
+   - Executes full MPCCTL pipeline from file selection to distance insertion
+   - Supports --workers N flag for parallel distance operations (default: 20)
+   - Supports --log and --verbose flags for detailed output
+   - Supports skip flags for each step (--skip-file-selection, --skip-segment-selection, etc.)
+   - Tracks execution time for each step and provides comprehensive summary
+   - 7 pipeline steps: select-files, select-segments, generate-segment-fileset,
+     generate-segment-pairs, generate-feature-fileset, mpcctl-distance-function,
+     mpcctl-distance-insert
+
+Previous commit (5) changes:
 Phase 6: Comprehensive Cleanup Commands
-1. Added clean-distance-calculate command (alias to clean-distance-work-files)
-2. Added clean-features command (alias to clean-feature-files)
-3. Added clean-distance-insert command (NEW: truncate distance tables)
-4. Added clean-segments command (NEW: remove segment files + truncate segment tables)
-5. Added clean-files command (NEW: truncate training files table)
-6. Added clean-experiment command (NEW: composite cleanup for complete experiment reset)
-
-All cleanup commands support --dry-run and --force flags for safe operation.
-clean-experiment executes all cleanup commands in proper order with comprehensive error handling.
-
-Previous commit (4) changes:
-- Fixed transaction rollback on database errors in generate-feature-fileset
-- Fixed feature-plot to show only CONFIGURED amplitude methods
-- Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
-- Fixed race conditions in both mpcctl commands (shell deletes state file before spawning manager)
-- Fixed distance calculator to use feature_id instead of junction table ID
+- Added clean-distance-calculate, clean-features (aliases)
+- Added clean-distance-insert, clean-segments, clean-files, clean-experiment (new commands)
+- All cleanup commands support --dry-run and --force flags
 """
 
 # Version tracking
-VERSION = "2.0.5.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -91,7 +90,8 @@ class MLDPCompleter(Completer):
             'insert_distances': ['--input-folder', '--distance-type', 'l1', 'l2', 'cosine', 'pearson'],
             'mpcctl-distance-function': ['--start', '--status', '--pause', '--continue', '--stop', '--workers', '--feature_sets', '--log', '--verbose'],
             'mpcctl-distance-insert': ['--start', '--status', '--pause', '--continue', '--stop', '--list-processes', '--kill', '--kill-all', '--workers', '--distances', '--method', '--batch-size', '--log', '--verbose'],
-            
+            'mpcctl-execute-experiment': ['--workers', '--log', '--verbose', '--skip-file-selection', '--skip-segment-selection', '--skip-segment-fileset', '--skip-segment-pairs', '--skip-feature-fileset', '--skip-distance-calc', '--skip-distance-insert', '--help'],
+
             # Visualization
             'heatmap': ['--version', '--output-dir', '1', '2', '3', '4', '5', '6', '7'],
             'histogram': ['--version', '--bins', '1_0', '1_1', '1_2', '1_3', '50', '100'],
@@ -354,6 +354,8 @@ class MLDPShell:
             # MPCCTL distance calculation
             'mpcctl-distance-function': self.cmd_mpcctl_distance_function,
             'mpcctl-distance-insert': self.cmd_mpcctl_distance_insert,
+            # Phase 7 execution pipeline
+            'mpcctl-execute-experiment': self.cmd_mpcctl_execute_experiment,
         }
     
     def get_prompt(self):
@@ -1617,6 +1619,7 @@ class MLDPShell:
 🔄 MPCCTL DISTANCE PIPELINE:
   mpcctl-distance-function            Calculate distances (--start/--status/--pause/--continue/--stop)
   mpcctl-distance-insert              Insert distances to DB (--start/--status/--pause/--continue/--stop)
+  mpcctl-execute-experiment           Execute complete pipeline (--workers N --log --verbose)
 
 🎨 VISUALIZATION:
   heatmap [--version N]               Generate distance heatmap
@@ -7530,6 +7533,324 @@ class MLDPShell:
 
         else:
             print("❌ Unknown option. Use --help for usage information.")
+
+    def cmd_mpcctl_execute_experiment(self, args):
+        """Execute complete MPCCTL experiment pipeline from file selection to distance insertion
+
+        Usage: mpcctl-execute-experiment [options]
+
+        Options:
+            --workers N         Number of worker processes for distance calculation (default: 20)
+            --log               Create log files for distance calculation and insertion
+            --verbose           Show verbose output during execution
+            --skip-file-selection       Skip select-files step
+            --skip-segment-selection    Skip select-segments step
+            --skip-segment-fileset      Skip generate-segment-fileset step
+            --skip-segment-pairs        Skip generate-segment-pairs step
+            --skip-feature-fileset      Skip generate-feature-fileset step
+            --skip-distance-calc        Skip mpcctl-distance-function step
+            --skip-distance-insert      Skip mpcctl-distance-insert step
+
+        This command executes the complete MPCCTL pipeline in the following order:
+            1. select-files              (file selection for training)
+            2. select-segments           (segment selection for training)
+            3. generate-segment-fileset  (generate segment files on disk)
+            4. generate-segment-pairs    (generate all segment pairs)
+            5. generate-feature-fileset  (extract features from segments)
+            6. mpcctl-distance-function  (calculate distances with N workers)
+            7. mpcctl-distance-insert    (insert distances into database with N workers)
+
+        Each step's execution time is tracked and reported in the final summary.
+
+        Examples:
+            mpcctl-execute-experiment --workers 20 --log --verbose
+            mpcctl-execute-experiment --workers 10 --skip-file-selection
+            mpcctl-execute-experiment --workers 4 --skip-segment-selection --skip-segment-fileset
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if '--help' in args:
+            print("\nUsage: mpcctl-execute-experiment [options]")
+            print("\nExecute complete MPCCTL experiment pipeline from file selection to distance insertion")
+            print("\nOptions:")
+            print("  --workers N                     Number of worker processes (default: 20)")
+            print("  --log                           Create log files for distance operations")
+            print("  --verbose                       Show verbose output")
+            print("  --skip-file-selection           Skip select-files step")
+            print("  --skip-segment-selection        Skip select-segments step")
+            print("  --skip-segment-fileset          Skip generate-segment-fileset step")
+            print("  --skip-segment-pairs            Skip generate-segment-pairs step")
+            print("  --skip-feature-fileset          Skip generate-feature-fileset step")
+            print("  --skip-distance-calc            Skip mpcctl-distance-function step")
+            print("  --skip-distance-insert          Skip mpcctl-distance-insert step")
+            print("\nPipeline Steps:")
+            print("  1. select-files              File selection for training")
+            print("  2. select-segments           Segment selection for training")
+            print("  3. generate-segment-fileset  Generate segment files on disk")
+            print("  4. generate-segment-pairs    Generate all segment pairs")
+            print("  5. generate-feature-fileset  Extract features from segments")
+            print("  6. mpcctl-distance-function  Calculate distances (parallel)")
+            print("  7. mpcctl-distance-insert    Insert distances into database (parallel)")
+            print("\nExamples:")
+            print("  mpcctl-execute-experiment --workers 20 --log --verbose")
+            print("  mpcctl-execute-experiment --workers 10 --skip-file-selection")
+            return
+
+        # Parse options
+        workers = 20
+        log_enabled = '--log' in args
+        verbose = '--verbose' in args
+        skip_file_selection = '--skip-file-selection' in args
+        skip_segment_selection = '--skip-segment-selection' in args
+        skip_segment_fileset = '--skip-segment-fileset' in args
+        skip_segment_pairs = '--skip-segment-pairs' in args
+        skip_feature_fileset = '--skip-feature-fileset' in args
+        skip_distance_calc = '--skip-distance-calc' in args
+        skip_distance_insert = '--skip-distance-insert' in args
+
+        for i, arg in enumerate(args):
+            if arg == '--workers' and i + 1 < len(args):
+                try:
+                    workers = int(args[i + 1])
+                except ValueError:
+                    print(f"❌ Invalid workers value: {args[i + 1]}")
+                    return
+
+        # Banner
+        print(f"\n{'='*80}")
+        print(f"🚀 MPCCTL EXPERIMENT PIPELINE - Experiment {self.current_experiment}")
+        print(f"{'='*80}\n")
+        print(f"📋 Configuration:")
+        print(f"   Workers: {workers}")
+        print(f"   Log files: {'Enabled' if log_enabled else 'Disabled'}")
+        print(f"   Verbose: {'Enabled' if verbose else 'Disabled'}")
+        print(f"\n📊 Pipeline Steps:")
+        step_num = 1
+        if not skip_file_selection:
+            print(f"   {step_num}. select-files")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: select-files")
+
+        if not skip_segment_selection:
+            print(f"   {step_num}. select-segments")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: select-segments")
+
+        if not skip_segment_fileset:
+            print(f"   {step_num}. generate-segment-fileset")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: generate-segment-fileset")
+
+        if not skip_segment_pairs:
+            print(f"   {step_num}. generate-segment-pairs")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: generate-segment-pairs")
+
+        if not skip_feature_fileset:
+            print(f"   {step_num}. generate-feature-fileset")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: generate-feature-fileset")
+
+        if not skip_distance_calc:
+            print(f"   {step_num}. mpcctl-distance-function (workers={workers})")
+            step_num += 1
+        else:
+            print(f"   ⏭️  Skipping: mpcctl-distance-function")
+
+        if not skip_distance_insert:
+            print(f"   {step_num}. mpcctl-distance-insert (workers={workers})")
+        else:
+            print(f"   ⏭️  Skipping: mpcctl-distance-insert")
+
+        print(f"\n{'='*80}\n")
+
+        # Confirmation prompt
+        response = input("Do you wish to continue with pipeline execution? (Y/n): ").strip().lower()
+        if response and response != 'y':
+            print("❌ Pipeline execution cancelled")
+            return
+
+        # Execute pipeline with timing
+        import time
+        from datetime import datetime
+
+        success_count = 0
+        failed_commands = []
+        step_times = {}
+        total_start = time.time()
+
+        # Step 1: select-files
+        if not skip_file_selection:
+            print(f"\n{'='*80}")
+            print(f"Step 1: Running select-files...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                self.cmd_select_files([])
+                step_times['select-files'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in select-files: {e}")
+                failed_commands.append('select-files')
+                step_times['select-files'] = time.time() - step_start
+
+        # Step 2: select-segments
+        if not skip_segment_selection:
+            print(f"\n{'='*80}")
+            print(f"Step 2: Running select-segments...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                self.cmd_select_segments([])
+                step_times['select-segments'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in select-segments: {e}")
+                failed_commands.append('select-segments')
+                step_times['select-segments'] = time.time() - step_start
+
+        # Step 3: generate-segment-fileset
+        if not skip_segment_fileset:
+            print(f"\n{'='*80}")
+            print(f"Step 3: Running generate-segment-fileset...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                self.cmd_generate_segment_fileset([])
+                step_times['generate-segment-fileset'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in generate-segment-fileset: {e}")
+                failed_commands.append('generate-segment-fileset')
+                step_times['generate-segment-fileset'] = time.time() - step_start
+
+        # Step 4: generate-segment-pairs
+        if not skip_segment_pairs:
+            print(f"\n{'='*80}")
+            print(f"Step 4: Running generate-segment-pairs...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                self.cmd_generate_segment_pairs([])
+                step_times['generate-segment-pairs'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in generate-segment-pairs: {e}")
+                failed_commands.append('generate-segment-pairs')
+                step_times['generate-segment-pairs'] = time.time() - step_start
+
+        # Step 5: generate-feature-fileset
+        if not skip_feature_fileset:
+            print(f"\n{'='*80}")
+            print(f"Step 5: Running generate-feature-fileset...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                self.cmd_generate_feature_fileset([])
+                step_times['generate-feature-fileset'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in generate-feature-fileset: {e}")
+                failed_commands.append('generate-feature-fileset')
+                step_times['generate-feature-fileset'] = time.time() - step_start
+
+        # Step 6: mpcctl-distance-function
+        if not skip_distance_calc:
+            print(f"\n{'='*80}")
+            print(f"Step 6: Running mpcctl-distance-function...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                distance_args = ['--start', '--workers', str(workers)]
+                if log_enabled:
+                    distance_args.append('--log')
+                if verbose:
+                    distance_args.append('--verbose')
+                self.cmd_mpcctl_distance_function(distance_args)
+                step_times['mpcctl-distance-function'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in mpcctl-distance-function: {e}")
+                failed_commands.append('mpcctl-distance-function')
+                step_times['mpcctl-distance-function'] = time.time() - step_start
+
+        # Step 7: mpcctl-distance-insert
+        if not skip_distance_insert:
+            print(f"\n{'='*80}")
+            print(f"Step 7: Running mpcctl-distance-insert...")
+            print(f"{'='*80}\n")
+            step_start = time.time()
+            try:
+                insert_args = ['--start', '--workers', str(workers)]
+                if log_enabled:
+                    insert_args.append('--log')
+                if verbose:
+                    insert_args.append('--verbose')
+                self.cmd_mpcctl_distance_insert(insert_args)
+                step_times['mpcctl-distance-insert'] = time.time() - step_start
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Error in mpcctl-distance-insert: {e}")
+                failed_commands.append('mpcctl-distance-insert')
+                step_times['mpcctl-distance-insert'] = time.time() - step_start
+
+        # Calculate total time
+        total_time = time.time() - total_start
+        total_steps = 7 - sum([skip_file_selection, skip_segment_selection, skip_segment_fileset,
+                               skip_segment_pairs, skip_feature_fileset, skip_distance_calc,
+                               skip_distance_insert])
+
+        # Summary
+        print(f"\n{'='*80}")
+        print(f"PIPELINE EXECUTION SUMMARY")
+        print(f"{'='*80}\n")
+        print(f"   Successful: {success_count}/{total_steps} steps")
+        if failed_commands:
+            print(f"   Failed: {len(failed_commands)} steps")
+            for cmd in failed_commands:
+                print(f"      - {cmd}")
+
+        print(f"\n⏱️  Execution Times:")
+        for step, duration in step_times.items():
+            hours = int(duration // 3600)
+            minutes = int((duration % 3600) // 60)
+            seconds = int(duration % 60)
+            if hours > 0:
+                time_str = f"{hours}h {minutes}m {seconds}s"
+            elif minutes > 0:
+                time_str = f"{minutes}m {seconds}s"
+            else:
+                time_str = f"{seconds}s"
+            print(f"   {step}: {time_str}")
+
+        # Total time
+        hours = int(total_time // 3600)
+        minutes = int((total_time % 3600) // 60)
+        seconds = int(total_time % 60)
+        if hours > 0:
+            total_time_str = f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            total_time_str = f"{minutes}m {seconds}s"
+        else:
+            total_time_str = f"{seconds}s"
+        print(f"\n   Total time: {total_time_str}")
+
+        if success_count == total_steps:
+            print(f"\n✅ Pipeline execution completed successfully")
+            print(f"   Experiment {self.current_experiment} is ready for analysis")
+        else:
+            print(f"\n⚠️  Some pipeline steps failed. Check errors above.")
 
     def cmd_generate_feature_fileset(self, args):
         """Generate feature files from segment data"""
