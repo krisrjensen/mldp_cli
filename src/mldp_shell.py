@@ -3,15 +3,15 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_150000
-File version: 2.0.4.3
+Date Revised: 20251012_153000
+File version: 2.0.4.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 4)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
 Changes in this commit (4):
 1. Added transaction rollback on database errors in generate-feature-fileset
@@ -21,6 +21,7 @@ Changes in this commit (4):
 5. Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
 6. Fixed race condition in mpcctl-distance-function: shell now deletes state file BEFORE spawning manager
 7. Fixed race condition in mpcctl-distance-insert: shell now deletes state file BEFORE spawning manager
+8. Fixed distance calculator to use feature_id instead of junction table ID (mpcctl_cli_distance_calculator.py 2.1.0.3)
 
 Previous commit (3) changes:
 - Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -34,7 +35,7 @@ Previous commit (3) changes:
 """
 
 # Version tracking
-VERSION = "2.0.4.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.4.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
