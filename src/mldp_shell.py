@@ -4,18 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251011_000000
-File version: 2.0.0.13
+File version: 2.0.2.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 0)
-- CHANGE: Increments on every code modification (currently 1)
+- COMMIT: Increments on every git commit/push (currently 2)
+- CHANGE: Increments on every code modification (currently 9)
 """
 
 # Version tracking
-VERSION = "2.0.0.13"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -33,6 +33,7 @@ from tabulate import tabulate
 import json
 from datetime import datetime
 import shlex
+import argparse
 
 # Path to MLDP main project (mldp_cli is now a submodule inside mldp)
 MLDP_ROOT = Path(__file__).parent.parent.parent
@@ -96,7 +97,12 @@ class MLDPCompleter(Completer):
             'closest': ['10', '20', '50', '100'],
             
             # Experiments
-            'select-segments': ['41', '42', '43'],
+            'select-segments': ['--strategy', '--segments-per-type', '--seed', '--clean', '--help', '41', '42', '43'],
+            'clean-segment-table': ['41', '42', '43'],
+            'clean-segment-pairs': ['41', '42', '43'],
+            'clean-feature-files': ['41', '42', '43'],
+            'generate-segment-pairs': ['--strategy', '--max-pairs-per-segment', '--same-label-ratio', '--seed', '--clean', '--help'],
+            'generate-feature-fileset': ['--feature-sets', '--max-segments', '--force', '--clean', '--help'],
             'update-decimations': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
             'add-decimation': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
             'remove-decimation': ['0', '1', '3', '7', '15', '31', '63', '127', '255', '511'],
@@ -195,8 +201,8 @@ class MLDPCompleter(Completer):
 
 class MLDPShell:
     """Advanced MLDP Interactive Shell"""
-    
-    def __init__(self):
+
+    def __init__(self, auto_connect=False, auto_experiment=None):
         self.session = PromptSession(
             history=FileHistory(os.path.expanduser('~/.mldp_shell_history')),
             auto_suggest=AutoSuggestFromHistory(),
@@ -205,12 +211,14 @@ class MLDPShell:
             message=self.get_prompt,
             vi_mode=False,  # Set to True if you prefer vi mode
         )
-        
+
         self.db_conn = None
         self.current_experiment = 18
         self.current_distance_type = 'l2'
         self.last_result = None
         self.running = True
+        self.auto_connect = auto_connect
+        self.auto_experiment = auto_experiment
         
         # Command handlers
         self.commands = {
@@ -241,6 +249,9 @@ class MLDPShell:
             'export': self.cmd_export,
             'time': self.cmd_time,
             'select-segments': self.cmd_select_segments,
+            'clean-segment-table': self.cmd_clean_segment_table,
+            'clean-segment-pairs': self.cmd_clean_segment_pairs,
+            'clean-feature-files': self.cmd_clean_feature_files,
             'update-decimations': self.cmd_update_decimations,
             'add-decimation': self.cmd_add_decimation,
             'remove-decimation': self.cmd_remove_decimation,
@@ -356,10 +367,58 @@ class MLDPShell:
             print(f"⚠️  Warning: MLDP not found at {MLDP_ROOT}")
         print()
     
+    def _auto_set_experiment(self, experiment_id):
+        """Auto-set experiment on startup with fallback to first experiment"""
+        if not self.db_conn:
+            print("⚠️  Cannot set experiment: Not connected to database")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if requested experiment exists
+            cursor.execute("""
+                SELECT experiment_id
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+
+            if cursor.fetchone():
+                # Requested experiment exists
+                self.current_experiment = experiment_id
+                print(f"✅ Current experiment set to: {self.current_experiment}")
+            else:
+                # Requested experiment doesn't exist, use first one
+                print(f"⚠️  Experiment {experiment_id} not found")
+                cursor.execute("""
+                    SELECT experiment_id
+                    FROM ml_experiments
+                    ORDER BY experiment_id
+                    LIMIT 1
+                """)
+                result = cursor.fetchone()
+                if result:
+                    self.current_experiment = result[0]
+                    print(f"✅ Using first experiment: {self.current_experiment}")
+                else:
+                    print("❌ No experiments found in database")
+
+            cursor.close()
+        except Exception as e:
+            print(f"❌ Error setting experiment: {e}")
+
     def run(self):
         """Main shell loop"""
         self.print_banner()
-        
+
+        # Handle auto-connect flag
+        if self.auto_connect:
+            self.cmd_connect([])
+
+        # Handle auto-experiment flag
+        if self.auto_experiment is not None:
+            self._auto_set_experiment(self.auto_experiment)
+
         while self.running:
             try:
                 # Get user input
@@ -1580,6 +1639,7 @@ class MLDPShell:
         strategy = 'balanced'  # Default
         segments_per_type = 3  # Default for fixed_per_type strategy
         seed = 42
+        clean_first = False  # Default
 
         i = 0
         while i < len(args):
@@ -1592,6 +1652,9 @@ class MLDPShell:
             elif args[i] == '--seed' and i + 1 < len(args):
                 seed = int(args[i + 1])
                 i += 2
+            elif args[i] == '--clean':
+                clean_first = True
+                i += 1
             elif args[i] == '--help':
                 print("\nUsage: select-segments [experiment_id] [options]")
                 print("\nOptions:")
@@ -1602,6 +1665,7 @@ class MLDPShell:
                 print("                             proportional: Select proportionally from each type")
                 print("  --segments-per-type N      For fixed_per_type: segments to select per type (default: 3)")
                 print("  --seed N                   Random seed (default: 42)")
+                print("  --clean                    Clear existing segment training data before selection")
                 print("\n📊 BALANCED STRATEGY (recommended):")
                 print("  Per file: Groups segments by code type (L, R, C, Cm, Cl, Cr, etc.)")
                 print("  Example: File has L=45, R=40, C=5, Cm=25, Cl=3, Cr=2 segments")
@@ -1609,11 +1673,18 @@ class MLDPShell:
                 print("  → Selects 2 from EACH type: 2L + 2R + 2C + 2Cm + 2Cl + 2Cr = 12 total")
                 print("\nExamples:")
                 print("  select-segments 41 --strategy balanced")
+                print("  select-segments 41 --strategy balanced --clean")
                 print("  select-segments 41 --strategy fixed_per_type --segments-per-type 5")
                 print("  select-segments --strategy balanced  (uses current experiment)")
                 return
             else:
                 i += 1
+
+        # Clean existing data if requested
+        if clean_first:
+            print(f"\n🗑️  Cleaning existing segment training data...")
+            self.cmd_clean_segment_table([str(experiment_id)])
+            print()
 
         print(f"🔄 Selecting segments for experiment {experiment_id}...")
         print(f"   Strategy: {strategy}")
@@ -1686,7 +1757,90 @@ class MLDPShell:
             print("Make sure experiment_segment_selector_v2.py is in the same directory")
         except Exception as e:
             print(f"❌ Error during segment selection: {e}")
-    
+
+    def cmd_clean_segment_table(self, args):
+        """Clean (delete all rows from) the segment training data table for an experiment"""
+        # Parse experiment ID if provided, otherwise use current
+        if args and args[0].isdigit():
+            experiment_id = int(args[0])
+        else:
+            experiment_id = self.current_experiment
+
+        if not experiment_id:
+            print("❌ No experiment specified. Use: clean-segment-table <experiment_id>")
+            print("   Or set current experiment: set experiment <id>")
+            return
+
+        table_name = f"experiment_{experiment_id:03d}_segment_training_data"
+
+        # Connect to database
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"ℹ️  Table {table_name} does not exist (nothing to clean)")
+                cursor.close()
+                return
+
+            # Get count before deletion
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_before = cursor.fetchone()[0]
+
+            if count_before == 0:
+                print(f"ℹ️  Table {table_name} is already empty")
+                cursor.close()
+                return
+
+            # Show what will be deleted
+            print(f"\n📊 Segment training data table: {table_name}")
+            print(f"   Current rows: {count_before:,}")
+
+            # Confirmation
+            print(f"\n⚠️  WARNING: This will delete all {count_before:,} rows from {table_name}")
+            print(f"⚠️  This action CANNOT be undone!")
+            response = input(f"\nType 'DELETE' to confirm: ").strip()
+
+            if response != 'DELETE':
+                print("❌ Cancelled")
+                cursor.close()
+                return
+
+            # Delete all rows
+            print(f"\n🗑️  Deleting all rows from {table_name}...")
+            cursor.execute(f"DELETE FROM {table_name}")
+            self.db_conn.commit()
+
+            # Verify deletion
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_after = cursor.fetchone()[0]
+
+            if count_after == 0:
+                print(f"✅ Deleted {count_before:,} rows")
+                print(f"✅ Table {table_name} is now empty")
+            else:
+                print(f"⚠️  Warning: {count_after} rows remaining")
+
+            cursor.close()
+
+        except Exception as e:
+            print(f"❌ Error cleaning segment table: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
+
     def cmd_update_decimations(self, args):
         """Update decimation factors for current experiment"""
         if not args:
@@ -4010,18 +4164,102 @@ class MLDPShell:
 
         # Redirect to the proper command
         self.cmd_select_segments(args)
-    
+
+    def cmd_clean_segment_pairs(self, args):
+        """Clean (delete all rows from) the segment pairs table for current experiment"""
+        # Parse experiment ID if provided, otherwise use current
+        if args and args[0].isdigit():
+            experiment_id = int(args[0])
+        else:
+            experiment_id = self.current_experiment
+
+        if not experiment_id:
+            print("❌ No experiment specified. Use: clean-segment-pairs <experiment_id>")
+            print("   Or set current experiment: set experiment <id>")
+            return
+
+        table_name = f"experiment_{experiment_id:03d}_segment_pairs"
+
+        # Connect to database
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"ℹ️  Table {table_name} does not exist (nothing to clean)")
+                cursor.close()
+                return
+
+            # Get count before deletion
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_before = cursor.fetchone()[0]
+
+            if count_before == 0:
+                print(f"ℹ️  Table {table_name} is already empty")
+                cursor.close()
+                return
+
+            # Show what will be deleted
+            print(f"\n📊 Segment pairs table: {table_name}")
+            print(f"   Current rows: {count_before:,}")
+
+            # Confirmation
+            print(f"\n⚠️  WARNING: This will delete all {count_before:,} pairs from {table_name}")
+            print(f"⚠️  This action CANNOT be undone!")
+            response = input(f"\nType 'DELETE' to confirm: ").strip()
+
+            if response != 'DELETE':
+                print("❌ Cancelled")
+                cursor.close()
+                return
+
+            # Delete all rows
+            print(f"\n🗑️  Deleting all rows from {table_name}...")
+            cursor.execute(f"DELETE FROM {table_name}")
+            self.db_conn.commit()
+
+            # Verify deletion
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_after = cursor.fetchone()[0]
+
+            if count_after == 0:
+                print(f"✅ Deleted {count_before:,} pairs")
+                print(f"✅ Table {table_name} is now empty")
+            else:
+                print(f"⚠️  Warning: {count_after} pairs remaining")
+
+            cursor.close()
+
+        except Exception as e:
+            print(f"❌ Error cleaning segment pairs table: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
+
     def cmd_generate_segment_pairs(self, args):
         """Generate segment pairs for distance calculations"""
         if not self.db_conn:
             print("❌ Not connected to database. Use 'connect' first.")
             return
-        
-        pairing_strategy = 'all_combinations'  # Default
+
+        pairing_strategy = 'match_lengths_all_combinations'  # Default (safe for same-size comparison)
         max_pairs_per_segment = None
         same_label_ratio = 0.5
         seed = 42
-        
+        clean_first = False  # Default
+
         # Parse arguments
         i = 0
         while i < len(args):
@@ -4037,27 +4275,40 @@ class MLDPShell:
             elif args[i] == '--seed' and i + 1 < len(args):
                 seed = int(args[i + 1])
                 i += 2
+            elif args[i] == '--clean':
+                clean_first = True
+                i += 1
             elif args[i] == '--help':
                 print("\nUsage: generate-segment-pairs [options]")
                 print("\nOptions:")
-                print("  --strategy STRAT            Pairing strategy (default: all_combinations)")
-                print("                              Options: all_combinations, balanced, code_type_balanced, random_sample")
+                print("  --strategy STRAT            Pairing strategy (default: match_lengths_all_combinations)")
+                print("                              Options: match_lengths_all_combinations, all_combinations,")
+                print("                                       balanced, code_type_balanced, random_sample")
                 print("  --max-pairs-per-segment N   Maximum pairs per segment")
                 print("  --same-label-ratio RATIO    Ratio of same-label pairs for balanced strategy (0.0-1.0)")
                 print("  --seed N                    Random seed (default: 42)")
+                print("  --clean                     Clear existing segment pairs before generation")
                 print("\nStrategies:")
-                print("  all_combinations   - Generate all possible pairs (N choose 2)")
-                print("  balanced          - Balance same/different label pairs")
-                print("  code_type_balanced - Balance pairs by segment code type (L, R, C, etc.)")
-                print("  random_sample     - Random sample of possible pairs")
+                print("  match_lengths_all_combinations - Generate all pairs ONLY for segments with same length (RECOMMENDED)")
+                print("  all_combinations              - Generate all possible pairs regardless of length")
+                print("  balanced                      - Balance same/different label pairs")
+                print("  code_type_balanced            - Balance pairs by segment code type (L, R, C, etc.)")
+                print("  random_sample                 - Random sample of possible pairs")
                 print("\nExample:")
-                print("  generate-segment-pairs --strategy all_combinations")
-                print("  generate-segment-pairs --strategy code_type_balanced --max-pairs-per-segment 100")
+                print("  generate-segment-pairs --strategy match_lengths_all_combinations")
+                print("  generate-segment-pairs --clean --strategy all_combinations")
+                print("  generate-segment-pairs --clean --strategy code_type_balanced --max-pairs-per-segment 100")
                 print("  generate-segment-pairs --strategy balanced --same-label-ratio 0.3")
                 return
             else:
                 i += 1
-        
+
+        # Clean existing pairs if requested
+        if clean_first:
+            print(f"\n🗑️  Cleaning existing segment pairs...")
+            self.cmd_clean_segment_pairs([])
+            print()
+
         print(f"🔄 Generating segment pairs for experiment {self.current_experiment}...")
         print(f"   Strategy: {pairing_strategy}")
         if max_pairs_per_segment:
@@ -5176,23 +5427,40 @@ class MLDPShell:
 
         # Delete files
         if clean_files and file_count > 0:
-            print(f"\n🗑️  Deleting feature files...")
-            deleted_count = 0
-            failed_count = 0
+            print(f"\n🗑️  Deleting feature files directory...")
+            import shutil
 
-            for feature_file in feature_files:
-                try:
-                    feature_file.unlink()
-                    deleted_count += 1
-                    if deleted_count % 1000 == 0:
-                        print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
-                except Exception as e:
-                    print(f"❌ Error deleting {feature_file.name}: {e}")
-                    failed_count += 1
+            try:
+                # Delete the ENTIRE feature_files directory
+                shutil.rmtree(feature_path)
+                print(f"✅ Deleted entire directory: {feature_path}")
+                print(f"   Removed {file_count:,} files ({size_gb:.2f} GB)")
 
-            print(f"✅ Deleted {deleted_count:,} feature files")
-            if failed_count > 0:
-                print(f"⚠️  Failed to delete {failed_count} files")
+                # Recreate empty directory
+                feature_path.mkdir(parents=True, exist_ok=True)
+                print(f"✅ Recreated empty directory: {feature_path}")
+
+            except Exception as e:
+                print(f"❌ Error deleting directory: {e}")
+                print(f"   Falling back to file-by-file deletion...")
+
+                # Fallback: delete files individually
+                deleted_count = 0
+                failed_count = 0
+
+                for feature_file in feature_files:
+                    try:
+                        feature_file.unlink()
+                        deleted_count += 1
+                        if deleted_count % 1000 == 0:
+                            print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
+                    except Exception as e:
+                        print(f"❌ Error deleting {feature_file.name}: {e}")
+                        failed_count += 1
+
+                print(f"✅ Deleted {deleted_count:,} feature files")
+                if failed_count > 0:
+                    print(f"⚠️  Failed to delete {failed_count} files")
 
         # Truncate database table
         if clean_tables and db_count > 0:
@@ -5690,19 +5958,24 @@ class MLDPShell:
             print("  --continue               Resume paused calculation")
             print("  --stop                   Stop calculation")
             print("  --status                 Show progress")
+            print("  --kill-all               Forcefully terminate all workers")
             print("\nOptions for --start:")
             print("  --workers N              Number of worker processes (default: 16)")
             print("  --feature_sets 1,2,3     Comma-separated list of feature set IDs to use")
             print("  --log                    Create log file (yyyymmdd_hhmmss_mpcctl_distance_calculation.log)")
             print("  --verbose                Show verbose output in CLI")
+            print("  --clean                  Start fresh (delete .mpcctl and .processed) [DEFAULT]")
+            print("  --resume                 Resume from existing progress")
             print("\nExamples:")
             print("  mpcctl-distance-function --start --workers 20")
+            print("  mpcctl-distance-function --start --workers 20 --resume")
             print("  mpcctl-distance-function --start --workers 2 --feature_sets 1,2,3,4,5")
             print("  mpcctl-distance-function --start --workers 20 --log --verbose")
             print("  mpcctl-distance-function --status")
             print("  mpcctl-distance-function --pause")
             print("  mpcctl-distance-function --continue")
             print("  mpcctl-distance-function --stop")
+            print("  mpcctl-distance-function --kill-all")
             return
 
         if '--start' in args:
@@ -5716,6 +5989,11 @@ class MLDPShell:
             log_enabled = '--log' in args
             verbose = '--verbose' in args
             feature_set_filter = None
+            clean_mode = True  # Default: start fresh
+
+            # Parse --clean/--resume (mutually exclusive, --clean is default)
+            if '--resume' in args:
+                clean_mode = False
 
             for i, arg in enumerate(args):
                 if arg == '--workers' and i + 1 < len(args):
@@ -5727,11 +6005,13 @@ class MLDPShell:
                 elif arg == '--feature_sets' and i + 1 < len(args):
                     try:
                         feature_set_filter = [int(x.strip()) for x in args[i + 1].split(',')]
-                        print(f"📊 Filtering to feature sets: {feature_set_filter}")
                     except ValueError:
                         print(f"❌ Invalid feature_sets value: {args[i + 1]}")
                         print("   Expected format: --feature_sets 1,2,3,4,5")
                         return
+
+            # Show mode
+            print(f"\n🔄 Mode: {'--clean (starting fresh)' if clean_mode else '--resume (continuing existing)'}")
 
             # Import required modules
             import multiprocessing as mp
@@ -5749,8 +6029,8 @@ class MLDPShell:
                 'user': 'kjensen'
             }
 
-            feature_base_path = Path('/Volumes/ArcData/V3_database/experiment041/feature_files')
-            mpcctl_base_dir = Path('/Volumes/ArcData/V3_database/experiment041')
+            feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/feature_files')
+            mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}')
 
             # Create log file if requested
             log_file = None
@@ -5762,30 +6042,106 @@ class MLDPShell:
             manager = mp.Process(
                 target=manager_process,
                 args=(self.current_experiment, workers, feature_base_path,
-                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter)
+                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter, clean_mode)
             )
             manager.start()
 
             print(f"🚀 Distance calculation started in background")
             print(f"   Experiment: {self.current_experiment}")
             print(f"   Workers: {workers}")
+            print(f"   Mode: {'Clean' if clean_mode else 'Resume'}")
             if feature_set_filter:
                 print(f"   Feature sets: {feature_set_filter}")
             if log_file:
                 print(f"   Log file: {log_file}")
-            print(f"\n📊 Monitor progress:")
-            print(f"   mpcctl-distance-function --status")
-            print(f"\n⏸️  Control:")
-            print(f"   mpcctl-distance-function --pause")
-            print(f"   mpcctl-distance-function --continue")
-            print(f"   mpcctl-distance-function --stop")
+            print(f"\n⏳ Waiting for manager to initialize...")
+
+            # Wait for state file to be created
+            import time
+            import json
+            state_file = mpcctl_base_dir / ".mpcctl_state.json"
+            max_wait = 10  # seconds
+            waited = 0
+            while not state_file.exists() and waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
+
+            if not state_file.exists():
+                print(f"⚠️  State file not created yet. Monitor progress with:")
+                print(f"   mpcctl-distance-function --status")
+                return
+
+            print(f"\n📊 Live Progress Monitor (Press Ctrl+C to detach)\n")
+
+            # Live progress monitoring loop
+            try:
+                last_status = None
+                while True:
+                    try:
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
+
+                        progress = state.get('progress', {})
+                        status = state.get('status', 'unknown')
+
+                        # Progress bar
+                        bar_width = 50
+                        percent = progress.get('percent_complete', 0)
+                        filled = int(bar_width * percent / 100)
+                        bar = '█' * filled + '░' * (bar_width - filled)
+
+                        # Format time
+                        eta_seconds = progress.get('estimated_time_remaining_seconds', 0)
+                        eta_minutes = eta_seconds // 60
+                        eta_seconds_remainder = eta_seconds % 60
+
+                        # Clear previous output (move cursor up and clear lines)
+                        if last_status is not None:
+                            # Move cursor up 6 lines and clear to end of screen
+                            print('\033[6A\033[J', end='')
+
+                        # Display progress
+                        print(f"Status: {status}")
+                        print(f"[{bar}] {percent:.1f}%")
+                        print(f"Completed: {progress.get('completed_pairs', 0):,} / {progress.get('total_pairs', 0):,} pairs")
+                        print(f"Rate: {progress.get('pairs_per_second', 0):.0f} pairs/sec")
+                        print(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                        print(f"Workers: {state.get('workers_count', 0)}")
+
+                        last_status = status
+
+                        # Check if completed or stopped
+                        if status in ['completed', 'stopped', 'killed']:
+                            print(f"\n✅ Calculation {status}")
+                            break
+
+                        time.sleep(1.0)
+
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        # State file might be being written
+                        time.sleep(0.5)
+                        continue
+
+            except KeyboardInterrupt:
+                print(f"\n\n⏸️  Detached from monitoring (calculation continues in background)")
+                print(f"\n📊 Monitor progress:")
+                print(f"   mpcctl-distance-function --status")
+                print(f"\n⏸️  Control:")
+                print(f"   mpcctl-distance-function --pause")
+                print(f"   mpcctl-distance-function --continue")
+                print(f"   mpcctl-distance-function --stop")
+                print(f"   mpcctl-distance-function --kill-all")
 
         elif '--status' in args:
             # Show progress
             from pathlib import Path
             import json
 
-            state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
+            if not self.current_experiment:
+                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                return
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_state.json')
             if not state_file.exists():
                 print("❌ No active distance calculation found")
                 print("   Start with: mpcctl-distance-function --start --workers 20")
@@ -5912,6 +6268,72 @@ class MLDPShell:
 
             except Exception as e:
                 print(f"❌ Error sending stop signal: {e}")
+
+        elif '--kill-all' in args:
+            # Kill all workers forcefully
+            from pathlib import Path
+            import json
+            import signal
+            import psutil
+
+            if not self.current_experiment:
+                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                return
+
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_state.json')
+            if not state_file.exists():
+                print("❌ No active distance calculation found")
+                return
+
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+
+                manager_pid = state.get('manager_pid')
+
+                print(f"⚠️  WARNING: This will forcefully terminate all workers!")
+                print(f"   Manager process PID: {manager_pid}")
+                print()
+                response = input("Type 'KILL' to confirm: ").strip()
+
+                if response != 'KILL':
+                    print("❌ Cancelled")
+                    return
+
+                killed_count = 0
+
+                # Kill manager
+                if manager_pid:
+                    try:
+                        import os
+                        os.kill(manager_pid, signal.SIGTERM)
+                        print(f"✅ Sent SIGTERM to manager (PID {manager_pid})")
+                        killed_count += 1
+                    except ProcessLookupError:
+                        print(f"⚠️  Manager process {manager_pid} not found")
+                    except Exception as e:
+                        print(f"⚠️  Error killing manager: {e}")
+
+                # Kill workers by finding python processes with mpcctl in command line
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and any('mpcctl_cli_distance_calculator' in str(arg) for arg in cmdline):
+                            proc.terminate()
+                            print(f"✅ Sent SIGTERM to worker (PID {proc.info['pid']})")
+                            killed_count += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+
+                print(f"\n✅ Terminated {killed_count} processes")
+
+                # Update state file
+                state['status'] = 'killed'
+                with open(state_file, 'w') as f:
+                    json.dump(state, f, indent=2)
+
+            except Exception as e:
+                print(f"❌ Error killing processes: {e}")
 
         else:
             print("❌ Unknown option. Use --help for usage information.")
@@ -6061,22 +6483,34 @@ class MLDPShell:
                 with open(state_file, 'r') as f:
                     state = json.load(f)
 
+                status = state.get('status', 'unknown')
+
                 print(f"\n📊 Distance Insertion Status - Experiment {state.get('experiment_id', 'N/A')}")
-                print(f"   Status: {state.get('status', 'unknown')}")
-                print(f"   Manager PID: {state.get('manager_pid', 'N/A')}")
-                print(f"   Workers: {state.get('workers_count', 'N/A')}")
+                print(f"   Status: {status}")
 
                 if 'progress' in state:
                     prog = state['progress']
-                    print(f"\n📈 Progress:")
-                    print(f"   Total files: {prog.get('total_files', 'N/A'):,}")
-                    print(f"   Completed files: {prog.get('completed_files', 'N/A'):,}")
-                    print(f"   Percent complete: {prog.get('percent_complete', 'N/A')}%")
+
+                    # Progress bar
+                    bar_width = 50
+                    percent = prog.get('percent_complete', 0)
+                    filled = int(bar_width * percent / 100)
+                    bar = '█' * filled + '░' * (bar_width - filled)
+
+                    # Format ETA
+                    eta_seconds = prog.get('estimated_time_remaining_seconds', 0)
+                    eta_minutes = eta_seconds // 60
+                    eta_seconds_remainder = eta_seconds % 60
+
+                    print(f"   [{bar}] {percent:.1f}%")
+                    print(f"   Completed: {prog.get('completed_files', 0):,} / {prog.get('total_files', 0):,} files")
                     print(f"   Records inserted: {prog.get('records_inserted', 'N/A'):,}")
                     if 'files_per_second' in prog:
-                        print(f"   Files/second: {prog.get('files_per_second', 'N/A'):.1f}")
-                    if 'estimated_time_remaining_seconds' in prog:
-                        print(f"   Est. time remaining: {prog.get('estimated_time_remaining_seconds', 'N/A')}s")
+                        print(f"   Rate: {prog.get('files_per_second', 0):.1f} files/sec")
+                    if eta_seconds > 0:
+                        print(f"   ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                    print(f"   Workers: {state.get('workers_count', 'N/A')}")
+                    print(f"   Manager PID: {state.get('manager_pid', 'N/A')}")
 
                 if 'metrics' in state:
                     metrics = state['metrics']
@@ -6356,11 +6790,13 @@ class MLDPShell:
             print("  --feature-sets <list>    Comma-separated feature set IDs (default: all active)")
             print("  --max-segments N         Maximum segment FILES to process (default: all)")
             print("  --force                  Force re-extraction of existing features")
+            print("  --clean                  Clear existing feature files before generation")
             print("\nExamples:")
             print("  generate-feature-fileset")
             print("  generate-feature-fileset --feature-sets 1,2,3")
             print("  generate-feature-fileset --max-segments 1000")
             print("  generate-feature-fileset --force")
+            print("  generate-feature-fileset --clean")
             print("\n📝 Pipeline Order:")
             print("  1. select-files          - Select files for training (DB)")
             print("  2. select-segments       - Select segments for training (DB)")
@@ -6391,6 +6827,7 @@ class MLDPShell:
         feature_set_ids = None  # Default: all configured feature sets
         max_segments = None
         force_reextract = False
+        clean_first = False  # Default
 
         # Parse arguments
         i = 0
@@ -6404,8 +6841,17 @@ class MLDPShell:
             elif args[i] == '--force':
                 force_reextract = True
                 i += 1
+            elif args[i] == '--clean':
+                clean_first = True
+                i += 1
             else:
                 i += 1
+
+        # Clean existing feature files if requested
+        if clean_first:
+            print(f"\n🗑️  Cleaning existing feature files...")
+            self.cmd_clean_feature_files([])
+            print()
 
         print(f"🔄 Generating feature files for experiment {self.current_experiment}...")
         if feature_set_ids:
@@ -6883,6 +7329,11 @@ class MLDPShell:
             # Create generator
             generator = ExperimentSegmentFilesetGeneratorV2(experiment_id, db_config)
 
+            # Pre-flight check: show what will be generated
+            if not self._show_segment_generation_plan(experiment_id, data_types, decimations):
+                print("❌ Cancelled by user")
+                return
+
             # Generate fileset - pass None to use experiment config
             result = generator.generate_segment_fileset(
                 data_types=data_types,  # None = use experiment config
@@ -6906,6 +7357,136 @@ class MLDPShell:
             print("   Make sure experiment_segment_fileset_generator_v2.py is in the same directory")
         except Exception as e:
             print(f"❌ Error generating segment fileset: {e}")
+
+    def _show_segment_generation_plan(self, experiment_id, override_data_types=None, override_decimations=None):
+        """Show pre-flight information about what will be generated
+
+        Returns True if user confirms, False if cancelled
+        """
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(
+                host='localhost',
+                port=5432,
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            # Get total segment count
+            cursor.execute(f"""
+                SELECT COUNT(*) as total_count
+                FROM experiment_{experiment_id:03d}_segment_training_data
+            """)
+            total_segments = cursor.fetchone()[0]
+
+            # Verify all segments have the same configured size
+            cursor.execute(f"""
+                SELECT DISTINCT ds.segment_length
+                FROM experiment_{experiment_id:03d}_segment_training_data std
+                JOIN data_segments ds ON std.segment_id = ds.segment_id
+            """)
+            distinct_sizes = [row[0] for row in cursor.fetchall()]
+
+            if len(distinct_sizes) != 1:
+                print(f"⚠️  Warning: Segments have multiple sizes: {distinct_sizes}")
+                print(f"   Expected all segments to be the same size")
+                cursor.close()
+                conn.close()
+                return False
+
+            segment_size = distinct_sizes[0]
+
+            if total_segments == 0:
+                print("❌ No segments selected for this experiment")
+                print("   Run 'select-segments' first")
+                cursor.close()
+                conn.close()
+                return False
+
+            # Get configured data types (or use override)
+            if override_data_types:
+                data_types = override_data_types
+            else:
+                cursor.execute("""
+                    SELECT DISTINCT dt.data_type_name
+                    FROM ml_experiments_data_types edt
+                    JOIN ml_data_types_lut dt ON edt.data_type_id = dt.data_type_id
+                    WHERE edt.experiment_id = %s
+                    ORDER BY dt.data_type_name
+                """, (experiment_id,))
+                data_types = [row[0].upper() for row in cursor.fetchall()]
+
+            # Get configured decimations (or use override)
+            if override_decimations is not None:
+                decimations = override_decimations
+            else:
+                cursor.execute("""
+                    SELECT d.decimation_factor
+                    FROM ml_experiment_decimation_junction ed
+                    JOIN ml_experiment_decimation_lut d ON ed.decimation_id = d.decimation_id
+                    WHERE ed.experiment_id = %s
+                    ORDER BY d.decimation_factor
+                """, (experiment_id,))
+                decimations = [row[0] for row in cursor.fetchall()]
+
+            cursor.close()
+            conn.close()
+
+            # Calculate totals
+            num_data_types = len(data_types)
+            num_decimations = len(decimations)
+            total_directories = num_data_types * num_decimations  # One size only
+            total_files = total_segments * num_data_types * num_decimations
+
+            # Display pre-flight information
+            print(f"\n{'='*80}")
+            print(f"📋 SEGMENT GENERATION PLAN - Experiment {experiment_id}")
+            print(f"{'='*80}")
+
+            print(f"\n📊 Input Configuration:")
+            print(f"   Total segments selected: {total_segments:,}")
+            print(f"   Segment size: {segment_size} samples")
+            print(f"      - All {total_segments:,} segments are size {segment_size}")
+
+            print(f"\n🔧 Processing Configuration:")
+            print(f"   Data types ({num_data_types}): {', '.join(data_types)}")
+            print(f"   Decimation factors ({num_decimations}): {', '.join(map(str, decimations))}")
+
+            print(f"\n📁 Output Structure:")
+            print(f"   Directory pattern: S{segment_size:06d}/T{{type}}/D{{decimation:06d}}/")
+            print(f"   Total directories to create: {total_directories:,}")
+            print(f"      ({num_data_types} data types × {num_decimations} decimations)")
+            print(f"   Examples:")
+            for dt in data_types[:2]:  # Show first 2 data types
+                for dec in decimations[:2]:  # Show first 2 decimations
+                    print(f"      - S{segment_size:06d}/T{dt}/D{dec:06d}/")
+            examples_shown = min(len(data_types), 2) * min(len(decimations), 2)
+            if total_directories > examples_shown:
+                print(f"      ... and {total_directories - examples_shown} more directories")
+
+            print(f"\n📄 Files to Generate:")
+            print(f"   Files per directory: {total_segments:,} files")
+            print(f"   (Each directory contains all {total_segments:,} segments processed with one type/decimation combination)")
+            print(f"   Total files: {total_segments:,} segments × {total_directories} directories = {total_files:,} files")
+
+            print(f"\n🎯 TOTAL FILES TO CREATE: {total_files:,}")
+            print(f"   ({total_segments:,} segments × {num_data_types} data types × {num_decimations} decimations)")
+
+            print(f"\n{'='*80}")
+            response = input("\nDo you wish to continue? (Y/n): ").strip().lower()
+
+            if response == '' or response == 'y' or response == 'yes':
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            print(f"❌ Error calculating generation plan: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def cmd_show_segment_status(self, args):
         """Check segment generation status"""
@@ -7372,7 +7953,35 @@ class MLDPShell:
 
 def main():
     """Main entry point"""
-    shell = MLDPShell()
+    parser = argparse.ArgumentParser(
+        description='MLDP Interactive Shell',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  ./mldp                          # Start normally
+  ./mldp --connect                # Auto-connect to database
+  ./mldp --connect --experiment 41  # Auto-connect and set experiment 41
+  ./mldp --connect --experiment 999 # Auto-connect and use first experiment (999 doesn't exist)
+        """
+    )
+    parser.add_argument(
+        '--connect',
+        action='store_true',
+        help='Auto-connect to database on startup'
+    )
+    parser.add_argument(
+        '--experiment',
+        type=int,
+        metavar='N',
+        help='Set experiment to N on startup (uses first experiment if N does not exist)'
+    )
+
+    args = parser.parse_args()
+
+    shell = MLDPShell(
+        auto_connect=args.connect,
+        auto_experiment=args.experiment
+    )
     shell.run()
 
 
