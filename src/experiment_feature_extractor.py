@@ -3,8 +3,8 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251012_090000
-File version: 1.2.0.4
+Date Revised: 20251012_100000
+File version: 1.2.0.5
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -12,6 +12,7 @@ Description: Extract features from segments and generate feature filesets
              Fixed multi-feature extraction to extract all features × all amplitude methods
              Fixed to use only CONFIGURED amplitude methods in feature file output
              Fixed to store method_id (not experiment_amplitude_id) in database
+             Added BIGSERIAL id column and fixed foreign key reference
 """
 
 import psycopg2
@@ -75,6 +76,7 @@ class ExperimentFeatureExtractor:
         try:
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.feature_table} (
+                    id BIGSERIAL,
                     segment_id INTEGER NOT NULL,
                     decimation_factor INTEGER NOT NULL,
                     data_type_id INTEGER NOT NULL,
@@ -88,7 +90,7 @@ class ExperimentFeatureExtractor:
                     PRIMARY KEY (segment_id, decimation_factor, data_type_id, amplitude_processing_method_id, experiment_feature_set_id, feature_set_feature_id),
                     FOREIGN KEY (segment_id) REFERENCES data_segments(segment_id) ON DELETE CASCADE,
                     FOREIGN KEY (data_type_id) REFERENCES ml_data_types_lut(data_type_id),
-                    FOREIGN KEY (amplitude_processing_method_id) REFERENCES ml_experiments_amplitude_methods(experiment_amplitude_id) ON DELETE CASCADE,
+                    FOREIGN KEY (amplitude_processing_method_id) REFERENCES ml_amplitude_normalization_lut(method_id),
                     FOREIGN KEY (experiment_feature_set_id) REFERENCES ml_experiments_feature_sets(experiment_feature_set_id) ON DELETE CASCADE,
                     FOREIGN KEY (feature_set_feature_id) REFERENCES ml_feature_set_features(feature_set_feature_id) ON DELETE CASCADE,
                     FOREIGN KEY (extraction_status_id) REFERENCES ml_extraction_status_lut(status_id)
