@@ -3,15 +3,15 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_100000
-File version: 2.0.3.8
+Date Revised: 20251012_103000
+File version: 2.0.3.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 8)
+- CHANGE: Tracks changes within current commit cycle (currently 9)
 
 Changes in this commit (3):
 1. Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -22,6 +22,7 @@ Changes in this commit (3):
 6. Fixed attribute name: current_experiment_id → current_experiment
 7. CRITICAL: Fixed amplitude_processing_method_id to store method_id not experiment_amplitude_id
 8. Added BIGSERIAL id column and fixed foreign key reference in feature_fileset table
+9. Added bash command execution with ! prefix (e.g., !ls, !rm, !python3)
 
 Previous commit (2) changes:
 - Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
@@ -29,7 +30,7 @@ Previous commit (2) changes:
 """
 
 # Version tracking
-VERSION = "2.0.3.8"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.9"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -437,18 +438,42 @@ class MLDPShell:
             try:
                 # Get user input
                 text = self.session.prompt()
-                
+
                 if not text.strip():
                     continue
-                
+
+                # Check for bash command (starts with !)
+                if text.strip().startswith('!'):
+                    bash_cmd = text.strip()[1:].strip()
+                    if bash_cmd:
+                        try:
+                            result = subprocess.run(
+                                bash_cmd,
+                                shell=True,
+                                capture_output=True,
+                                text=True,
+                                timeout=300  # 5 minute timeout
+                            )
+                            if result.stdout:
+                                print(result.stdout, end='')
+                            if result.stderr:
+                                print(result.stderr, end='', file=sys.stderr)
+                            if result.returncode != 0:
+                                print(f"⚠️  Command exited with code {result.returncode}")
+                        except subprocess.TimeoutExpired:
+                            print("❌ Command timed out after 5 minutes")
+                        except Exception as e:
+                            print(f"❌ Error executing bash command: {e}")
+                    continue
+
                 # Parse command
                 parts = shlex.split(text)
                 if not parts:
                     continue
-                
+
                 cmd = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
-                
+
                 # Execute command
                 if cmd in self.commands:
                     self.commands[cmd](args)
@@ -1627,12 +1652,21 @@ class MLDPShell:
   help [command]                      Show help
   exit/quit                           Exit shell
 
+⚡ BASH COMMANDS:
+  !<command>                          Execute bash command (e.g., !ls, !python3 script.py)
+  Examples:
+    !ls -la                           List files in current directory
+    !rm -rf /path/to/files/*          Remove files
+    !python3 -c "import numpy"        Run Python code
+    !find . -name "*.npy"             Find files
+
 💡 TIPS:
   • Use Tab for command completion
   • Use ↑/↓ arrows for command history
   • Current settings shown in prompt: mldp[exp18:l2]>
   • SQL queries support all PostgreSQL syntax
   • Export supports .csv and .json formats
+  • Bash commands timeout after 5 minutes
 """)
     
     def cmd_select_segments(self, args):
