@@ -3,12 +3,13 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251011_000000
-File version: 1.2.0.1
+Date Revised: 20251012_020000
+File version: 1.2.0.2
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
              Added tqdm progress bar
+             Fixed multi-feature extraction to extract all features × all amplitude methods
 """
 
 import psycopg2
