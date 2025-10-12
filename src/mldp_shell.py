@@ -7315,6 +7315,8 @@ class MLDPShell:
             print("  --data-types <list>      Override data types (RAW,ADC14,ADC12,ADC10,ADC8,ADC6)")
             print("  --decimations <list>     Override decimation factors (0=none, comma-separated)")
             print("  --max-segments N         Maximum segments to process")
+            print("  --clean                  Delete progress file and regenerate all segments")
+            print("  --workers N              Number of parallel workers (default: 1)")
             print("\nNote: If no --data-types or --decimations are specified, uses experiment config.")
             print("\nExamples:")
             print("  generate-segment-fileset")
@@ -7358,6 +7360,8 @@ class MLDPShell:
         data_types = None  # Will use experiment config if not specified
         decimations = None  # Will use experiment config if not specified
         max_segments = None
+        clean_mode = False
+        workers = 1
         use_experiment_config = True
 
         i = arg_offset
@@ -7373,6 +7377,12 @@ class MLDPShell:
             elif args[i] == '--max-segments' and i + 1 < len(args):
                 max_segments = int(args[i + 1])
                 i += 2
+            elif args[i] == '--clean':
+                clean_mode = True
+                i += 1
+            elif args[i] == '--workers' and i + 1 < len(args):
+                workers = int(args[i + 1])
+                i += 2
             else:
                 i += 1
 
@@ -7386,6 +7396,7 @@ class MLDPShell:
 
         try:
             from experiment_segment_fileset_generator_v2 import ExperimentSegmentFilesetGeneratorV2
+            from pathlib import Path
 
             # Database configuration
             db_config = {
@@ -7394,6 +7405,31 @@ class MLDPShell:
                 'database': 'arc_detection',
                 'user': 'kjensen'
             }
+
+            # Handle --clean flag: delete progress file before creating generator
+            if clean_mode:
+                # Determine segment path (same logic as generator __init__)
+                import psycopg2
+                conn = psycopg2.connect(**db_config)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT segment_data_base_path
+                    FROM ml_experiments
+                    WHERE experiment_id = %s
+                """, (experiment_id,))
+                result = cursor.fetchone()
+                cursor.close()
+                conn.close()
+
+                if result and result[0]:
+                    segment_path = Path(result[0])
+                else:
+                    segment_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/segment_files')
+
+                progress_file = segment_path / 'generation_progress.json'
+                if progress_file.exists():
+                    progress_file.unlink()
+                    print(f"🗑️  Deleted progress file: {progress_file}")
 
             # Create generator
             generator = ExperimentSegmentFilesetGeneratorV2(experiment_id, db_config)
@@ -7408,7 +7444,7 @@ class MLDPShell:
                 data_types=data_types,  # None = use experiment config
                 decimations=decimations,  # None = use experiment config
                 max_segments=max_segments,
-                parallel_workers=1
+                parallel_workers=workers
             )
 
             if result.get('files_created', 0) > 0:
