@@ -3,20 +3,21 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_110000
-File version: 2.0.4.0
+Date Revised: 20251012_120000
+File version: 2.0.4.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 4)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
 Changes in this commit (4):
 1. Added transaction rollback on database errors in generate-feature-fileset
 2. Prevents "current transaction is aborted" error cascade
 3. Added proper error handling with psycopg2.Error catching
+4. Fixed feature-plot to show only CONFIGURED amplitude methods (not all methods)
 
 Previous commit (3) changes:
 - Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -30,7 +31,7 @@ Previous commit (3) changes:
 """
 
 # Version tracking
-VERSION = "2.0.4.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.4.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -8099,13 +8100,15 @@ class MLDPShell:
                 """, (feature_set_id,))
                 features = cursor.fetchall()
 
-                # Get amplitude methods (ALL methods from segment file, not just configured)
-                # This shows what the CURRENT file contains (before regeneration)
+                # Get CONFIGURED amplitude methods for this experiment
+                # Feature files should only contain configured methods
                 cursor.execute("""
-                    SELECT method_id, method_name
-                    FROM ml_amplitude_normalization_lut
-                    ORDER BY method_id
-                """)
+                    SELECT eam.method_id, am.method_name
+                    FROM ml_experiments_amplitude_methods eam
+                    JOIN ml_amplitude_normalization_lut am ON eam.method_id = am.method_id
+                    WHERE eam.experiment_id = %s
+                    ORDER BY eam.method_id
+                """, (self.current_experiment,))
                 all_amplitude_methods = cursor.fetchall()
 
                 cursor.close()

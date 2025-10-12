@@ -3,8 +3,8 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251012_100000
-File version: 1.2.0.5
+Date Revised: 20251012_110000
+File version: 1.2.0.6
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -92,7 +92,7 @@ class ExperimentFeatureExtractor:
                     FOREIGN KEY (data_type_id) REFERENCES ml_data_types_lut(data_type_id),
                     FOREIGN KEY (amplitude_processing_method_id) REFERENCES ml_amplitude_normalization_lut(method_id),
                     FOREIGN KEY (experiment_feature_set_id) REFERENCES ml_experiments_feature_sets(experiment_feature_set_id) ON DELETE CASCADE,
-                    FOREIGN KEY (feature_set_feature_id) REFERENCES ml_feature_set_features(feature_set_feature_id) ON DELETE CASCADE,
+                    FOREIGN KEY (feature_set_feature_id) REFERENCES ml_features_lut(feature_id) ON DELETE CASCADE,
                     FOREIGN KEY (extraction_status_id) REFERENCES ml_extraction_status_lut(status_id)
                 )
             """)
@@ -492,8 +492,9 @@ class ExperimentFeatureExtractor:
                         experiment_feature_set_id = self._get_experiment_feature_set_id(fs_id)
                         decimation_factor = int(meta['division'].replace('D', ''))
 
-                        # Get feature_set_feature_id values for this feature set
-                        feature_set_feature_ids = [f['feature_set_feature_id'] for f in fs['features']]
+                        # Get feature_id values for this feature set
+                        # NOTE: Column is named feature_set_feature_id but stores feature_id from ml_features_lut
+                        feature_set_feature_ids = [f['feature_id'] for f in fs['features']]
 
                         # Check if already exists (using in-memory set for speed)
                         # Check if ALL (amplitude_method, feature) combinations exist
