@@ -24,7 +24,7 @@ Previous commit (2) changes:
 """
 
 # Version tracking
-VERSION = "2.0.3.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
