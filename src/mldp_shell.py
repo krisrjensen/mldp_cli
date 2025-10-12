@@ -3,21 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_060000
-File version: 2.0.3.4
+Date Revised: 20251012_070000
+File version: 2.0.3.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
 Changes in this commit (3):
 1. Fixed multi-feature extraction in experiment_feature_extractor.py
 2. Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
 3. Fixed feature extractor to use only CONFIGURED amplitude methods (not all methods from segment file)
 4. Fixed feature-plot command to expand tilde (~) in paths
+5. Added database-driven column labels to feature-plot showing feature names and amplitude methods
 
 Previous commit (2) changes:
 - Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
@@ -25,7 +26,7 @@ Previous commit (2) changes:
 """
 
 # Version tracking
-VERSION = "2.0.3.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -8024,10 +8025,67 @@ class MLDPShell:
             return
 
         filename = file_path.name
+
+        # Parse feature set ID from filename (e.g., FS0001)
+        import re
+        fs_match = re.search(r'_FS(\d+)', filename)
+        feature_set_id = int(fs_match.group(1)) if fs_match else None
+
+        # Get column labels from database
+        column_labels = []
+        if self.db_conn and feature_set_id and self.current_experiment_id:
+            try:
+                cursor = self.db_conn.cursor()
+
+                # Get feature set features
+                cursor.execute("""
+                    SELECT
+                        f.feature_name,
+                        fsf.feature_order
+                    FROM ml_feature_set_features fsf
+                    JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                    WHERE fsf.feature_set_id = %s
+                    ORDER BY fsf.feature_order
+                """, (feature_set_id,))
+                features = cursor.fetchall()
+
+                # Get amplitude methods (ALL methods from segment file, not just configured)
+                # This shows what the CURRENT file contains (before regeneration)
+                cursor.execute("""
+                    SELECT method_id, method_name
+                    FROM ml_amplitude_normalization_lut
+                    ORDER BY method_id
+                """)
+                all_amplitude_methods = cursor.fetchall()
+
+                cursor.close()
+
+                # Build labels based on extraction column order: [feat0_amp0, feat0_amp1, feat1_amp0, ...]
+                for feat_name, feat_order in features:
+                    for method_id, method_name in all_amplitude_methods:
+                        column_labels.append(f"{feat_name} ({method_name})")
+                        if len(column_labels) >= data.shape[1]:
+                            break
+                    if len(column_labels) >= data.shape[1]:
+                        break
+
+            except Exception as e:
+                print(f"⚠️  Warning: Could not fetch labels from database: {e}")
+                column_labels = [f"Feature {i}" for i in range(data.shape[1])]
+        else:
+            column_labels = [f"Feature {i}" for i in range(data.shape[1])]
+
+        # Pad labels if needed
+        while len(column_labels) < data.shape[1]:
+            column_labels.append(f"Feature {len(column_labels)}")
+
         print(f"\n📊 Feature File: {filename}")
         print(f"   Shape: {data.shape}")
         print(f"   Windows: {data.shape[0]:,}")
-        print(f"   Features: {data.shape[1]}")
+        print(f"   Columns: {data.shape[1]}")
+        print(f"\n   Column Labels:")
+        for i, label in enumerate(column_labels[:data.shape[1]]):
+            print(f"     Column {i}: {label}")
         print()
 
         # Create plot
@@ -8040,7 +8098,7 @@ class MLDPShell:
         for i in range(data.shape[1]):
             color = colors[i % len(colors)]
             axes[i].plot(data[:, i], linewidth=1, color=color)
-            axes[i].set_ylabel(f'Feature {i}', fontsize=10, fontweight='bold')
+            axes[i].set_ylabel(column_labels[i], fontsize=10, fontweight='bold')
             axes[i].grid(True, alpha=0.3, linestyle='--')
 
             # Add statistics
@@ -8055,7 +8113,7 @@ class MLDPShell:
                         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
                         fontsize=8)
 
-        axes[-1].set_xlabel('Window', fontsize=12, fontweight='bold')
+        axes[-1].set_xlabel('Sample Index', fontsize=12, fontweight='bold')
         plt.suptitle(f'Feature File: {filename}', fontsize=14, fontweight='bold')
         plt.tight_layout()
 
