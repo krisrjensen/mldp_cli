@@ -3,14 +3,15 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251012_050000
-File version: 1.2.0.3
+Date Revised: 20251012_090000
+File version: 1.2.0.4
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
              Added tqdm progress bar
              Fixed multi-feature extraction to extract all features × all amplitude methods
              Fixed to use only CONFIGURED amplitude methods in feature file output
+             Fixed to store method_id (not experiment_amplitude_id) in database
 """
 
 import psycopg2
@@ -423,8 +424,9 @@ class ExperimentFeatureExtractor:
             segment_metadata = segment_metadata[:max_segments]
             logger.info(f"Limited to {max_segments:,} files")
 
-        # Get amplitude method IDs for this experiment
-        amplitude_method_ids = self._get_amplitude_method_ids()
+        # Get amplitude method IDs for this experiment (actual method_id values: 0, 1, 2)
+        # NOT junction table IDs - these go into the database column
+        amplitude_method_ids = self._get_configured_amplitude_method_ids()
         logger.info(f"Amplitude methods configured: {len(amplitude_method_ids)}")
 
         # Get feature sets with overrides
