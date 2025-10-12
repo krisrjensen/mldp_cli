@@ -3,19 +3,20 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_030000
-File version: 2.0.3.2
+Date Revised: 20251012_050000
+File version: 2.0.3.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
 Changes in this commit (3):
 1. Fixed multi-feature extraction in experiment_feature_extractor.py
 2. Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
+3. Fixed feature extractor to use only CONFIGURED amplitude methods (not all methods from segment file)
 
 Previous commit (2) changes:
 - Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start

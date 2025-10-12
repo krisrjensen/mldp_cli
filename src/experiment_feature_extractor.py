@@ -3,13 +3,14 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251012_020000
-File version: 1.2.0.2
+Date Revised: 20251012_050000
+File version: 1.2.0.3
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
              Added tqdm progress bar
              Fixed multi-feature extraction to extract all features × all amplitude methods
+             Fixed to use only CONFIGURED amplitude methods in feature file output
 """
 
 import psycopg2
@@ -237,6 +238,32 @@ class ExperimentFeatureExtractor:
                 FROM ml_experiments_amplitude_methods
                 WHERE experiment_id = %s
                 ORDER BY experiment_amplitude_id
+            """, (self.experiment_id,))
+
+            results = cursor.fetchall()
+            if not results:
+                raise ValueError(f"No amplitude methods configured for experiment {self.experiment_id}")
+
+            return [row[0] for row in results]
+        finally:
+            cursor.close()
+
+    def _get_configured_amplitude_method_ids(self) -> List[int]:
+        """Get list of method_id values configured for this experiment
+
+        These are the actual amplitude method IDs (0=raw, 1=minmax, 2=zscore)
+        that are configured, NOT the experiment_amplitude_id junction table IDs.
+
+        Returns:
+            List of method_id values from ml_amplitude_normalization_lut
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT method_id
+                FROM ml_experiments_amplitude_methods
+                WHERE experiment_id = %s
+                ORDER BY method_id
             """, (self.experiment_id,))
 
             results = cursor.fetchall()
@@ -946,15 +973,26 @@ class ExperimentFeatureExtractor:
         # Column order: [feat0_amp0, feat0_amp1, feat1_amp0, feat1_amp1, ...]
         all_outputs = []
 
+        # Get configured amplitude method IDs (e.g., [1, 2] for minmax and zscore)
+        # These are the method_id values that should be in the output
+        configured_method_ids = self._get_configured_amplitude_method_ids()
+
         for feat in feature_set_config['features']:
             channel_spec = feat['effective_channel']
             n_value = feat['effective_n_value']
 
-            # Extract this feature for all amplitude methods
+            # Extract this feature for ONLY CONFIGURED amplitude methods
             feature_amplitude_outputs = []
 
-            for method_idx in sorted(amplitude_data.keys()):
-                method_data = amplitude_data[method_idx]
+            for method_id in configured_method_ids:
+                # Verify this method was extracted from segment file
+                if method_id not in amplitude_data:
+                    raise ValueError(
+                        f"Configured method_id={method_id} not found in segment file. "
+                        f"Available methods: {list(amplitude_data.keys())}"
+                    )
+
+                method_data = amplitude_data[method_id]
 
                 # Load or compute channel data from THIS amplitude method
                 channel_data = self._load_channel_data(method_data, channel_spec)
@@ -983,15 +1021,16 @@ class ExperimentFeatureExtractor:
             # Add all amplitude method columns for this feature
             all_outputs.extend(feature_amplitude_outputs)
 
-        # Stack all columns: features × amplitude_methods
-        # Final shape: (segment_length, num_features * num_amplitude_methods)
+        # Stack all columns: features × configured_amplitude_methods
+        # Final shape: (segment_length, num_features * num_configured_amplitude_methods)
         output = np.column_stack(all_outputs)
         num_features = len(feature_set_config['features'])
+        num_configured_methods = len(configured_method_ids)
 
         logger.debug(
             f"Extracted feature set {feature_set_config['feature_set_name']}: "
-            f"shape {output.shape} (length × {num_amplitude_methods} amplitude methods), "
-            f"windowing={windowing_strategy}"
+            f"shape {output.shape} (length × {num_configured_methods} configured amplitude methods), "
+            f"windowing={windowing_strategy}, method_ids={configured_method_ids}"
         )
 
         return output
