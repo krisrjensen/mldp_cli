@@ -3,9 +3,10 @@
 Filename: mldp
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20250901_240000
-File version: 0.0.0.1
+Date Revised: 20251011_000000
+File version: 0.0.0.2
 Description: Main launcher for MLDP CLI - supports both command and shell modes
+             Routes --connect and --experiment flags to interactive shell
 """
 
 import sys
@@ -18,7 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 def main():
     """Main entry point that routes to appropriate interface"""
-    
+
+    # Check if shell-specific flags are present
+    shell_flags = {'--connect', '--experiment'}
+    has_shell_flags = any(arg in shell_flags or arg.startswith('--experiment=') for arg in sys.argv[1:])
+
     # If no arguments provided, launch interactive shell
     if len(sys.argv) == 1:
         try:
@@ -32,21 +37,25 @@ def main():
             print()
             from interactive_cli import main as basic_shell_main
             basic_shell_main()
-    
-    # Check for shell mode explicitly
-    elif len(sys.argv) == 2 and sys.argv[1] in ['shell', 'interactive', 'repl']:
+
+    # Check for shell mode explicitly or shell-specific flags
+    elif (len(sys.argv) >= 2 and sys.argv[1] in ['shell', 'interactive', 'repl']) or has_shell_flags:
+        # Remove 'shell' keyword if present so shell's argparse can process remaining args
+        if len(sys.argv) >= 2 and sys.argv[1] in ['shell', 'interactive', 'repl']:
+            sys.argv.pop(1)
+
         try:
             from mldp_shell import main as shell_main
             shell_main()
         except ImportError:
             from interactive_cli import main as basic_shell_main
             basic_shell_main()
-    
+
     # Check for basic shell mode
     elif len(sys.argv) == 2 and sys.argv[1] == 'basic-shell':
         from interactive_cli import main as basic_shell_main
         basic_shell_main()
-    
+
     # Otherwise use Click CLI for command mode
     else:
         from cli import cli
