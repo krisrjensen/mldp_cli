@@ -4,10 +4,11 @@ Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
 Date Revised: 20251011_000000
-File version: 1.2.0.0
+File version: 1.2.0.1
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
+             Added tqdm progress bar
 """
 
 import psycopg2
@@ -19,6 +20,7 @@ from pathlib import Path
 import json
 import subprocess
 from datetime import datetime
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -437,98 +439,84 @@ class ExperimentFeatureExtractor:
         failed_extractions = []
         start_time = datetime.now()
 
-        # Progress tracking
-        print(f"\n📊 Progress:")
+        # Progress tracking with tqdm
+        print(f"\n📊 Starting feature extraction:")
         print(f"   Total segment files: {len(segment_metadata):,}")
         print(f"   Feature sets per file: {len(feature_sets)}")
-        print(f"   Total extractions: {total_work:,}")
-        print()
+        print(f"   Total extractions: {total_work:,}\n")
 
-        # Process each segment file
-        for i, meta in enumerate(segment_metadata):
-            # Update progress every 100 files
-            if i % 100 == 0:
-                pct = 100 * i / len(segment_metadata)
-                elapsed = (datetime.now() - start_time).total_seconds()
+        # Process each segment file with progress bar
+        with tqdm(total=len(segment_metadata), desc="Extracting features", unit="file") as pbar:
+            for i, meta in enumerate(segment_metadata):
+                seg_path = str(meta['path'])
 
-                # Calculate rate and ETA
-                if i > 0:
-                    rate = total_extracted / elapsed
-                    remaining = total_work - total_extracted
-                    eta_seconds = remaining / rate if rate > 0 else 0
-                    eta_minutes = eta_seconds / 60
+                for fs in feature_sets:
+                    fs_id = fs['feature_set_id']
+                    fs_name = fs['feature_set_name']
 
-                    print(f"\r   Files: {i:>6,}/{len(segment_metadata):,} ({pct:5.1f}%) | "
-                          f"Extracted: {total_extracted:>8,}/{total_work:,} | "
-                          f"Rate: {rate:6.1f}/s | "
-                          f"ETA: {eta_minutes:5.1f}m   ", end='', flush=True)
+                    try:
+                        # Convert to normalized IDs once per iteration
+                        data_type_id = self._get_data_type_id(meta['adc_type'])
+                        experiment_feature_set_id = self._get_experiment_feature_set_id(fs_id)
+                        decimation_factor = int(meta['division'].replace('D', ''))
 
-            seg_path = str(meta['path'])
+                        # Get feature_set_feature_id values for this feature set
+                        feature_set_feature_ids = [f['feature_set_feature_id'] for f in fs['features']]
 
-            for fs in feature_sets:
-                fs_id = fs['feature_set_id']
-                fs_name = fs['feature_set_name']
+                        # Check if already exists (using in-memory set for speed)
+                        # Check if ALL (amplitude_method, feature) combinations exist
+                        if not force_reextract:
+                            all_exist = all(
+                                (meta['segment_id'], decimation_factor, data_type_id, amp_id, experiment_feature_set_id, feat_id) in existing_extractions
+                                for amp_id in amplitude_method_ids
+                                for feat_id in feature_set_feature_ids
+                            )
+                            if all_exist:
+                                continue
 
-                try:
-                    # Convert to normalized IDs once per iteration
-                    data_type_id = self._get_data_type_id(meta['adc_type'])
-                    experiment_feature_set_id = self._get_experiment_feature_set_id(fs_id)
-                    decimation_factor = int(meta['division'].replace('D', ''))
+                        start_time = datetime.now()
 
-                    # Get feature_set_feature_id values for this feature set
-                    feature_set_feature_ids = [f['feature_set_feature_id'] for f in fs['features']]
+                        # Extract features
+                        feature_array = self._extract_feature_set_from_segment(seg_path, fs)
 
-                    # Check if already exists (using in-memory set for speed)
-                    # Check if ALL (amplitude_method, feature) combinations exist
-                    if not force_reextract:
-                        all_exist = all(
-                            (meta['segment_id'], decimation_factor, data_type_id, amp_id, experiment_feature_set_id, feat_id) in existing_extractions
-                            for amp_id in amplitude_method_ids
-                            for feat_id in feature_set_feature_ids
+                        # Determine output path (mirror structure)
+                        output_path = self._get_feature_output_path(
+                            seg_path,
+                            fs_id,
+                            fs['set_n_value']
                         )
-                        if all_exist:
-                            continue
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    start_time = datetime.now()
+                        # Save
+                        np.save(output_path, feature_array)
 
-                    # Extract features
-                    feature_array = self._extract_feature_set_from_segment(seg_path, fs)
+                        # Record to database with normalized schema (one row per amplitude_method × feature)
+                        extraction_time = (datetime.now() - start_time).total_seconds()
 
-                    # Determine output path (mirror structure)
-                    output_path = self._get_feature_output_path(
-                        seg_path,
-                        fs_id,
-                        fs['set_n_value']
-                    )
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                        self._store_extraction_result(
+                            segment_id=meta['segment_id'],
+                            decimation_factor=decimation_factor,
+                            data_type_id=data_type_id,
+                            amplitude_method_ids=amplitude_method_ids,
+                            experiment_feature_set_id=experiment_feature_set_id,
+                            feature_set_feature_ids=feature_set_feature_ids,
+                            feature_file_path=str(output_path),
+                            extraction_time=extraction_time
+                        )
 
-                    # Save
-                    np.save(output_path, feature_array)
+                        total_extracted += 1
+                        extraction_times.append(extraction_time)
 
-                    # Record to database with normalized schema (one row per amplitude_method × feature)
-                    extraction_time = (datetime.now() - start_time).total_seconds()
+                    except Exception as e:
+                        logger.error(f"Failed: {seg_path}, set {fs_name}: {e}")
+                        failed_extractions.append({
+                            'segment_id': meta['segment_id'],
+                            'feature_set_id': fs_id,
+                            'error': str(e)
+                        })
 
-                    self._store_extraction_result(
-                        segment_id=meta['segment_id'],
-                        decimation_factor=decimation_factor,
-                        data_type_id=data_type_id,
-                        amplitude_method_ids=amplitude_method_ids,
-                        experiment_feature_set_id=experiment_feature_set_id,
-                        feature_set_feature_ids=feature_set_feature_ids,
-                        feature_file_path=str(output_path),
-                        extraction_time=extraction_time
-                    )
-
-                    total_extracted += 1
-                    extraction_times.append(extraction_time)
-
-                except Exception as e:
-                    logger.error(f"Failed: {seg_path}, set {fs_name}: {e}")
-                    failed_extractions.append({
-                        'segment_id': meta['segment_id'],
-                        'feature_set_id': fs_id,
-                        'error': str(e)
-                    })
+                # Update progress bar after processing all feature sets for this segment
+                pbar.update(1)
 
         # Final progress update
         print()  # New line after progress bar
@@ -892,109 +880,117 @@ class ExperimentFeatureExtractor:
         feature_set_config: Dict
     ) -> np.ndarray:
         """
-        Extract complete feature set from a segment file
+        Extract complete feature set from a segment file FOR ALL AMPLITUDE METHODS
 
         Args:
-            segment_file_path: Path to segment .npz file
+            segment_file_path: Path to segment .npy file
             feature_set_config: Config from _get_feature_set_with_overrides()
                                Must include 'windowing_strategy' key
 
         Returns:
-            Array of shape (segment_length, num_features)
+            Array of shape (segment_length, num_amplitude_methods)
+            Each column represents the feature computed from that amplitude method
         """
-        # Load raw segment data (always load both channels)
+        # Load segment data
         seg_data = np.load(segment_file_path)
 
-        # Check if it's a .npz archive or plain .npy array
+        # Parse segment file to extract ALL amplitude-processed data
+        # Build dict: {amplitude_method_index: {'load_voltage': array, 'source_current': array}}
+        amplitude_data = {}
+
         if isinstance(seg_data, np.lib.npyio.NpzFile):
-            # .npz file with named arrays
-            raw_data = {
-                'source_current': seg_data['source_current'],
-                'load_voltage': seg_data['load_voltage']
-            }
-        else:
-            # .npy file with 2D array
-            if len(seg_data.shape) == 2:
-                if seg_data.shape[1] == 2:
-                    # Legacy 2-column format (raw voltage, current only)
-                    raw_data = {
-                        'load_voltage': seg_data[:, 0],
-                        'source_current': seg_data[:, 1]
+            # .npz format - not yet supported for multi-amplitude
+            raise NotImplementedError("Multi-amplitude .npz format not yet supported")
+
+        elif len(seg_data.shape) == 2:
+            if seg_data.shape[1] == 2:
+                # Legacy 2-column format (raw only)
+                # Only method index 0 available
+                amplitude_data[0] = {
+                    'load_voltage': seg_data[:, 0],
+                    'source_current': seg_data[:, 1]
+                }
+            elif seg_data.shape[1] >= 4 and seg_data.shape[1] % 2 == 0:
+                # Multi-column format with amplitude processing
+                # Format: [amp0_V, amp0_I, amp1_V, amp1_I, amp2_V, amp2_I, ...]
+                # Each pair represents voltage and current for that amplitude method
+                num_amplitude_methods = seg_data.shape[1] // 2
+
+                for method_idx in range(num_amplitude_methods):
+                    col_v = method_idx * 2
+                    col_i = method_idx * 2 + 1
+                    amplitude_data[method_idx] = {
+                        'load_voltage': seg_data[:, col_v],
+                        'source_current': seg_data[:, col_i]
                     }
-                elif seg_data.shape[1] >= 6:
-                    # New multi-column format with amplitude processing
-                    # Columns: [raw_voltage, raw_current, amp1_voltage, amp1_current, amp2_voltage, amp2_current, ...]
-                    # Use raw columns (0-1) as base, store all amplitude-processed columns
-                    raw_data = {
-                        'load_voltage': seg_data[:, 0],
-                        'source_current': seg_data[:, 1]
-                    }
-                    # Store amplitude-processed columns for later use
-                    # Format: amplitude_<method_index>_<channel>
-                    num_amplitude_methods = (seg_data.shape[1] - 2) // 2
-                    for i in range(num_amplitude_methods):
-                        col_start = 2 + (i * 2)
-                        raw_data[f'amplitude_{i}_voltage'] = seg_data[:, col_start]
-                        raw_data[f'amplitude_{i}_current'] = seg_data[:, col_start + 1]
-                else:
-                    raise ValueError(
-                        f"Unexpected segment file format: shape {seg_data.shape}. "
-                        f"Expected (N, 2) for legacy or (N, 6+) for amplitude-processed"
-                    )
             else:
                 raise ValueError(
-                    f"Unexpected segment file format: shape {seg_data.shape}. "
-                    f"Expected 2D array"
+                    f"Unexpected segment file shape: {seg_data.shape}. "
+                    f"Expected (N, 2) for legacy or (N, even_number>=4) for multi-amplitude"
                 )
+        else:
+            raise ValueError(
+                f"Unexpected segment dimensions: {seg_data.shape}. "
+                f"Expected 2D array"
+            )
 
-        segment_length = len(raw_data['source_current'])
+        segment_length = len(amplitude_data[0]['source_current'])
+        num_amplitude_methods = len(amplitude_data)
 
         # Get windowing strategy
         windowing_strategy = feature_set_config.get('windowing_strategy', 'non_overlapping')
 
-        # Extract each feature in order
-        feature_outputs = []
+        # Extract features for EACH feature, then for EACH amplitude method
+        # Output will be shape (segment_length, num_features * num_amplitude_methods)
+        # Column order: [feat0_amp0, feat0_amp1, feat1_amp0, feat1_amp1, ...]
+        all_outputs = []
 
         for feat in feature_set_config['features']:
-            # Get effective channel and n-value
             channel_spec = feat['effective_channel']
             n_value = feat['effective_n_value']
 
-            # Load or compute channel data
-            channel_data = self._load_channel_data(raw_data, channel_spec)
+            # Extract this feature for all amplitude methods
+            feature_amplitude_outputs = []
 
-            # Handle multi-channel case (backward compatibility)
-            if isinstance(channel_data, dict):
-                # Old multi-channel format - use first channel
-                channel_data = channel_data['source_current']
+            for method_idx in sorted(amplitude_data.keys()):
+                method_data = amplitude_data[method_idx]
 
-            # Extract feature (returns array of length segment_length)
-            feature_output = self._extract_single_feature(
-                channel_data,
-                feat,
-                n_value,
-                windowing_strategy
-            )
+                # Load or compute channel data from THIS amplitude method
+                channel_data = self._load_channel_data(method_data, channel_spec)
 
-            # Verify length
-            if len(feature_output) != segment_length:
-                raise ValueError(
-                    f"Feature {feat['feature_name']} output length {len(feature_output)} "
-                    f"!= segment length {segment_length}"
+                # Handle multi-channel case
+                if isinstance(channel_data, dict):
+                    channel_data = channel_data['source_current']
+
+                # Extract feature
+                feature_output = self._extract_single_feature(
+                    channel_data,
+                    feat,
+                    n_value,
+                    windowing_strategy
                 )
 
-            feature_outputs.append(feature_output)
+                # Verify length
+                if len(feature_output) != segment_length:
+                    raise ValueError(
+                        f"Feature {feat['feature_name']} output length {len(feature_output)} "
+                        f"!= segment length {segment_length}"
+                    )
 
-        # Stack features horizontally
-        if len(feature_outputs) == 1:
-            output = feature_outputs[0].reshape(-1, 1)
-        else:
-            output = np.column_stack(feature_outputs)
+                feature_amplitude_outputs.append(feature_output)
 
-        # Final shape: (segment_length, num_features)
+            # Add all amplitude method columns for this feature
+            all_outputs.extend(feature_amplitude_outputs)
+
+        # Stack all columns: features × amplitude_methods
+        # Final shape: (segment_length, num_features * num_amplitude_methods)
+        output = np.column_stack(all_outputs)
+        num_features = len(feature_set_config['features'])
+
         logger.debug(
             f"Extracted feature set {feature_set_config['feature_set_name']}: "
-            f"shape {output.shape}, windowing={windowing_strategy}"
+            f"shape {output.shape} (length × {num_amplitude_methods} amplitude methods), "
+            f"windowing={windowing_strategy}"
         )
 
         return output
