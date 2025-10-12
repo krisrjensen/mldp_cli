@@ -15,7 +15,7 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 """
 
 # Version tracking
-VERSION = "2.0.3.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -6450,9 +6450,6 @@ class MLDPShell:
             )
             manager.start()
 
-            # Don't wait for it - let it run in background
-            # User can exit shell and process continues
-
             print(f"🚀 Distance insertion started in background")
             print(f"   Experiment: {self.current_experiment}")
             print(f"   Workers: {workers}")
@@ -6462,12 +6459,84 @@ class MLDPShell:
             print(f"   Batch size: {batch_size}")
             if log_file:
                 print(f"   Log file: {log_file}")
-            print(f"\n📊 Monitor progress:")
-            print(f"   mpcctl-distance-insert --status")
-            print(f"\n⏸️  Control:")
-            print(f"   mpcctl-distance-insert --pause")
-            print(f"   mpcctl-distance-insert --continue")
-            print(f"   mpcctl-distance-insert --stop")
+            print(f"\n⏳ Waiting for manager to initialize...")
+
+            # Wait for state file to be created
+            import time
+            import json
+            state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/distance_insert/state.json')
+            max_wait = 10  # seconds
+            waited = 0
+            while not state_file.exists() and waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
+
+            if not state_file.exists():
+                print(f"⚠️  State file not created yet. Monitor progress with:")
+                print(f"   mpcctl-distance-insert --status")
+                return
+
+            print(f"\n📊 Live Progress Monitor (Press Ctrl+C to detach)\n")
+
+            # Live progress monitoring loop
+            try:
+                last_status = None
+                while True:
+                    try:
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
+
+                        status = state.get('status', 'unknown')
+                        prog = state.get('progress', {})
+
+                        # Progress bar
+                        bar_width = 50
+                        percent = prog.get('percent_complete', 0)
+                        filled = int(bar_width * percent / 100)
+                        bar = '█' * filled + '░' * (bar_width - filled)
+
+                        # Format ETA
+                        eta_seconds = prog.get('estimated_time_remaining_seconds', 0)
+                        eta_minutes = eta_seconds // 60
+                        eta_seconds_remainder = eta_seconds % 60
+
+                        # Clear previous output (move cursor up and clear lines)
+                        if last_status is not None:
+                            # Move cursor up 7 lines and clear to end of screen
+                            print('\033[7A\033[J', end='')
+
+                        # Display progress
+                        print(f"Status: {status}")
+                        print(f"[{bar}] {percent:.1f}%")
+                        print(f"Completed: {prog.get('completed_files', 0):,} / {prog.get('total_files', 0):,} files")
+                        print(f"Records inserted: {prog.get('records_inserted', 0):,}")
+                        if 'files_per_second' in prog:
+                            print(f"Rate: {prog.get('files_per_second', 0):.1f} files/sec")
+                        print(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                        print(f"Workers: {state.get('workers_count', 0)}")
+
+                        last_status = status
+
+                        # Check if completed or stopped
+                        if status in ['completed', 'stopped', 'killed']:
+                            print(f"\n✅ Insertion {status}")
+                            break
+
+                        time.sleep(1.0)
+
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        # State file might be being written
+                        time.sleep(0.5)
+                        continue
+
+            except KeyboardInterrupt:
+                print(f"\n\n⏸️  Detached from monitoring (insertion continues in background)")
+                print(f"\n📊 Monitor progress:")
+                print(f"   mpcctl-distance-insert --status")
+                print(f"\n⏸️  Control:")
+                print(f"   mpcctl-distance-insert --pause")
+                print(f"   mpcctl-distance-insert --continue")
+                print(f"   mpcctl-distance-insert --stop")
 
         elif '--status' in args:
             # Show status from state file
