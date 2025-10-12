@@ -3,9 +3,11 @@
 Filename: experiment_segment_selector_v2.py
 Author(s): Kristophor Jensen
 Date Created: 20250920_183000
-Date Revised: 20250920_183000
-File version: 1.0.0.0
+Date Revised: 20251011_000000
+File version: 1.0.0.2
 Description: Corrected segment selection with proper per-segment-code-type logic
+             Filters segments by experiment-configured segment sizes
+             Fixed table names: ml_experiments_segment_sizes, ml_segment_sizes_lut
 """
 
 import logging
@@ -40,11 +42,30 @@ class SegmentSelectorV2:
 
         # Configuration
         self.random_seed = 42
+        self.segment_sizes = None  # Will be loaded from experiment config
 
     def connect(self):
         """Establish database connection"""
         self.conn = psycopg2.connect(**self.db_config)
         self.cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+
+    def load_experiment_config(self):
+        """Load experiment configuration including segment sizes"""
+        self.cursor.execute("""
+            SELECT DISTINCT ss.segment_size_n
+            FROM ml_experiments_segment_sizes ess
+            JOIN ml_segment_sizes_lut ss ON ess.segment_size_id = ss.segment_size_id
+            WHERE ess.experiment_id = %s
+            ORDER BY ss.segment_size_n
+        """, (self.experiment_id,))
+
+        self.segment_sizes = [row['segment_size_n'] for row in self.cursor.fetchall()]
+
+        if not self.segment_sizes:
+            self.logger.warning(f"No segment sizes configured for experiment {self.experiment_id}")
+            self.logger.warning("Will select segments of ALL sizes")
+        else:
+            self.logger.info(f"Configured segment sizes: {self.segment_sizes}")
 
     def disconnect(self):
         """Close database connection"""
@@ -66,25 +87,52 @@ class SegmentSelectorV2:
     def get_file_segments_grouped(self, file_id: int) -> Dict[str, List[Dict]]:
         """
         Get all segments for a file, grouped by segment code type.
+        Filters by configured segment sizes if available.
 
         Returns:
             Dictionary mapping segment code type to list of segments
         """
-        self.cursor.execute("""
-            SELECT
-                s.segment_id,
-                s.experiment_file_id as file_id,
-                s.beginning_index as start_index,
-                s.segment_length,
-                s.segment_type,
-                s.segment_id_code,
-                s.segment_label_id
-            FROM data_segments s
-            WHERE s.experiment_file_id = %s
-                AND s.enabled = true
-                AND s.segment_id_code IS NOT NULL
-            ORDER BY s.beginning_index
-        """, (file_id,))
+        # Build query with optional segment size filter
+        if self.segment_sizes:
+            # Filter by configured segment sizes
+            size_placeholders = ','.join(['%s'] * len(self.segment_sizes))
+            query = f"""
+                SELECT
+                    s.segment_id,
+                    s.experiment_file_id as file_id,
+                    s.beginning_index as start_index,
+                    s.segment_length,
+                    s.segment_type,
+                    s.segment_id_code,
+                    s.segment_label_id
+                FROM data_segments s
+                WHERE s.experiment_file_id = %s
+                    AND s.enabled = true
+                    AND s.segment_id_code IS NOT NULL
+                    AND s.segment_length IN ({size_placeholders})
+                ORDER BY s.beginning_index
+            """
+            params = (file_id,) + tuple(self.segment_sizes)
+        else:
+            # No size filter - select all sizes
+            query = """
+                SELECT
+                    s.segment_id,
+                    s.experiment_file_id as file_id,
+                    s.beginning_index as start_index,
+                    s.segment_length,
+                    s.segment_type,
+                    s.segment_id_code,
+                    s.segment_label_id
+                FROM data_segments s
+                WHERE s.experiment_file_id = %s
+                    AND s.enabled = true
+                    AND s.segment_id_code IS NOT NULL
+                ORDER BY s.beginning_index
+            """
+            params = (file_id,)
+
+        self.cursor.execute(query, params)
 
         segments_by_type = {}
 
@@ -214,6 +262,9 @@ class SegmentSelectorV2:
         self.connect()
 
         try:
+            # Load experiment configuration (segment sizes)
+            self.load_experiment_config()
+
             # Set random seed
             random.seed(self.random_seed)
 

@@ -3,8 +3,8 @@
 Filename: experiment_segment_pair_generator_v2.py
 Author(s): Kristophor Jensen
 Date Created: 20250920_200000
-Date Revised: 20250920_200000
-File version: 1.0.0.0
+Date Revised: 20251011_000000
+File version: 1.0.0.1
 Description: Generate segment pairs compatible with v2 segment selector
 """
 
@@ -120,10 +120,10 @@ class ExperimentSegmentPairGeneratorV2:
             cursor.close()
 
     def get_selected_segments(self) -> List[Dict]:
-        """Get all selected segments for this experiment"""
+        """Get all selected segments for this experiment with segment_length"""
         cursor = self.db_conn.cursor(cursor_factory=RealDictCursor)
         try:
-            # Query compatible with v2 segment selector table structure
+            # Query with segment_length from data_segments for length matching
             cursor.execute(f"""
                 SELECT
                     st.segment_id,
@@ -133,8 +133,10 @@ class ExperimentSegmentPairGeneratorV2:
                     st.segment_label_id,
                     st.file_label_id,
                     st.segment_index,
-                    st.selection_order
+                    st.selection_order,
+                    ds.segment_length
                 FROM {self.segment_table} st
+                JOIN data_segments ds ON st.segment_id = ds.segment_id
                 WHERE st.experiment_id = %s
                 ORDER BY st.selection_order
             """, (self.experiment_id,))
@@ -143,6 +145,13 @@ class ExperimentSegmentPairGeneratorV2:
 
             if not segments:
                 logger.warning(f"No segments found in {self.segment_table}")
+            else:
+                # Log segment length distribution
+                lengths = {}
+                for seg in segments:
+                    length = seg.get('segment_length', 'unknown')
+                    lengths[length] = lengths.get(length, 0) + 1
+                logger.info(f"Segment length distribution: {', '.join(f'{k}={v}' for k,v in sorted(lengths.items()))}")
 
             return segments
 
@@ -161,7 +170,8 @@ class ExperimentSegmentPairGeneratorV2:
         Generate segment pairs based on strategy
 
         Args:
-            strategy: Pairing strategy ('all_combinations', 'balanced', 'random_sample', 'code_type_balanced')
+            strategy: Pairing strategy ('all_combinations', 'match_lengths_all_combinations',
+                     'balanced', 'random_sample', 'code_type_balanced')
             max_pairs_per_segment: Maximum pairs per segment (for sampling strategies)
             same_label_ratio: Ratio of same-label pairs (for balanced strategy)
             seed: Random seed for reproducibility
@@ -189,6 +199,8 @@ class ExperimentSegmentPairGeneratorV2:
         # Generate pairs based on strategy
         if strategy == 'all_combinations':
             pairs = self._generate_all_combinations(segments)
+        elif strategy == 'match_lengths_all_combinations':
+            pairs = self._generate_match_lengths_all_combinations(segments)
         elif strategy == 'balanced':
             pairs = self._generate_balanced_pairs(segments, max_pairs_per_segment, same_label_ratio)
         elif strategy == 'code_type_balanced':
@@ -248,6 +260,69 @@ class ExperimentSegmentPairGeneratorV2:
                 ))
 
         logger.info(f"Generated {len(pairs)} pairs from {len(segments)} segments")
+        return pairs
+
+    def _generate_match_lengths_all_combinations(self, segments: List[Dict]) -> List[Tuple]:
+        """Generate all possible segment pairs, but only for segments with matching lengths
+
+        This ensures that distance calculations compare segments of the same size,
+        which is critical for meaningful analysis. Segments of different lengths
+        cannot be meaningfully compared in most distance metrics.
+        """
+        pairs = []
+
+        # Group segments by length
+        segments_by_length = {}
+        for seg in segments:
+            length = seg.get('segment_length')
+            if length is None:
+                logger.warning(f"Segment {seg.get('segment_id')} has no length, skipping")
+                continue
+            if length not in segments_by_length:
+                segments_by_length[length] = []
+            segments_by_length[length].append(seg)
+
+        logger.info(f"Grouping by length: {', '.join(f'{k}={len(v)}' for k,v in sorted(segments_by_length.items()))}")
+
+        # Generate all combinations within each length group
+        total_pairs = 0
+        for length, length_segments in segments_by_length.items():
+            length_pairs = 0
+            for i in range(len(length_segments)):
+                for j in range(i + 1, len(length_segments)):
+                    seg1 = length_segments[i]
+                    seg2 = length_segments[j]
+
+                    is_same_segment_label = seg1.get('segment_label_id') == seg2.get('segment_label_id')
+                    is_same_file_label = seg1.get('file_label_id') == seg2.get('file_label_id')
+                    is_same_code_type = seg1.get('segment_code_type') == seg2.get('segment_code_type')
+
+                    # Determine pair type
+                    if is_same_code_type and is_same_segment_label:
+                        pair_type = 'same_type_same_label'
+                    elif is_same_code_type:
+                        pair_type = 'same_type_diff_label'
+                    elif is_same_segment_label:
+                        pair_type = 'diff_type_same_label'
+                    else:
+                        pair_type = 'diff_type_diff_label'
+
+                    pairs.append((
+                        seg1['segment_id'], seg2['segment_id'],
+                        seg1['file_id'], seg2['file_id'],
+                        seg1.get('segment_code_type'), seg2.get('segment_code_type'),
+                        seg1.get('segment_code_number'), seg2.get('segment_code_number'),
+                        seg1.get('segment_label_id'), seg2.get('segment_label_id'),
+                        seg1.get('file_label_id'), seg2.get('file_label_id'),
+                        is_same_segment_label, is_same_file_label, is_same_code_type,
+                        pair_type
+                    ))
+                    length_pairs += 1
+
+            logger.info(f"Generated {length_pairs} pairs for length {length} ({len(length_segments)} segments)")
+            total_pairs += length_pairs
+
+        logger.info(f"Generated {total_pairs} length-matched pairs from {len(segments)} segments across {len(segments_by_length)} length groups")
         return pairs
 
     def _generate_balanced_pairs(self, segments: List[Dict],
@@ -576,8 +651,8 @@ def main():
 
     parser = argparse.ArgumentParser(description='Generate segment pairs for ML training')
     parser.add_argument('experiment_id', type=int, help='Experiment ID')
-    parser.add_argument('--strategy', default='all_combinations',
-                       choices=['all_combinations', 'balanced', 'code_type_balanced', 'random_sample'],
+    parser.add_argument('--strategy', default='match_lengths_all_combinations',
+                       choices=['all_combinations', 'match_lengths_all_combinations', 'balanced', 'code_type_balanced', 'random_sample'],
                        help='Pairing strategy')
     parser.add_argument('--max-pairs-per-segment', type=int, default=None,
                        help='Maximum pairs per segment (for sampling strategies)')
