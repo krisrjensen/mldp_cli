@@ -3,34 +3,34 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_103000
-File version: 2.0.3.9
+Date Revised: 20251012_110000
+File version: 2.0.4.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 9)
+- COMMIT: Increments on every git commit/push (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this commit (3):
-1. Fixed multi-feature extraction in experiment_feature_extractor.py
-2. Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
-3. Fixed feature extractor to use only CONFIGURED amplitude methods (not all methods from segment file)
-4. Fixed feature-plot command to expand tilde (~) in paths
-5. Added database-driven column labels to feature-plot showing feature names and amplitude methods
-6. Fixed attribute name: current_experiment_id → current_experiment
-7. CRITICAL: Fixed amplitude_processing_method_id to store method_id not experiment_amplitude_id
-8. Added BIGSERIAL id column and fixed foreign key reference in feature_fileset table
-9. Added bash command execution with ! prefix (e.g., !ls, !rm, !python3)
+Changes in this commit (4):
+1. Added transaction rollback on database errors in generate-feature-fileset
+2. Prevents "current transaction is aborted" error cascade
+3. Added proper error handling with psycopg2.Error catching
 
-Previous commit (2) changes:
-- Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
-- Added --clean and --workers flags to generate-segment-fileset
+Previous commit (3) changes:
+- Fixed multi-feature extraction in experiment_feature_extractor.py
+- Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
+- Fixed feature extractor to use only CONFIGURED amplitude methods
+- Fixed feature-plot command to expand tilde (~) in paths
+- Added database-driven column labels to feature-plot
+- Fixed amplitude_processing_method_id to store method_id not experiment_amplitude_id
+- Added BIGSERIAL id column and fixed foreign key reference
+- Added bash command execution with ! prefix
 """
 
 # Version tracking
-VERSION = "2.0.3.9"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.4.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -7151,37 +7151,50 @@ class MLDPShell:
         print(f"📋 FEATURE EXTRACTION PLAN - Experiment {self.current_experiment}")
         print(f"{'='*80}\n")
 
-        # Query configuration
-        cursor = self.db_conn.cursor()
-
-        # Get segment file count
+        # Query configuration with proper error handling
         try:
-            segment_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/segment_files')
-            segment_file_count = len(list(segment_path.glob('**/*.npy'))) if segment_path.exists() else 0
-        except:
-            segment_file_count = 0
+            # Rollback any existing transaction errors
+            self.db_conn.rollback()
 
-        # Get feature set info
-        if feature_set_ids:
-            placeholders = ','.join(['%s'] * len(feature_set_ids))
-            cursor.execute(f"""
-                SELECT fs.feature_set_id, fs.feature_set_name
-                FROM ml_experiments_feature_sets efs
-                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
-                WHERE efs.experiment_id = %s AND fs.feature_set_id IN ({placeholders})
-                ORDER BY fs.feature_set_id
-            """, (self.current_experiment, *feature_set_ids))
-        else:
-            cursor.execute("""
-                SELECT fs.feature_set_id, fs.feature_set_name
-                FROM ml_experiments_feature_sets efs
-                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
-                WHERE efs.experiment_id = %s AND efs.is_active = true
-                ORDER BY fs.feature_set_id
-            """, (self.current_experiment,))
+            cursor = self.db_conn.cursor()
 
-        feature_sets = cursor.fetchall()
-        cursor.close()
+            # Get segment file count
+            try:
+                segment_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/segment_files')
+                segment_file_count = len(list(segment_path.glob('**/*.npy'))) if segment_path.exists() else 0
+            except:
+                segment_file_count = 0
+
+            # Get feature set info
+            if feature_set_ids:
+                placeholders = ','.join(['%s'] * len(feature_set_ids))
+                cursor.execute(f"""
+                    SELECT fs.feature_set_id, fs.feature_set_name
+                    FROM ml_experiments_feature_sets efs
+                    JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                    WHERE efs.experiment_id = %s AND fs.feature_set_id IN ({placeholders})
+                    ORDER BY fs.feature_set_id
+                """, (self.current_experiment, *feature_set_ids))
+            else:
+                cursor.execute("""
+                    SELECT fs.feature_set_id, fs.feature_set_name
+                    FROM ml_experiments_feature_sets efs
+                    JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                    WHERE efs.experiment_id = %s AND efs.is_active = true
+                    ORDER BY fs.feature_set_id
+                """, (self.current_experiment,))
+
+            feature_sets = cursor.fetchall()
+            cursor.close()
+
+        except psycopg2.Error as e:
+            print(f"\n❌ Database error: {e}")
+            print(f"⚠️  Rolling back transaction...")
+            self.db_conn.rollback()
+            return
+        except Exception as e:
+            print(f"\n❌ Error during configuration query: {e}")
+            return
 
         print(f"📊 Input:")
         print(f"   Segment files available: {segment_file_count:,}")
