@@ -3,21 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_120000
-File version: 2.0.4.1
+Date Revised: 20251012_140000
+File version: 2.0.4.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 4)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
 Changes in this commit (4):
 1. Added transaction rollback on database errors in generate-feature-fileset
 2. Prevents "current transaction is aborted" error cascade
 3. Added proper error handling with psycopg2.Error catching
 4. Fixed feature-plot to show only CONFIGURED amplitude methods (not all methods)
+5. Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
 
 Previous commit (3) changes:
 - Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -31,7 +32,7 @@ Previous commit (3) changes:
 """
 
 # Version tracking
-VERSION = "2.0.4.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.4.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
