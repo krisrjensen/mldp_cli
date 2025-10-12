@@ -6010,14 +6010,12 @@ class MLDPShell:
                         print("   Expected format: --feature_sets 1,2,3,4,5")
                         return
 
-            # Show mode
-            print(f"\n🔄 Mode: {'--clean (starting fresh)' if clean_mode else '--resume (continuing existing)'}")
-
             # Import required modules
             import multiprocessing as mp
             from pathlib import Path
             from datetime import datetime
             import sys
+            import psycopg2
             sys.path.insert(0, '/Users/kjensen/Documents/GitHub/mldp/mldp_distance')
             from mpcctl_cli_distance_calculator import manager_process
 
@@ -6031,6 +6029,97 @@ class MLDPShell:
 
             feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/feature_files')
             mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}')
+
+            # Show pre-flight plan
+            print(f"\n{'='*80}")
+            print(f"📋 DISTANCE CALCULATION PLAN - Experiment {self.current_experiment}")
+            print(f"{'='*80}\n")
+
+            # Query configuration
+            conn = psycopg2.connect(**db_config)
+            cursor = conn.cursor()
+
+            # Get pair count
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM experiment_{self.current_experiment:03d}_segment_pairs
+                """)
+                total_pairs = cursor.fetchone()[0]
+            except:
+                total_pairs = 0
+
+            # Get feature file count
+            feature_file_count = len(list(feature_base_path.glob('**/*.npy'))) if feature_base_path.exists() else 0
+
+            # Get distance functions
+            cursor.execute("""
+                SELECT df.function_name, df.display_name
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+                ORDER BY df.function_name
+            """, (self.current_experiment,))
+            distance_functions = cursor.fetchall()
+
+            # Get amplitude methods
+            cursor.execute("""
+                SELECT method_name
+                FROM ml_experiments_amplitude_methods eam
+                JOIN ml_amplitude_normalization_lut am ON eam.method_id = am.method_id
+                WHERE eam.experiment_id = %s
+                ORDER BY eam.method_id
+            """, (self.current_experiment,))
+            amplitude_methods = [row[0] for row in cursor.fetchall()]
+
+            cursor.close()
+            conn.close()
+
+            print(f"📊 Configuration:")
+            print(f"   Mode: {'--clean (starting fresh)' if clean_mode else '--resume (continuing existing)'}")
+            print(f"   Workers: {workers}")
+            if feature_set_filter:
+                print(f"   Feature sets: {feature_set_filter} (filtered)")
+            else:
+                print(f"   Feature sets: All configured sets")
+
+            print(f"\n📁 Input:")
+            print(f"   Total pairs: {total_pairs:,}")
+            print(f"   Feature files: {feature_file_count:,}")
+
+            print(f"\n🎯 Distance Functions ({len(distance_functions)}):")
+            for func_name, display_name in distance_functions:
+                print(f"   - {display_name} ({func_name})")
+
+            print(f"\n📐 Amplitude Methods ({len(amplitude_methods)}):")
+            for method in amplitude_methods:
+                print(f"   - {method}")
+
+            # Calculate total computations
+            pairs_to_compute = total_pairs if clean_mode else 0  # Resume mode = unknown remaining
+            computations_per_pair = len(distance_functions) * len(amplitude_methods)
+            if clean_mode:
+                total_computations = pairs_to_compute * computations_per_pair
+                print(f"\n📄 Expected Computations:")
+                print(f"   {total_pairs:,} pairs × {len(distance_functions)} functions × {len(amplitude_methods)} methods")
+                print(f"   = {total_computations:,} total distance calculations")
+            else:
+                print(f"\n📄 Resume Mode:")
+                print(f"   Will continue from existing progress")
+
+            print(f"\n💾 Output:")
+            print(f"   .processed/{'{'}function_name{'}'}/worker_*_distance_{'{'}function_name{'}'}_batch_*.npy")
+            if clean_mode:
+                print(f"   ⚠️  Existing .mpcctl and .processed directories will be deleted")
+
+            print(f"\n{'='*80}\n")
+
+            # Confirmation prompt
+            response = input("Do you wish to continue? (Y/n): ").strip().lower()
+            if response and response != 'y':
+                print("❌ Cancelled")
+                return
+
+            print(f"\n🚀 Starting distance calculation...\n")
 
             # Create log file if requested
             log_file = None
@@ -6422,6 +6511,7 @@ class MLDPShell:
             from pathlib import Path
             from datetime import datetime
             import sys
+            import psycopg2
             sys.path.insert(0, '/Users/kjensen/Documents/GitHub/mldp/mldp_distance')
             from mpcctl_distance_db_insert import manager_process
 
@@ -6435,6 +6525,92 @@ class MLDPShell:
 
             processed_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.processed')
             mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}')
+
+            # Show pre-flight plan
+            print(f"\n{'='*80}")
+            print(f"📋 DISTANCE INSERTION PLAN - Experiment {self.current_experiment}")
+            print(f"{'='*80}\n")
+
+            # Count distance files in .processed directory
+            distance_file_counts = {}
+            total_files = 0
+            if processed_dir.exists():
+                for dist_dir in processed_dir.iterdir():
+                    if dist_dir.is_dir():
+                        file_count = len(list(dist_dir.glob('*.npy')))
+                        distance_file_counts[dist_dir.name] = file_count
+                        total_files += file_count
+
+            # Query database for current record counts
+            conn = psycopg2.connect(**db_config)
+            cursor = conn.cursor()
+
+            # Get distance functions
+            cursor.execute("""
+                SELECT df.function_name, df.display_name, df.result_table_prefix
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+                ORDER BY df.function_name
+            """, (self.current_experiment,))
+            distance_functions = cursor.fetchall()
+
+            # Get current record counts in database
+            db_record_counts = {}
+            for func_name, display_name, table_prefix in distance_functions:
+                table_name = f"experiment_{self.current_experiment:03d}_distance_{func_name}"
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    count = cursor.fetchone()[0]
+                    db_record_counts[func_name] = count
+                except:
+                    db_record_counts[func_name] = 0
+
+            cursor.close()
+            conn.close()
+
+            print(f"📊 Configuration:")
+            print(f"   Workers: {workers}")
+            print(f"   Method: {method.upper()} {'(fast, PostgreSQL COPY)' if method == 'copy' else '(safe, INSERT with ON CONFLICT)'}")
+            print(f"   Batch size: {batch_size} files")
+            if distances:
+                print(f"   Distance functions: {distances} (filtered)")
+            else:
+                print(f"   Distance functions: All configured")
+
+            print(f"\n📁 Input (.processed directory):")
+            if distance_file_counts:
+                for func_name, count in sorted(distance_file_counts.items()):
+                    print(f"   {func_name}: {count:,} files")
+                print(f"   Total files: {total_files:,}")
+            else:
+                print(f"   ⚠️  No distance files found in {processed_dir}")
+
+            print(f"\n💾 Current Database Records:")
+            for func_name, display_name, table_prefix in distance_functions:
+                count = db_record_counts.get(func_name, 0)
+                table_name = f"experiment_{self.current_experiment:03d}_distance_{func_name}"
+                print(f"   {display_name} ({table_name}): {count:,} records")
+
+            if method == 'copy':
+                print(f"\n⚠️  WARNING: COPY method will fail if:")
+                print(f"   - Distance tables already contain data")
+                print(f"   - Distance files contain duplicate keys")
+                print(f"   Use INSERT method for safer incremental inserts")
+
+            print(f"\n📄 Expected Action:")
+            print(f"   Process {total_files:,} distance files from .processed/")
+            print(f"   Insert records into 4 distance tables")
+
+            print(f"\n{'='*80}\n")
+
+            # Confirmation prompt
+            response = input("Do you wish to continue? (Y/n): ").strip().lower()
+            if response and response != 'y':
+                print("❌ Cancelled")
+                return
+
+            print(f"\n🚀 Starting distance insertion...\n")
 
             # Create log file if requested
             log_file = None
@@ -6922,17 +7098,71 @@ class MLDPShell:
             self.cmd_clean_feature_files([])
             print()
 
-        print(f"🔄 Generating feature files for experiment {self.current_experiment}...")
+        # Show pre-flight plan
+        print(f"\n{'='*80}")
+        print(f"📋 FEATURE EXTRACTION PLAN - Experiment {self.current_experiment}")
+        print(f"{'='*80}\n")
+
+        # Query configuration
+        cursor = self.db_conn.cursor()
+
+        # Get segment file count
+        try:
+            segment_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/segment_files')
+            segment_file_count = len(list(segment_path.glob('**/*.npy'))) if segment_path.exists() else 0
+        except:
+            segment_file_count = 0
+
+        # Get feature set info
         if feature_set_ids:
-            print(f"   Feature sets: {feature_set_ids}")
+            placeholders = ','.join(['%s'] * len(feature_set_ids))
+            cursor.execute(f"""
+                SELECT fs.feature_set_id, fs.feature_set_name
+                FROM ml_experiments_feature_sets efs
+                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                WHERE efs.experiment_id = %s AND fs.feature_set_id IN ({placeholders})
+                ORDER BY fs.feature_set_id
+            """, (self.current_experiment, *feature_set_ids))
         else:
-            print(f"   Feature sets: All configured sets")
+            cursor.execute("""
+                SELECT fs.feature_set_id, fs.feature_set_name
+                FROM ml_experiments_feature_sets efs
+                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                WHERE efs.experiment_id = %s AND efs.is_active = true
+                ORDER BY fs.feature_set_id
+            """, (self.current_experiment,))
+
+        feature_sets = cursor.fetchall()
+        cursor.close()
+
+        print(f"📊 Input:")
+        print(f"   Segment files available: {segment_file_count:,}")
         if max_segments:
-            print(f"   Max segment files: {max_segments:,}")
+            print(f"   Will process: {max_segments:,} files (limited)")
         else:
-            print(f"   Max segment files: All")
+            print(f"   Will process: All {segment_file_count:,} files")
+
+        print(f"\n🎯 Feature Sets to Extract ({len(feature_sets)}):")
+        for fs_id, fs_name in feature_sets:
+            print(f"   - ID {fs_id}: {fs_name}")
+
+        print(f"\n📄 Expected Output:")
+        files_to_create = (max_segments if max_segments else segment_file_count) * len(feature_sets)
+        print(f"   Feature files to create: ~{files_to_create:,}")
         if force_reextract:
-            print(f"   Mode: Force re-extraction")
+            print(f"   Mode: FORCE re-extraction (will overwrite existing)")
+        else:
+            print(f"   Mode: Skip existing files")
+
+        print(f"\n{'='*80}\n")
+
+        # Confirmation prompt
+        response = input("Do you wish to continue? (Y/n): ").strip().lower()
+        if response and response != 'y':
+            print("❌ Cancelled")
+            return
+
+        print(f"\n🔄 Starting feature extraction...")
 
         try:
             # Import the feature extractor module
