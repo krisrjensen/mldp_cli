@@ -3,19 +3,27 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251011_000000
-File version: 2.0.2.9
+Date Revised: 20251012_030000
+File version: 2.0.3.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 2)
-- CHANGE: Increments on every code modification (currently 9)
+- COMMIT: Increments on every git commit/push (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
+
+Changes in this commit (3):
+1. Fixed multi-feature extraction in experiment_feature_extractor.py
+2. Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
+
+Previous commit (2) changes:
+- Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
+- Added --clean and --workers flags to generate-segment-fileset
 """
 
 # Version tracking
-VERSION = "2.0.3.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
