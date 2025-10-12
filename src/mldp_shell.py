@@ -3,34 +3,31 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_170000
-File version: 2.0.6.1
+Date Revised: 20251012_171500
+File version: 2.0.6.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (6.1):
-1. Added --force flag to mpcctl-execute-experiment for automated execution
-   - Skips confirmation prompt when --force is set
-   - Allows fully unattended pipeline execution
-   - Updated help text and command completion
-   - Added example showing --force usage
+Changes in this version (6.2):
+1. Fixed clean-files to skip gracefully if ml_experiments_training_files doesn't exist
+2. Fixed clean-segments to skip data_segments cleanup if table dependency unavailable
+3. Added distance_insert/state.json cleanup to clean-distance-work-files
+4. Improved automated execution compatibility with --force flag
 
-Changes in previous version (6.0):
-Phase 7: Execution Pipeline
-- Added mpcctl-execute-experiment command (NEW: complete pipeline execution)
-- Executes full MPCCTL pipeline from file selection to distance insertion
-- Supports --workers N, --log, --verbose flags
-- Supports skip flags for each step
-- Tracks execution time for each step and provides comprehensive summary
+These fixes ensure clean-experiment --force works without errors when
+ml_experiments_training_files table doesn't exist (feature not yet implemented).
+
+Changes in previous version (6.1):
+- Added --force flag to mpcctl-execute-experiment for automated execution
 """
 
 # Version tracking
-VERSION = "2.0.6.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -5653,6 +5650,8 @@ class MLDPShell:
             - .mpcctl_state.json
             - .mpcctl/ directory
             - .processed/ directory
+            - distance_insert/state.json
+            - distance_insert/ directory (if empty)
 
         These files are created during distance calculation and can be
         safely deleted after distances are computed and inserted into the database.
@@ -5717,6 +5716,8 @@ class MLDPShell:
         state_file = experiment_root / '.mpcctl_state.json'
         mpcctl_dir = experiment_root / '.mpcctl'
         processed_dir = experiment_root / '.processed'
+        distance_insert_dir = experiment_root / 'distance_insert'
+        distance_insert_state = distance_insert_dir / 'state.json'
 
         items_to_delete = []
         total_size = 0
@@ -5737,6 +5738,19 @@ class MLDPShell:
             file_count = len(list(processed_dir.glob('**/*')))
             items_to_delete.append(('.processed/', processed_dir, dir_size, f'directory ({file_count} files)'))
             total_size += dir_size
+
+        if distance_insert_dir.exists() and distance_insert_state.exists():
+            size = distance_insert_state.stat().st_size
+            items_to_delete.append(('distance_insert/state.json', distance_insert_state, size, 'file'))
+            total_size += size
+
+        if distance_insert_dir.exists() and distance_insert_dir.is_dir():
+            # Check if directory would be empty after state.json deletion
+            remaining_files = [f for f in distance_insert_dir.glob('*') if f != distance_insert_state]
+            if not remaining_files:
+                # Directory will be empty, add it to deletion list
+                items_to_delete.append(('distance_insert/', distance_insert_dir, 0, 'directory (empty)'))
+
 
         # Show what will be deleted
         if not items_to_delete:
@@ -5911,6 +5925,22 @@ class MLDPShell:
         try:
             cursor = self.db_conn.cursor()
 
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = 'ml_experiments_training_files'
+                )
+            """)
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"ℹ️  Table ml_experiments_training_files does not exist (feature not implemented)")
+                print(f"   Skipping training files cleanup")
+                cursor.close()
+                return
+
             # Get file count
             cursor.execute("""
                 SELECT COUNT(*) FROM ml_experiments_training_files
@@ -6017,27 +6047,42 @@ class MLDPShell:
             try:
                 cursor = self.db_conn.cursor()
 
+                # Check if ml_experiments_training_files table exists
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = 'ml_experiments_training_files'
+                    )
+                """)
+                training_files_table_exists = cursor.fetchone()[0]
+
                 # Get segment_pairs count
                 cursor.execute(f"""
                     SELECT COUNT(*) FROM experiment_{self.current_experiment:03d}_segment_pairs
                 """)
                 pairs_count = cursor.fetchone()[0]
 
-                # Get data_segments count
-                cursor.execute(f"""
-                    SELECT COUNT(*) FROM data_segments
-                    WHERE experiment_file_id IN (
-                        SELECT experiment_file_id FROM ml_experiments_training_files
-                        WHERE experiment_id = %s
-                    )
-                """, (self.current_experiment,))
-                segments_count = cursor.fetchone()[0]
+                # Get data_segments count (only if training_files table exists)
+                segments_count = 0
+                if training_files_table_exists:
+                    cursor.execute(f"""
+                        SELECT COUNT(*) FROM data_segments
+                        WHERE experiment_file_id IN (
+                            SELECT experiment_file_id FROM ml_experiments_training_files
+                            WHERE experiment_id = %s
+                        )
+                    """, (self.current_experiment,))
+                    segments_count = cursor.fetchone()[0]
 
                 print(f"\n{'='*80}")
                 print(f"🗑️  TRUNCATE SEGMENT TABLES - Experiment {self.current_experiment}")
                 print(f"{'='*80}\n")
                 print(f"   experiment_{self.current_experiment:03d}_segment_pairs: {pairs_count:,} rows")
-                print(f"   data_segments (exp {self.current_experiment}): {segments_count:,} rows")
+                if training_files_table_exists:
+                    print(f"   data_segments (exp {self.current_experiment}): {segments_count:,} rows")
+                else:
+                    print(f"   data_segments: skipped (ml_experiments_training_files not implemented)")
 
                 if dry_run:
                     print(f"\n🔍 DRY RUN: No tables would be truncated")
@@ -6057,16 +6102,19 @@ class MLDPShell:
                 cursor.execute(f"TRUNCATE TABLE experiment_{self.current_experiment:03d}_segment_pairs")
                 print(f"   ✅ Truncated experiment_{self.current_experiment:03d}_segment_pairs")
 
-                # Delete data_segments for this experiment
-                cursor.execute(f"""
-                    DELETE FROM data_segments
-                    WHERE experiment_file_id IN (
-                        SELECT experiment_file_id FROM ml_experiments_training_files
-                        WHERE experiment_id = %s
-                    )
-                """, (self.current_experiment,))
-                deleted = cursor.rowcount
-                print(f"   ✅ Deleted {deleted:,} rows from data_segments")
+                # Delete data_segments for this experiment (only if training_files table exists)
+                if training_files_table_exists:
+                    cursor.execute(f"""
+                        DELETE FROM data_segments
+                        WHERE experiment_file_id IN (
+                            SELECT experiment_file_id FROM ml_experiments_training_files
+                            WHERE experiment_id = %s
+                        )
+                    """, (self.current_experiment,))
+                    deleted = cursor.rowcount
+                    print(f"   ✅ Deleted {deleted:,} rows from data_segments")
+                else:
+                    print(f"   ⏭️  Skipped data_segments cleanup (table dependency not available)")
 
                 self.db_conn.commit()
                 cursor.close()
