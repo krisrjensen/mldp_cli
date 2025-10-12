@@ -3,39 +3,38 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_153000
-File version: 2.0.4.4
+Date Revised: 20251012_163000
+File version: 2.0.5.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 4)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- COMMIT: Increments on every git commit/push (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this commit (4):
-1. Added transaction rollback on database errors in generate-feature-fileset
-2. Prevents "current transaction is aborted" error cascade
-3. Added proper error handling with psycopg2.Error catching
-4. Fixed feature-plot to show only CONFIGURED amplitude methods (not all methods)
-5. Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
-6. Fixed race condition in mpcctl-distance-function: shell now deletes state file BEFORE spawning manager
-7. Fixed race condition in mpcctl-distance-insert: shell now deletes state file BEFORE spawning manager
-8. Fixed distance calculator to use feature_id instead of junction table ID (mpcctl_cli_distance_calculator.py 2.1.0.3)
+Changes in this commit (5):
+Phase 6: Comprehensive Cleanup Commands
+1. Added clean-distance-calculate command (alias to clean-distance-work-files)
+2. Added clean-features command (alias to clean-feature-files)
+3. Added clean-distance-insert command (NEW: truncate distance tables)
+4. Added clean-segments command (NEW: remove segment files + truncate segment tables)
+5. Added clean-files command (NEW: truncate training files table)
+6. Added clean-experiment command (NEW: composite cleanup for complete experiment reset)
 
-Previous commit (3) changes:
-- Fixed multi-feature extraction in experiment_feature_extractor.py
-- Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
-- Fixed feature extractor to use only CONFIGURED amplitude methods
-- Fixed feature-plot command to expand tilde (~) in paths
-- Added database-driven column labels to feature-plot
-- Fixed amplitude_processing_method_id to store method_id not experiment_amplitude_id
-- Added BIGSERIAL id column and fixed foreign key reference
-- Added bash command execution with ! prefix
+All cleanup commands support --dry-run and --force flags for safe operation.
+clean-experiment executes all cleanup commands in proper order with comprehensive error handling.
+
+Previous commit (4) changes:
+- Fixed transaction rollback on database errors in generate-feature-fileset
+- Fixed feature-plot to show only CONFIGURED amplitude methods
+- Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
+- Fixed race conditions in both mpcctl commands (shell deletes state file before spawning manager)
+- Fixed distance calculator to use feature_id instead of junction table ID
 """
 
 # Version tracking
-VERSION = "2.0.4.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.5.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -341,6 +340,14 @@ class MLDPShell:
             'add-distance-metric': self.cmd_add_distance_metric,
             'remove-distance-metric': self.cmd_remove_distance_metric,
             'clean-distance-tables': self.cmd_clean_distance_tables,
+            # Phase 6 cleanup command aliases
+            'clean-distance-calculate': self.cmd_clean_distance_work_files,  # Alias
+            'clean-features': self.cmd_clean_feature_files,  # Alias
+            # Phase 6 new cleanup commands
+            'clean-distance-insert': self.cmd_clean_distance_insert,
+            'clean-segments': self.cmd_clean_segments,
+            'clean-files': self.cmd_clean_files,
+            'clean-experiment': self.cmd_clean_experiment,
             # Distance function LUT management
             'show-distance-functions': self.cmd_show_distance_functions,
             'update-distance-function': self.cmd_update_distance_function,
@@ -5780,6 +5787,434 @@ class MLDPShell:
         print(f"\n✅ Deleted {deleted_count} items")
         if failed_count > 0:
             print(f"⚠️  Failed to delete {failed_count} items")
+
+    def cmd_clean_distance_insert(self, args):
+        """Truncate distance tables for current experiment
+
+        Usage: clean-distance-insert [options]
+
+        Options:
+            --dry-run    Show what would be truncated without actually truncating
+            --force      Skip confirmation prompt
+
+        This command TRUNCATES all configured distance result tables.
+        ALL DISTANCE DATA WILL BE DELETED - Cannot be undone!
+
+        Examples:
+            clean-distance-insert                # Interactive mode, requires confirmation
+            clean-distance-insert --dry-run      # Show what would be truncated
+            clean-distance-insert --force        # Skip confirmation
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get configured distance functions for this experiment
+            cursor.execute("""
+                SELECT df.function_name, df.result_table_prefix
+                FROM ml_experiments_distance_measurements edm
+                JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                WHERE edm.experiment_id = %s
+            """, (self.current_experiment,))
+
+            distance_funcs = cursor.fetchall()
+
+            if not distance_funcs:
+                print(f"ℹ️  No distance functions configured for experiment {self.current_experiment}")
+                return
+
+            # Build table names
+            tables = [f"experiment_{self.current_experiment:03d}_{row[1]}" for row in distance_funcs]
+
+            print(f"\n{'='*80}")
+            print(f"🗑️  TRUNCATE DISTANCE TABLES - Experiment {self.current_experiment}")
+            print(f"{'='*80}\n")
+
+            # Get record counts
+            total_records = 0
+            for table in tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = cursor.fetchone()[0]
+                total_records += count
+                print(f"   {table}: {count:,} records")
+
+            print(f"\n📊 Total records to delete: {total_records:,}")
+            print(f"\n⚠️  WARNING: This will DELETE ALL DISTANCE DATA for experiment {self.current_experiment}")
+            print(f"   This operation CANNOT be undone!")
+
+            if dry_run:
+                print(f"\n🔍 DRY RUN: No tables would be truncated")
+                cursor.close()
+                return
+
+            if not force:
+                print(f"\n❓ Type 'TRUNCATE' to confirm deletion: ", end='')
+                confirmation = input().strip()
+                if confirmation != 'TRUNCATE':
+                    print("❌ Operation cancelled")
+                    cursor.close()
+                    return
+
+            # Truncate tables
+            print(f"\n🗑️  Truncating tables...")
+            for table in tables:
+                cursor.execute(f"TRUNCATE TABLE {table}")
+                print(f"   ✅ Truncated {table}")
+
+            self.db_conn.commit()
+            cursor.close()
+
+            print(f"\n✅ Successfully truncated {len(tables)} distance tables")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"❌ Error truncating distance tables: {e}")
+
+    def cmd_clean_files(self, args):
+        """Truncate training files table for current experiment
+
+        Usage: clean-files [options]
+
+        Options:
+            --dry-run    Show what would be deleted without actually deleting
+            --force      Skip confirmation prompt
+
+        This command deletes all entries from ml_experiments_training_files
+        for the current experiment. This removes the experiment's file selection.
+
+        Examples:
+            clean-files                  # Interactive mode, requires confirmation
+            clean-files --dry-run        # Show what would be deleted
+            clean-files --force          # Skip confirmation
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get file count
+            cursor.execute("""
+                SELECT COUNT(*) FROM ml_experiments_training_files
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+            file_count = cursor.fetchone()[0]
+
+            if file_count == 0:
+                print(f"ℹ️  No training files selected for experiment {self.current_experiment}")
+                cursor.close()
+                return
+
+            print(f"\n{'='*80}")
+            print(f"🗑️  DELETE TRAINING FILE SELECTIONS - Experiment {self.current_experiment}")
+            print(f"{'='*80}\n")
+            print(f"   ml_experiments_training_files: {file_count:,} rows")
+            print(f"\n⚠️  WARNING: This will DELETE ALL FILE SELECTIONS for experiment {self.current_experiment}")
+
+            if dry_run:
+                print(f"\n🔍 DRY RUN: No rows would be deleted")
+                cursor.close()
+                return
+
+            if not force:
+                print(f"\n❓ Type 'DELETE' to confirm: ", end='')
+                confirmation = input().strip()
+                if confirmation != 'DELETE':
+                    print("❌ Operation cancelled")
+                    cursor.close()
+                    return
+
+            # Delete rows
+            print(f"\n🗑️  Deleting rows...")
+            cursor.execute("""
+                DELETE FROM ml_experiments_training_files
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+            deleted = cursor.rowcount
+
+            self.db_conn.commit()
+            cursor.close()
+
+            print(f"   ✅ Deleted {deleted:,} rows from ml_experiments_training_files")
+            print(f"\n✅ Successfully cleaned training file selections")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"❌ Error cleaning training files: {e}")
+
+    def cmd_clean_segments(self, args):
+        """Delete segment files and truncate segment tables for current experiment
+
+        Usage: clean-segments [options]
+
+        Options:
+            --dry-run              Show what would be deleted without actually deleting
+            --force                Skip confirmation prompt
+            --files-only           Delete files only, leave tables
+            --tables-only          Truncate tables only, leave files
+            --files-and-tables     Delete files AND truncate tables (default)
+
+        This command:
+        1. Deletes all segment files for the experiment
+        2. Truncates experiment_{exp}_segment_pairs table
+        3. Deletes data_segments rows for this experiment
+
+        USE WITH CAUTION - This cannot be undone!
+
+        Examples:
+            clean-segments                       # Interactive mode, files and tables
+            clean-segments --dry-run             # Show what would be deleted
+            clean-segments --files-only          # Delete files, keep tables
+            clean-segments --tables-only         # Truncate tables, keep files
+        """
+        if not self.current_experiment:
+            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        # Parse options
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+        files_only = '--files-only' in args
+        tables_only = '--tables-only' in args
+        files_and_tables = '--files-and-tables' in args
+
+        # Default: both files and tables
+        if not files_only and not tables_only and not files_and_tables:
+            files_and_tables = True
+
+        clean_files = files_only or files_and_tables
+        clean_tables = tables_only or files_and_tables
+
+        # 1. Clean segment files (using existing clean-segment-files logic)
+        if clean_files:
+            # Call existing clean_segment_files implementation
+            self.cmd_clean_segment_files(args)
+
+        # 2. Clean segment tables
+        if clean_tables:
+            if not self.db_conn:
+                print("❌ Not connected to database. Use 'connect' first.")
+                return
+
+            try:
+                cursor = self.db_conn.cursor()
+
+                # Get segment_pairs count
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM experiment_{self.current_experiment:03d}_segment_pairs
+                """)
+                pairs_count = cursor.fetchone()[0]
+
+                # Get data_segments count
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM data_segments
+                    WHERE experiment_file_id IN (
+                        SELECT experiment_file_id FROM ml_experiments_training_files
+                        WHERE experiment_id = %s
+                    )
+                """, (self.current_experiment,))
+                segments_count = cursor.fetchone()[0]
+
+                print(f"\n{'='*80}")
+                print(f"🗑️  TRUNCATE SEGMENT TABLES - Experiment {self.current_experiment}")
+                print(f"{'='*80}\n")
+                print(f"   experiment_{self.current_experiment:03d}_segment_pairs: {pairs_count:,} rows")
+                print(f"   data_segments (exp {self.current_experiment}): {segments_count:,} rows")
+
+                if dry_run:
+                    print(f"\n🔍 DRY RUN: No tables would be truncated")
+                    cursor.close()
+                    return
+
+                if not force:
+                    print(f"\n❓ Type 'TRUNCATE' to confirm deletion: ", end='')
+                    confirmation = input().strip()
+                    if confirmation != 'TRUNCATE':
+                        print("❌ Operation cancelled")
+                        cursor.close()
+                        return
+
+                # Truncate segment_pairs
+                print(f"\n🗑️  Truncating tables...")
+                cursor.execute(f"TRUNCATE TABLE experiment_{self.current_experiment:03d}_segment_pairs")
+                print(f"   ✅ Truncated experiment_{self.current_experiment:03d}_segment_pairs")
+
+                # Delete data_segments for this experiment
+                cursor.execute(f"""
+                    DELETE FROM data_segments
+                    WHERE experiment_file_id IN (
+                        SELECT experiment_file_id FROM ml_experiments_training_files
+                        WHERE experiment_id = %s
+                    )
+                """, (self.current_experiment,))
+                deleted = cursor.rowcount
+                print(f"   ✅ Deleted {deleted:,} rows from data_segments")
+
+                self.db_conn.commit()
+                cursor.close()
+
+                print(f"\n✅ Successfully cleaned segment tables")
+
+            except Exception as e:
+                self.db_conn.rollback()
+                print(f"❌ Error cleaning segment tables: {e}")
+
+    def cmd_clean_experiment(self, args):
+        """Complete experiment cleanup - removes ALL data and files
+
+        Usage: clean-experiment [options]
+
+        Options:
+            --dry-run    Show what would be deleted without actually deleting
+            --force      Skip ALL confirmation prompts (DANGEROUS!)
+
+        This command executes a complete experiment cleanup in the following order:
+            1. clean-distance-insert      (truncate distance tables)
+            2. clean-distance-calculate   (remove distance work files)
+            3. clean-features             (remove feature files and truncate table)
+            4. clean-segments             (remove segment files and truncate tables)
+            5. clean-files                (truncate training files table)
+
+        ⚠️  EXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!
+
+        After this command, the experiment will be in a clean state as if
+        it had just been created. You can then re-run the entire pipeline.
+
+        Examples:
+            clean-experiment                 # Interactive mode, confirm each step
+            clean-experiment --dry-run       # Show what would be deleted
+            clean-experiment --force         # Skip all confirmations (DANGEROUS!)
+        """
+        if not self.db_conn:
+            print("❌ Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        dry_run = '--dry-run' in args
+        force = '--force' in args
+
+        print(f"\n{'='*80}")
+        print(f"🗑️  COMPLETE EXPERIMENT CLEANUP - Experiment {self.current_experiment}")
+        print(f"{'='*80}\n")
+        print(f"This will execute the following cleanup commands:")
+        print(f"   1. clean-distance-insert      (truncate distance tables)")
+        print(f"   2. clean-distance-calculate   (remove distance work files)")
+        print(f"   3. clean-features             (remove feature files and truncate table)")
+        print(f"   4. clean-segments             (remove segment files and truncate tables)")
+        print(f"   5. clean-files                (truncate training files table)")
+        print(f"\n⚠️  EXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!")
+
+        if dry_run:
+            print(f"\n🔍 DRY RUN MODE: No data will be deleted\n")
+
+        if not force and not dry_run:
+            print(f"\n❓ Type 'DELETE ALL' to confirm complete experiment cleanup: ", end='')
+            confirmation = input().strip()
+            if confirmation != 'DELETE ALL':
+                print("❌ Operation cancelled")
+                return
+
+        # Build args for sub-commands
+        sub_args = []
+        if dry_run:
+            sub_args.append('--dry-run')
+        if force:
+            sub_args.append('--force')
+
+        success_count = 0
+        failed_commands = []
+
+        # 1. clean-distance-insert
+        print(f"\n{'='*80}")
+        print(f"Step 1/5: Cleaning distance tables...")
+        print(f"{'='*80}\n")
+        try:
+            self.cmd_clean_distance_insert(sub_args)
+            success_count += 1
+        except Exception as e:
+            print(f"❌ Error in clean-distance-insert: {e}")
+            failed_commands.append('clean-distance-insert')
+
+        # 2. clean-distance-calculate
+        print(f"\n{'='*80}")
+        print(f"Step 2/5: Cleaning distance work files...")
+        print(f"{'='*80}\n")
+        try:
+            self.cmd_clean_distance_work_files(sub_args)
+            success_count += 1
+        except Exception as e:
+            print(f"❌ Error in clean-distance-calculate: {e}")
+            failed_commands.append('clean-distance-calculate')
+
+        # 3. clean-features
+        print(f"\n{'='*80}")
+        print(f"Step 3/5: Cleaning feature files and table...")
+        print(f"{'='*80}\n")
+        try:
+            self.cmd_clean_feature_files(sub_args + ['--files-and-tables'])
+            success_count += 1
+        except Exception as e:
+            print(f"❌ Error in clean-features: {e}")
+            failed_commands.append('clean-features')
+
+        # 4. clean-segments
+        print(f"\n{'='*80}")
+        print(f"Step 4/5: Cleaning segment files and tables...")
+        print(f"{'='*80}\n")
+        try:
+            self.cmd_clean_segments(sub_args + ['--files-and-tables'])
+            success_count += 1
+        except Exception as e:
+            print(f"❌ Error in clean-segments: {e}")
+            failed_commands.append('clean-segments')
+
+        # 5. clean-files
+        print(f"\n{'='*80}")
+        print(f"Step 5/5: Cleaning training file selections...")
+        print(f"{'='*80}\n")
+        try:
+            self.cmd_clean_files(sub_args)
+            success_count += 1
+        except Exception as e:
+            print(f"❌ Error in clean-files: {e}")
+            failed_commands.append('clean-files')
+
+        # Summary
+        print(f"\n{'='*80}")
+        print(f"CLEANUP SUMMARY")
+        print(f"{'='*80}\n")
+        print(f"   Successful: {success_count}/5 commands")
+        if failed_commands:
+            print(f"   Failed: {len(failed_commands)} commands")
+            for cmd in failed_commands:
+                print(f"      - {cmd}")
+
+        if success_count == 5:
+            print(f"\n✅ Complete experiment cleanup finished successfully")
+            print(f"   Experiment {self.current_experiment} is now in a clean state")
+        else:
+            print(f"\n⚠️  Some cleanup commands failed. Check errors above.")
 
     def cmd_show_distance_functions(self, args):
         """Show all distance functions in ml_distance_functions_lut
