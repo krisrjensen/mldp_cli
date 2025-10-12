@@ -3,37 +3,34 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_165000
-File version: 2.0.6.0
+Date Revised: 20251012_170000
+File version: 2.0.6.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this commit (6):
+Changes in this version (6.1):
+1. Added --force flag to mpcctl-execute-experiment for automated execution
+   - Skips confirmation prompt when --force is set
+   - Allows fully unattended pipeline execution
+   - Updated help text and command completion
+   - Added example showing --force usage
+
+Changes in previous version (6.0):
 Phase 7: Execution Pipeline
-1. Added mpcctl-execute-experiment command (NEW: complete pipeline execution)
-   - Executes full MPCCTL pipeline from file selection to distance insertion
-   - Supports --workers N flag for parallel distance operations (default: 20)
-   - Supports --log and --verbose flags for detailed output
-   - Supports skip flags for each step (--skip-file-selection, --skip-segment-selection, etc.)
-   - Tracks execution time for each step and provides comprehensive summary
-   - 7 pipeline steps: select-files, select-segments, generate-segment-fileset,
-     generate-segment-pairs, generate-feature-fileset, mpcctl-distance-function,
-     mpcctl-distance-insert
-
-Previous commit (5) changes:
-Phase 6: Comprehensive Cleanup Commands
-- Added clean-distance-calculate, clean-features (aliases)
-- Added clean-distance-insert, clean-segments, clean-files, clean-experiment (new commands)
-- All cleanup commands support --dry-run and --force flags
+- Added mpcctl-execute-experiment command (NEW: complete pipeline execution)
+- Executes full MPCCTL pipeline from file selection to distance insertion
+- Supports --workers N, --log, --verbose flags
+- Supports skip flags for each step
+- Tracks execution time for each step and provides comprehensive summary
 """
 
 # Version tracking
-VERSION = "2.0.6.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -90,7 +87,7 @@ class MLDPCompleter(Completer):
             'insert_distances': ['--input-folder', '--distance-type', 'l1', 'l2', 'cosine', 'pearson'],
             'mpcctl-distance-function': ['--start', '--status', '--pause', '--continue', '--stop', '--workers', '--feature_sets', '--log', '--verbose'],
             'mpcctl-distance-insert': ['--start', '--status', '--pause', '--continue', '--stop', '--list-processes', '--kill', '--kill-all', '--workers', '--distances', '--method', '--batch-size', '--log', '--verbose'],
-            'mpcctl-execute-experiment': ['--workers', '--log', '--verbose', '--skip-file-selection', '--skip-segment-selection', '--skip-segment-fileset', '--skip-segment-pairs', '--skip-feature-fileset', '--skip-distance-calc', '--skip-distance-insert', '--help'],
+            'mpcctl-execute-experiment': ['--workers', '--log', '--verbose', '--force', '--skip-file-selection', '--skip-segment-selection', '--skip-segment-fileset', '--skip-segment-pairs', '--skip-feature-fileset', '--skip-distance-calc', '--skip-distance-insert', '--help'],
 
             # Visualization
             'heatmap': ['--version', '--output-dir', '1', '2', '3', '4', '5', '6', '7'],
@@ -380,13 +377,13 @@ class MLDPShell:
         print(f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║{' ' * version_padding}{version_text}{' ' * (78 - len(version_text) - version_padding)}║
-║      Machine Learning Data Processing Platform - Arc Data Version            ║
-║                         Author: Kris Jensen                                  ║
+║         Machine Learning Data Processing Platform - Arc Data Version         ║
+║                           Author: Kris Jensen                                ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  • Tab completion and auto-suggestions available                             ║
 ║  • Type 'help' for commands or 'help <command>' for details                  ║
 ║  • Current settings shown in prompt: mldp[exp18:l2]>                         ║
-║  • Type 'exit' or Ctrl-D to leave                                      ║
+║  • Type 'exit' or Ctrl-D to leave                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """)
         
@@ -7543,6 +7540,7 @@ class MLDPShell:
             --workers N         Number of worker processes for distance calculation (default: 20)
             --log               Create log files for distance calculation and insertion
             --verbose           Show verbose output during execution
+            --force             Skip confirmation prompt (DANGEROUS - for automation only!)
             --skip-file-selection       Skip select-files step
             --skip-segment-selection    Skip select-segments step
             --skip-segment-fileset      Skip generate-segment-fileset step
@@ -7565,7 +7563,7 @@ class MLDPShell:
         Examples:
             mpcctl-execute-experiment --workers 20 --log --verbose
             mpcctl-execute-experiment --workers 10 --skip-file-selection
-            mpcctl-execute-experiment --workers 4 --skip-segment-selection --skip-segment-fileset
+            mpcctl-execute-experiment --workers 20 --log --verbose --force
         """
         if not self.db_conn:
             print("❌ Not connected to database. Use 'connect' first.")
@@ -7582,6 +7580,7 @@ class MLDPShell:
             print("  --workers N                     Number of worker processes (default: 20)")
             print("  --log                           Create log files for distance operations")
             print("  --verbose                       Show verbose output")
+            print("  --force                         Skip confirmation prompt (DANGEROUS!)")
             print("  --skip-file-selection           Skip select-files step")
             print("  --skip-segment-selection        Skip select-segments step")
             print("  --skip-segment-fileset          Skip generate-segment-fileset step")
@@ -7600,12 +7599,14 @@ class MLDPShell:
             print("\nExamples:")
             print("  mpcctl-execute-experiment --workers 20 --log --verbose")
             print("  mpcctl-execute-experiment --workers 10 --skip-file-selection")
+            print("  mpcctl-execute-experiment --workers 20 --log --verbose --force")
             return
 
         # Parse options
         workers = 20
         log_enabled = '--log' in args
         verbose = '--verbose' in args
+        force = '--force' in args
         skip_file_selection = '--skip-file-selection' in args
         skip_segment_selection = '--skip-segment-selection' in args
         skip_segment_fileset = '--skip-segment-fileset' in args
@@ -7675,11 +7676,14 @@ class MLDPShell:
 
         print(f"\n{'='*80}\n")
 
-        # Confirmation prompt
-        response = input("Do you wish to continue with pipeline execution? (Y/n): ").strip().lower()
-        if response and response != 'y':
-            print("❌ Pipeline execution cancelled")
-            return
+        # Confirmation prompt (skip if --force)
+        if not force:
+            response = input("Do you wish to continue with pipeline execution? (Y/n): ").strip().lower()
+            if response and response != 'y':
+                print("❌ Pipeline execution cancelled")
+                return
+        else:
+            print("⚠️  --force flag set: Skipping confirmation prompt\n")
 
         # Execute pipeline with timing
         import time
