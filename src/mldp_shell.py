@@ -3,15 +3,15 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_140000
-File version: 2.0.4.2
+Date Revised: 20251012_150000
+File version: 2.0.4.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 4)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
 Changes in this commit (4):
 1. Added transaction rollback on database errors in generate-feature-fileset
@@ -19,6 +19,8 @@ Changes in this commit (4):
 3. Added proper error handling with psycopg2.Error catching
 4. Fixed feature-plot to show only CONFIGURED amplitude methods (not all methods)
 5. Fixed mpcctl-distance-function --clean flag to properly remove .processed and state file
+6. Fixed race condition in mpcctl-distance-function: shell now deletes state file BEFORE spawning manager
+7. Fixed race condition in mpcctl-distance-insert: shell now deletes state file BEFORE spawning manager
 
 Previous commit (3) changes:
 - Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -32,7 +34,7 @@ Previous commit (3) changes:
 """
 
 # Version tracking
-VERSION = "2.0.4.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.4.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -6171,6 +6173,18 @@ class MLDPShell:
 
             print(f"\n🚀 Starting distance calculation...\n")
 
+            # Clean up state file BEFORE spawning manager if in clean mode
+            # This prevents race condition where shell reads old state file before manager deletes it
+            if clean_mode:
+                state_file_path = mpcctl_base_dir / ".mpcctl_state.json"
+                if state_file_path.exists():
+                    try:
+                        state_file_path.unlink()
+                        print(f"🗑️  Removed old state file: {state_file_path}")
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not remove old state file: {e}")
+                        print(f"   Manager will attempt to remove it during cleanup")
+
             # Create log file if requested
             log_file = None
             if log_enabled:
@@ -6661,6 +6675,17 @@ class MLDPShell:
                 return
 
             print(f"\n🚀 Starting distance insertion...\n")
+
+            # Clean up state file BEFORE spawning manager
+            # This prevents race condition where shell reads old state file before manager deletes it
+            state_file_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/distance_insert/state.json')
+            if state_file_path.exists():
+                try:
+                    state_file_path.unlink()
+                    print(f"🗑️  Removed old state file: {state_file_path}")
+                except Exception as e:
+                    print(f"⚠️  Warning: Could not remove old state file: {e}")
+                    print(f"   Manager will attempt to remove it during cleanup")
 
             # Create log file if requested
             log_file = None
