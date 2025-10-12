@@ -3,15 +3,15 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_070000
-File version: 2.0.3.5
+Date Revised: 20251012_080000
+File version: 2.0.3.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
 Changes in this commit (3):
 1. Fixed multi-feature extraction in experiment_feature_extractor.py
@@ -19,6 +19,7 @@ Changes in this commit (3):
 3. Fixed feature extractor to use only CONFIGURED amplitude methods (not all methods from segment file)
 4. Fixed feature-plot command to expand tilde (~) in paths
 5. Added database-driven column labels to feature-plot showing feature names and amplitude methods
+6. Fixed attribute name: current_experiment_id → current_experiment
 
 Previous commit (2) changes:
 - Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
@@ -26,7 +27,7 @@ Previous commit (2) changes:
 """
 
 # Version tracking
-VERSION = "2.0.3.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.6"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -8033,7 +8034,7 @@ class MLDPShell:
 
         # Get column labels from database
         column_labels = []
-        if self.db_conn and feature_set_id and self.current_experiment_id:
+        if self.db_conn and feature_set_id and self.current_experiment:
             try:
                 cursor = self.db_conn.cursor()
 
