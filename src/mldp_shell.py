@@ -3,20 +3,21 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_050000
-File version: 2.0.3.3
+Date Revised: 20251012_060000
+File version: 2.0.3.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 3)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
 Changes in this commit (3):
 1. Fixed multi-feature extraction in experiment_feature_extractor.py
 2. Fixed multi-feature distance calculation in mpcctl_cli_distance_calculator.py
 3. Fixed feature extractor to use only CONFIGURED amplitude methods (not all methods from segment file)
+4. Fixed feature-plot command to expand tilde (~) in paths
 
 Previous commit (2) changes:
 - Added pre-flight confirmations to generate-feature-fileset, mpcctl-distance-function --start, mpcctl-distance-insert --start
@@ -24,7 +25,7 @@ Previous commit (2) changes:
 """
 
 # Version tracking
-VERSION = "2.0.3.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.3.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -8003,9 +8004,9 @@ class MLDPShell:
 
         # Determine save location
         if save_path:
-            save_location = Path(save_path)
+            save_location = Path(save_path).expanduser()
         elif output_folder:
-            output_dir = Path(output_folder)
+            output_dir = Path(output_folder).expanduser()
             output_dir.mkdir(parents=True, exist_ok=True)
             save_location = output_dir / f"{file_path.stem}_plot.png"
         else:
