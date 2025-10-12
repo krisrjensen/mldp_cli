@@ -3,31 +3,36 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_171500
-File version: 2.0.6.2
+Date Revised: 20251012_173000
+File version: 2.0.6.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
-Changes in this version (6.2):
-1. Fixed clean-files to skip gracefully if ml_experiments_training_files doesn't exist
-2. Fixed clean-segments to skip data_segments cleanup if table dependency unavailable
-3. Added distance_insert/state.json cleanup to clean-distance-work-files
-4. Improved automated execution compatibility with --force flag
+Changes in this version (6.3):
+1. Fixed clean-segment-files to support --force flag (skip confirmation)
+2. Fixed clean-files to use correct table: experiment_NNN_file_training_data
+3. Fixed clean-segments to truncate both segment tables:
+   - experiment_NNN_segment_training_data
+   - experiment_NNN_segment_pairs
+4. All cleanup commands now work correctly with --force for automation
 
-These fixes ensure clean-experiment --force works without errors when
-ml_experiments_training_files table doesn't exist (feature not yet implemented).
+Critical fixes for proper table cleanup - now truncates all 3 experiment tables:
+- experiment_NNN_file_training_data (file selections)
+- experiment_NNN_segment_training_data (segment selections)
+- experiment_NNN_segment_pairs (segment pairs)
 
-Changes in previous version (6.1):
-- Added --force flag to mpcctl-execute-experiment for automated execution
+Changes in previous version (6.2):
+- Fixed graceful skipping for non-existent tables
+- Added distance_insert/state.json cleanup
 """
 
 # Version tracking
-VERSION = "2.0.6.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -5145,6 +5150,7 @@ class MLDPShell:
 
         Options:
             --dry-run    Show what would be deleted without actually deleting
+            --force      Skip confirmation prompt
 
         This command deletes all segment files AND directories for an experiment.
         USE WITH CAUTION - This cannot be undone!
@@ -5154,10 +5160,12 @@ class MLDPShell:
         Examples:
             clean-segment-files                    # Current experiment, requires 'DELETE'
             clean-segment-files --dry-run          # Show what would be deleted
+            clean-segment-files --force            # Skip confirmation
             clean-segment-files 41                 # Delete experiment 41 segments
         """
         # Parse arguments
         dry_run = '--dry-run' in args
+        force = '--force' in args
 
         # Remove flags from args to find experiment_id
         args_clean = [a for a in args if not a.startswith('--')]
@@ -5254,17 +5262,21 @@ class MLDPShell:
                 print(f"\nWould remove {dir_count:,} directories")
             return
 
-        # ALWAYS require confirmation for destructive operations
+        # Require confirmation for destructive operations (unless --force)
         print(f"\n⚠️  WARNING: This will permanently delete:")
         if file_count > 0:
             print(f"   - {file_count:,} files ({size_gb:.2f} GB)")
         if dir_count > 0:
             print(f"   - {dir_count:,} directories")
         print(f"⚠️  This action CANNOT be undone!")
-        response = input("\nType 'DELETE' to confirm: ").strip()
-        if response != 'DELETE':
-            print("❌ Cancelled")
-            return
+
+        if not force:
+            response = input("\nType 'DELETE' to confirm: ").strip()
+            if response != 'DELETE':
+                print("❌ Cancelled")
+                return
+        else:
+            print("\n⚠️  --force flag set: Skipping confirmation")
 
         # Delete ALL files (including .DS_Store, etc.)
         if file_count > 0:
@@ -5895,7 +5907,7 @@ class MLDPShell:
             print(f"❌ Error truncating distance tables: {e}")
 
     def cmd_clean_files(self, args):
-        """Truncate training files table for current experiment
+        """Truncate file training data table for current experiment
 
         Usage: clean-files [options]
 
@@ -5903,7 +5915,7 @@ class MLDPShell:
             --dry-run    Show what would be deleted without actually deleting
             --force      Skip confirmation prompt
 
-        This command deletes all entries from ml_experiments_training_files
+        This command truncates experiment_NNN_file_training_data table
         for the current experiment. This removes the experiment's file selection.
 
         Examples:
@@ -5925,39 +5937,39 @@ class MLDPShell:
         try:
             cursor = self.db_conn.cursor()
 
-            # Check if table exists
+            # Check if experiment-specific table exists
+            table_name = f"experiment_{self.current_experiment:03d}_file_training_data"
             cursor.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
                     WHERE table_schema = 'public'
-                    AND table_name = 'ml_experiments_training_files'
+                    AND table_name = %s
                 )
-            """)
+            """, (table_name,))
             table_exists = cursor.fetchone()[0]
 
             if not table_exists:
-                print(f"ℹ️  Table ml_experiments_training_files does not exist (feature not implemented)")
-                print(f"   Skipping training files cleanup")
+                print(f"ℹ️  Table {table_name} does not exist")
+                print(f"   Skipping file training data cleanup")
                 cursor.close()
                 return
 
             # Get file count
-            cursor.execute("""
-                SELECT COUNT(*) FROM ml_experiments_training_files
-                WHERE experiment_id = %s
-            """, (self.current_experiment,))
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {table_name}
+            """)
             file_count = cursor.fetchone()[0]
 
             if file_count == 0:
-                print(f"ℹ️  No training files selected for experiment {self.current_experiment}")
+                print(f"ℹ️  No file training data for experiment {self.current_experiment}")
                 cursor.close()
                 return
 
             print(f"\n{'='*80}")
-            print(f"🗑️  DELETE TRAINING FILE SELECTIONS - Experiment {self.current_experiment}")
+            print(f"🗑️  TRUNCATE FILE TRAINING DATA - Experiment {self.current_experiment}")
             print(f"{'='*80}\n")
-            print(f"   ml_experiments_training_files: {file_count:,} rows")
-            print(f"\n⚠️  WARNING: This will DELETE ALL FILE SELECTIONS for experiment {self.current_experiment}")
+            print(f"   {table_name}: {file_count:,} rows")
+            print(f"\n⚠️  WARNING: This will TRUNCATE ALL FILE TRAINING DATA for experiment {self.current_experiment}")
 
             if dry_run:
                 print(f"\n🔍 DRY RUN: No rows would be deleted")
@@ -5965,30 +5977,26 @@ class MLDPShell:
                 return
 
             if not force:
-                print(f"\n❓ Type 'DELETE' to confirm: ", end='')
+                print(f"\n❓ Type 'TRUNCATE' to confirm: ", end='')
                 confirmation = input().strip()
-                if confirmation != 'DELETE':
+                if confirmation != 'TRUNCATE':
                     print("❌ Operation cancelled")
                     cursor.close()
                     return
 
-            # Delete rows
-            print(f"\n🗑️  Deleting rows...")
-            cursor.execute("""
-                DELETE FROM ml_experiments_training_files
-                WHERE experiment_id = %s
-            """, (self.current_experiment,))
-            deleted = cursor.rowcount
+            # Truncate table
+            print(f"\n🗑️  Truncating table...")
+            cursor.execute(f"TRUNCATE TABLE {table_name}")
 
             self.db_conn.commit()
             cursor.close()
 
-            print(f"   ✅ Deleted {deleted:,} rows from ml_experiments_training_files")
-            print(f"\n✅ Successfully cleaned training file selections")
+            print(f"   ✅ Truncated {table_name} ({file_count:,} rows)")
+            print(f"\n✅ Successfully cleaned file training data")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error cleaning training files: {e}")
+            print(f"❌ Error cleaning file training data: {e}")
 
     def cmd_clean_segments(self, args):
         """Delete segment files and truncate segment tables for current experiment
@@ -6047,42 +6055,61 @@ class MLDPShell:
             try:
                 cursor = self.db_conn.cursor()
 
-                # Check if ml_experiments_training_files table exists
+                # Check which experiment-specific tables exist
+                segment_training_table = f"experiment_{self.current_experiment:03d}_segment_training_data"
+                segment_pairs_table = f"experiment_{self.current_experiment:03d}_segment_pairs"
+
                 cursor.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables
                         WHERE table_schema = 'public'
-                        AND table_name = 'ml_experiments_training_files'
+                        AND table_name = %s
                     )
-                """)
-                training_files_table_exists = cursor.fetchone()[0]
+                """, (segment_training_table,))
+                segment_training_exists = cursor.fetchone()[0]
 
-                # Get segment_pairs count
-                cursor.execute(f"""
-                    SELECT COUNT(*) FROM experiment_{self.current_experiment:03d}_segment_pairs
-                """)
-                pairs_count = cursor.fetchone()[0]
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = %s
+                    )
+                """, (segment_pairs_table,))
+                segment_pairs_exists = cursor.fetchone()[0]
 
-                # Get data_segments count (only if training_files table exists)
-                segments_count = 0
-                if training_files_table_exists:
+                # Get counts
+                segment_training_count = 0
+                if segment_training_exists:
                     cursor.execute(f"""
-                        SELECT COUNT(*) FROM data_segments
-                        WHERE experiment_file_id IN (
-                            SELECT experiment_file_id FROM ml_experiments_training_files
-                            WHERE experiment_id = %s
-                        )
-                    """, (self.current_experiment,))
-                    segments_count = cursor.fetchone()[0]
+                        SELECT COUNT(*) FROM {segment_training_table}
+                    """)
+                    segment_training_count = cursor.fetchone()[0]
+
+                pairs_count = 0
+                if segment_pairs_exists:
+                    cursor.execute(f"""
+                        SELECT COUNT(*) FROM {segment_pairs_table}
+                    """)
+                    pairs_count = cursor.fetchone()[0]
 
                 print(f"\n{'='*80}")
                 print(f"🗑️  TRUNCATE SEGMENT TABLES - Experiment {self.current_experiment}")
                 print(f"{'='*80}\n")
-                print(f"   experiment_{self.current_experiment:03d}_segment_pairs: {pairs_count:,} rows")
-                if training_files_table_exists:
-                    print(f"   data_segments (exp {self.current_experiment}): {segments_count:,} rows")
+
+                if segment_training_exists:
+                    print(f"   {segment_training_table}: {segment_training_count:,} rows")
                 else:
-                    print(f"   data_segments: skipped (ml_experiments_training_files not implemented)")
+                    print(f"   {segment_training_table}: table not found (skipping)")
+
+                if segment_pairs_exists:
+                    print(f"   {segment_pairs_table}: {pairs_count:,} rows")
+                else:
+                    print(f"   {segment_pairs_table}: table not found (skipping)")
+
+                if not segment_training_exists and not segment_pairs_exists:
+                    print(f"\nℹ️  No segment tables found to clean")
+                    cursor.close()
+                    return
 
                 if dry_run:
                     print(f"\n🔍 DRY RUN: No tables would be truncated")
@@ -6097,24 +6124,16 @@ class MLDPShell:
                         cursor.close()
                         return
 
-                # Truncate segment_pairs
+                # Truncate tables
                 print(f"\n🗑️  Truncating tables...")
-                cursor.execute(f"TRUNCATE TABLE experiment_{self.current_experiment:03d}_segment_pairs")
-                print(f"   ✅ Truncated experiment_{self.current_experiment:03d}_segment_pairs")
 
-                # Delete data_segments for this experiment (only if training_files table exists)
-                if training_files_table_exists:
-                    cursor.execute(f"""
-                        DELETE FROM data_segments
-                        WHERE experiment_file_id IN (
-                            SELECT experiment_file_id FROM ml_experiments_training_files
-                            WHERE experiment_id = %s
-                        )
-                    """, (self.current_experiment,))
-                    deleted = cursor.rowcount
-                    print(f"   ✅ Deleted {deleted:,} rows from data_segments")
-                else:
-                    print(f"   ⏭️  Skipped data_segments cleanup (table dependency not available)")
+                if segment_training_exists:
+                    cursor.execute(f"TRUNCATE TABLE {segment_training_table}")
+                    print(f"   ✅ Truncated {segment_training_table}")
+
+                if segment_pairs_exists:
+                    cursor.execute(f"TRUNCATE TABLE {segment_pairs_table}")
+                    print(f"   ✅ Truncated {segment_pairs_table}")
 
                 self.db_conn.commit()
                 cursor.close()
