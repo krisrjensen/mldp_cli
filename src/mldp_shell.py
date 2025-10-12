@@ -3,36 +3,38 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_173000
-File version: 2.0.6.3
+Date Revised: 20251012_174500
+File version: 2.0.6.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
-Changes in this version (6.3):
-1. Fixed clean-segment-files to support --force flag (skip confirmation)
-2. Fixed clean-files to use correct table: experiment_NNN_file_training_data
-3. Fixed clean-segments to truncate both segment tables:
-   - experiment_NNN_segment_training_data
-   - experiment_NNN_segment_pairs
-4. All cleanup commands now work correctly with --force for automation
+Changes in this version (6.4):
+1. Added --force flag to mpcctl-distance-function
+   - Skips confirmation prompt when --force is set
+   - Added to help text and command completion
+2. Added --force flag to mpcctl-distance-insert
+   - Skips confirmation prompt when --force is set
+   - Added to help text and command completion
+3. Updated mpcctl-execute-experiment to pass --force to both distance commands
+   - Pipeline now runs completely unattended with --force
+   - No confirmation prompts at steps 6 and 7
 
-Critical fixes for proper table cleanup - now truncates all 3 experiment tables:
-- experiment_NNN_file_training_data (file selections)
-- experiment_NNN_segment_training_data (segment selections)
-- experiment_NNN_segment_pairs (segment pairs)
+CRITICAL FIX: Pipeline can now run fully unattended!
+All 7 steps execute without any confirmation prompts when using:
+  mpcctl-execute-experiment --workers 20 --log --verbose --force
 
-Changes in previous version (6.2):
-- Fixed graceful skipping for non-existent tables
-- Added distance_insert/state.json cleanup
+Changes in previous version (6.3):
+- Fixed cleanup commands to use correct experiment-specific table names
+- All cleanup commands support --force for automation
 """
 
 # Version tracking
-VERSION = "2.0.6.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -87,8 +89,8 @@ class MLDPCompleter(Completer):
             # Distance commands
             'calculate': ['--segment-size', '--distance-type', '--workers', '8192', '16384', '32768', 'euclidean', 'l1', 'l2', 'cosine'],
             'insert_distances': ['--input-folder', '--distance-type', 'l1', 'l2', 'cosine', 'pearson'],
-            'mpcctl-distance-function': ['--start', '--status', '--pause', '--continue', '--stop', '--workers', '--feature_sets', '--log', '--verbose'],
-            'mpcctl-distance-insert': ['--start', '--status', '--pause', '--continue', '--stop', '--list-processes', '--kill', '--kill-all', '--workers', '--distances', '--method', '--batch-size', '--log', '--verbose'],
+            'mpcctl-distance-function': ['--start', '--status', '--pause', '--continue', '--stop', '--workers', '--feature_sets', '--log', '--verbose', '--force', '--clean', '--resume'],
+            'mpcctl-distance-insert': ['--start', '--status', '--pause', '--continue', '--stop', '--list-processes', '--kill', '--kill-all', '--workers', '--distances', '--method', '--batch-size', '--log', '--verbose', '--force'],
             'mpcctl-execute-experiment': ['--workers', '--log', '--verbose', '--force', '--skip-file-selection', '--skip-segment-selection', '--skip-segment-fileset', '--skip-segment-pairs', '--skip-feature-fileset', '--skip-distance-calc', '--skip-distance-insert', '--help'],
 
             # Visualization
@@ -6521,6 +6523,7 @@ class MLDPShell:
             print("  --verbose                Show verbose output in CLI")
             print("  --clean                  Start fresh (delete .mpcctl and .processed) [DEFAULT]")
             print("  --resume                 Resume from existing progress")
+            print("  --force                  Skip confirmation prompt (for automation)")
             print("\nExamples:")
             print("  mpcctl-distance-function --start --workers 20")
             print("  mpcctl-distance-function --start --workers 20 --resume")
@@ -6543,6 +6546,7 @@ class MLDPShell:
             workers = 16
             log_enabled = '--log' in args
             verbose = '--verbose' in args
+            force = '--force' in args
             feature_set_filter = None
             clean_mode = True  # Default: start fresh
 
@@ -6668,11 +6672,14 @@ class MLDPShell:
 
             print(f"\n{'='*80}\n")
 
-            # Confirmation prompt
-            response = input("Do you wish to continue? (Y/n): ").strip().lower()
-            if response and response != 'y':
-                print("❌ Cancelled")
-                return
+            # Confirmation prompt (skip if --force)
+            if not force:
+                response = input("Do you wish to continue? (Y/n): ").strip().lower()
+                if response and response != 'y':
+                    print("❌ Cancelled")
+                    return
+            else:
+                print("⚠️  --force flag set: Skipping confirmation prompt\n")
 
             print(f"\n🚀 Starting distance calculation...\n")
 
@@ -7018,6 +7025,7 @@ class MLDPShell:
             print("  --batch-size N           Files per batch (default: 100)")
             print("  --log                    Create log file")
             print("  --verbose                Show verbose output")
+            print("  --force                  Skip confirmation prompt (for automation)")
             print("\nExamples:")
             print("  mpcctl-distance-insert --start --workers 4")
             print("  mpcctl-distance-insert --start --workers 2 --distances manhattan,euclidean")
@@ -7050,6 +7058,7 @@ class MLDPShell:
             batch_size = 100
             log_enabled = '--log' in args
             verbose = '--verbose' in args
+            force = '--force' in args
 
             for i, arg in enumerate(args):
                 if arg == '--workers' and i + 1 < len(args):
@@ -7171,11 +7180,14 @@ class MLDPShell:
 
             print(f"\n{'='*80}\n")
 
-            # Confirmation prompt
-            response = input("Do you wish to continue? (Y/n): ").strip().lower()
-            if response and response != 'y':
-                print("❌ Cancelled")
-                return
+            # Confirmation prompt (skip if --force)
+            if not force:
+                response = input("Do you wish to continue? (Y/n): ").strip().lower()
+                if response and response != 'y':
+                    print("❌ Cancelled")
+                    return
+            else:
+                print("⚠️  --force flag set: Skipping confirmation prompt\n")
 
             print(f"\n🚀 Starting distance insertion...\n")
 
@@ -7843,7 +7855,7 @@ class MLDPShell:
             print(f"{'='*80}\n")
             step_start = time.time()
             try:
-                distance_args = ['--start', '--workers', str(workers)]
+                distance_args = ['--start', '--workers', str(workers), '--force']
                 if log_enabled:
                     distance_args.append('--log')
                 if verbose:
@@ -7863,7 +7875,7 @@ class MLDPShell:
             print(f"{'='*80}\n")
             step_start = time.time()
             try:
-                insert_args = ['--start', '--workers', str(workers)]
+                insert_args = ['--start', '--workers', str(workers), '--force']
                 if log_enabled:
                     insert_args.append('--log')
                 if verbose:
