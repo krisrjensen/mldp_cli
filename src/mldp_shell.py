@@ -3,38 +3,43 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_174500
-File version: 2.0.6.4
+Date Revised: 20251012_184000
+File version: 2.0.6.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
-Changes in this version (6.4):
-1. Added --force flag to mpcctl-distance-function
-   - Skips confirmation prompt when --force is set
+Changes in this version (6.5):
+1. Added --force flag to select-segments command
+   - Skips confirmation prompts when --clean is used
+   - Passes --force to cmd_clean_segment_table
    - Added to help text and command completion
-2. Added --force flag to mpcctl-distance-insert
-   - Skips confirmation prompt when --force is set
-   - Added to help text and command completion
-3. Updated mpcctl-execute-experiment to pass --force to both distance commands
-   - Pipeline now runs completely unattended with --force
-   - No confirmation prompts at steps 6 and 7
+2. Added --force flag to cmd_clean_segment_table
+   - Skips 'DELETE' confirmation when --force is set
+   - Enables fully automated segment cleanup
+3. Added progress indicator to generate-segment-pairs
+   - Shows "Generating pairs (this may take several minutes)..." message
+   - Displays elapsed time when pair generation completes
+4. Fixed generate-feature-fileset --force behavior
+   - Now skips confirmation prompt when --force is set
+   - Enables fully automated feature extraction
 
-CRITICAL FIX: Pipeline can now run fully unattended!
-All 7 steps execute without any confirmation prompts when using:
+COMPLETE PIPELINE AUTOMATION: All 7 steps now run unattended!
+The pipeline is now perfect for automation:
+  clean-experiment --force
   mpcctl-execute-experiment --workers 20 --log --verbose --force
 
-Changes in previous version (6.3):
-- Fixed cleanup commands to use correct experiment-specific table names
-- All cleanup commands support --force for automation
+Changes in previous version (6.4):
+- Added --force flag to mpcctl-distance-function and mpcctl-distance-insert
+- Updated mpcctl-execute-experiment to pass --force to distance commands
 """
 
 # Version tracking
-VERSION = "2.0.6.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -117,8 +122,8 @@ class MLDPCompleter(Completer):
             'closest': ['10', '20', '50', '100'],
             
             # Experiments
-            'select-segments': ['--strategy', '--segments-per-type', '--seed', '--clean', '--help', '41', '42', '43'],
-            'clean-segment-table': ['41', '42', '43'],
+            'select-segments': ['--strategy', '--segments-per-type', '--seed', '--clean', '--force', '--help', '41', '42', '43'],
+            'clean-segment-table': ['--force', '41', '42', '43'],
             'clean-segment-pairs': ['41', '42', '43'],
             'clean-feature-files': ['41', '42', '43'],
             'generate-segment-pairs': ['--strategy', '--max-pairs-per-segment', '--same-label-ratio', '--seed', '--clean', '--help'],
@@ -1704,6 +1709,7 @@ class MLDPShell:
         segments_per_type = 3  # Default for fixed_per_type strategy
         seed = 42
         clean_first = False  # Default
+        force = False  # Default
 
         i = 0
         while i < len(args):
@@ -1719,6 +1725,9 @@ class MLDPShell:
             elif args[i] == '--clean':
                 clean_first = True
                 i += 1
+            elif args[i] == '--force':
+                force = True
+                i += 1
             elif args[i] == '--help':
                 print("\nUsage: select-segments [experiment_id] [options]")
                 print("\nOptions:")
@@ -1730,6 +1739,7 @@ class MLDPShell:
                 print("  --segments-per-type N      For fixed_per_type: segments to select per type (default: 3)")
                 print("  --seed N                   Random seed (default: 42)")
                 print("  --clean                    Clear existing segment training data before selection")
+                print("  --force                    Skip confirmation prompts (for unattended execution)")
                 print("\n📊 BALANCED STRATEGY (recommended):")
                 print("  Per file: Groups segments by code type (L, R, C, Cm, Cl, Cr, etc.)")
                 print("  Example: File has L=45, R=40, C=5, Cm=25, Cl=3, Cr=2 segments")
@@ -1747,7 +1757,10 @@ class MLDPShell:
         # Clean existing data if requested
         if clean_first:
             print(f"\n🗑️  Cleaning existing segment training data...")
-            self.cmd_clean_segment_table([str(experiment_id)])
+            cleanup_args = [str(experiment_id)]
+            if force:
+                cleanup_args.append('--force')
+            self.cmd_clean_segment_table(cleanup_args)
             print()
 
         print(f"🔄 Selecting segments for experiment {experiment_id}...")
@@ -1824,14 +1837,22 @@ class MLDPShell:
 
     def cmd_clean_segment_table(self, args):
         """Clean (delete all rows from) the segment training data table for an experiment"""
-        # Parse experiment ID if provided, otherwise use current
-        if args and args[0].isdigit():
-            experiment_id = int(args[0])
-        else:
+        # Parse experiment ID and flags
+        experiment_id = None
+        force = '--force' in args
+
+        # Extract experiment ID if provided
+        for arg in args:
+            if arg.isdigit():
+                experiment_id = int(arg)
+                break
+
+        # Use current experiment if not specified
+        if not experiment_id:
             experiment_id = self.current_experiment
 
         if not experiment_id:
-            print("❌ No experiment specified. Use: clean-segment-table <experiment_id>")
+            print("❌ No experiment specified. Use: clean-segment-table <experiment_id> [--force]")
             print("   Or set current experiment: set experiment <id>")
             return
 
@@ -1873,15 +1894,18 @@ class MLDPShell:
             print(f"\n📊 Segment training data table: {table_name}")
             print(f"   Current rows: {count_before:,}")
 
-            # Confirmation
-            print(f"\n⚠️  WARNING: This will delete all {count_before:,} rows from {table_name}")
-            print(f"⚠️  This action CANNOT be undone!")
-            response = input(f"\nType 'DELETE' to confirm: ").strip()
+            # Confirmation (skip if --force)
+            if not force:
+                print(f"\n⚠️  WARNING: This will delete all {count_before:,} rows from {table_name}")
+                print(f"⚠️  This action CANNOT be undone!")
+                response = input(f"\nType 'DELETE' to confirm: ").strip()
 
-            if response != 'DELETE':
-                print("❌ Cancelled")
-                cursor.close()
-                return
+                if response != 'DELETE':
+                    print("❌ Cancelled")
+                    cursor.close()
+                    return
+            else:
+                print("\n⚠️  --force flag set: Skipping confirmation")
 
             # Delete all rows
             print(f"\n🗑️  Deleting all rows from {table_name}...")
@@ -4379,21 +4403,28 @@ class MLDPShell:
             print(f"   Max pairs per segment: {max_pairs_per_segment}")
         print(f"   Same label ratio: {same_label_ratio}")
         print(f"   Random seed: {seed}")
-        
+
         try:
             # Import the v2 segment pair generator module (compatible with v2 selector)
             from experiment_segment_pair_generator_v2 import ExperimentSegmentPairGeneratorV2
 
             # Create generator instance
             generator = ExperimentSegmentPairGeneratorV2(self.current_experiment, self.db_conn)
-            
-            # Generate pairs
+
+            # Generate pairs with progress indicator
+            print(f"\n⏳ Generating pairs (this may take several minutes)...")
+            import time
+            start_time = time.time()
+
             result = generator.generate_pairs(
                 strategy=pairing_strategy,
                 max_pairs_per_segment=max_pairs_per_segment,
                 same_label_ratio=same_label_ratio,
                 seed=seed
             )
+
+            elapsed_time = time.time() - start_time
+            print(f"✓ Pair generation completed in {elapsed_time:.1f} seconds")
             
             if result['success']:
                 print(f"\n✅ Successfully generated segment pairs!")
@@ -8084,11 +8115,14 @@ class MLDPShell:
 
         print(f"\n{'='*80}\n")
 
-        # Confirmation prompt
-        response = input("Do you wish to continue? (Y/n): ").strip().lower()
-        if response and response != 'y':
-            print("❌ Cancelled")
-            return
+        # Confirmation prompt (skip if --force)
+        if not force_reextract:
+            response = input("Do you wish to continue? (Y/n): ").strip().lower()
+            if response and response != 'y':
+                print("❌ Cancelled")
+                return
+        else:
+            print("⚠️  --force flag set: Skipping confirmation prompt\n")
 
         print(f"\n🔄 Starting feature extraction...")
 
