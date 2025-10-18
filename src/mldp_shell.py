@@ -3,43 +3,56 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251012_184000
-File version: 2.0.6.5
+Date Revised: 20251018_211000
+File version: 2.0.6.13
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 13)
 
-Changes in this version (6.5):
-1. Added --force flag to select-segments command
-   - Skips confirmation prompts when --clean is used
-   - Passes --force to cmd_clean_segment_table
-   - Added to help text and command completion
-2. Added --force flag to cmd_clean_segment_table
-   - Skips 'DELETE' confirmation when --force is set
-   - Enables fully automated segment cleanup
-3. Added progress indicator to generate-segment-pairs
-   - Shows "Generating pairs (this may take several minutes)..." message
-   - Displays elapsed time when pair generation completes
-4. Fixed generate-feature-fileset --force behavior
-   - Now skips confirmation prompt when --force is set
-   - Enables fully automated feature extraction
+Changes in this version (6.13):
+1. LOCAL COMMIT: Phase 0a Classifier Registry Setup complete
+   - All 9 tasks (1-9) implemented and tested
+   - Ready for local git commit
+
+Phase 0a Summary (versions 6.6-6.12):
+1. Created ml_experiment_classifiers table (global registry)
+2. Implemented classifier-new command (create instances)
+3. Implemented classifier-remove command (delete/archive)
+4. Implemented classifier-list command (display all)
+5. Session context for classifier selection
+6. Updated prompt to show selected classifier
+7. Added set classifier command
+8. Updated tab completion for all commands
+9. Added classifier commands to help system
+
+Changes in previous version (6.12):
+1. Task 9: Added classifier commands to help system
+
+Changes in version (6.11):
+1. Task 7: Added set classifier command
+2. Task 8: Updated MLDPCompleter with tab completion
+
+Changes in version (6.9):
+1. Added classifier-list command (Phase 0a Task 4)
+
+Changes in version (6.8):
+1. Added classifier-remove command (Phase 0a Task 3)
+
+Changes in version (6.7):
+1. Added classifier-new command (Phase 0a Task 2)
 
 COMPLETE PIPELINE AUTOMATION: All 7 steps now run unattended!
 The pipeline is now perfect for automation:
   clean-experiment --force
   mpcctl-execute-experiment --workers 20 --log --verbose --force
-
-Changes in previous version (6.4):
-- Added --force flag to mpcctl-distance-function and mpcctl-distance-insert
-- Updated mpcctl-execute-experiment to pass --force to distance commands
 """
 
 # Version tracking
-VERSION = "2.0.6.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.13"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -172,7 +185,7 @@ class MLDPCompleter(Completer):
             'clean-distance-work-files': ['--dry-run', '--force'],
 
             # Settings
-            'set': ['experiment', 'distance', '18', 'l1', 'l2', 'cosine'],
+            'set': ['experiment', 'distance', 'classifier', '18', 'l1', 'l2', 'cosine', 'none'],
             'show': [],
             
             # Server Management
@@ -181,10 +194,16 @@ class MLDPCompleter(Completer):
             'stop': [],
             'restart': [],
             'status': [],
-            'logs': ['real_time_sync_hub', 'database_browser', 'data_cleaning_tool', 
+            'logs': ['real_time_sync_hub', 'database_browser', 'data_cleaning_tool',
                     'transient_viewer', 'segment_visualizer', 'distance_visualizer',
                     'experiment_generator', 'jupyter_integration', 'segment_verifier'],
-            
+
+            # Classifier Management (Phase 0a)
+            'classifier-create-registry': [],
+            'classifier-new': ['--name', '--description', '--type', '--auto-select', '--no-auto-select', '--help'],
+            'classifier-remove': ['--classifier-id', '--confirm', '--archive-instead', '--help'],
+            'classifier-list': ['--include-archived', '--show-tables', '--help'],
+
             # Utilities
             'verify': [],
             'clear': [],
@@ -240,6 +259,8 @@ class MLDPShell:
         self.db_conn = None
         self.current_experiment = 18
         self.current_distance_type = 'l2'
+        self.current_classifier_id = None
+        self.current_classifier_name = None
         self.last_result = None
         self.running = True
         self.auto_connect = auto_connect
@@ -362,19 +383,36 @@ class MLDPShell:
             'mpcctl-distance-insert': self.cmd_mpcctl_distance_insert,
             # Phase 7 execution pipeline
             'mpcctl-execute-experiment': self.cmd_mpcctl_execute_experiment,
+            # Classifier management commands (Phase 0a)
+            'classifier-create-registry': self.cmd_classifier_create_registry,
+            'classifier-new': self.cmd_classifier_new,
+            'classifier-remove': self.cmd_classifier_remove,
+            'classifier-list': self.cmd_classifier_list,
         }
     
     def get_prompt(self):
         """Generate dynamic prompt with current settings"""
-        return FormattedText([
-            ('class:prompt', 'mldp'),
-            ('class:separator', '['),
-            ('class:experiment', f'exp{self.current_experiment}'),
-            ('class:separator', ':'),
-            ('class:distance', self.current_distance_type),
-            ('class:separator', ']'),
-            ('class:prompt', '> '),
-        ])
+        # Build prompt based on current context
+        # Priority: classifier > distance > experiment only
+        prompt_parts = [('class:prompt', 'mldp')]
+
+        if self.current_experiment:
+            prompt_parts.append(('class:separator', '['))
+            prompt_parts.append(('class:experiment', f'exp{self.current_experiment}'))
+
+            # Show classifier if selected (takes precedence over distance)
+            if self.current_classifier_id:
+                prompt_parts.append(('class:separator', ':'))
+                prompt_parts.append(('class:classifier', f'cls{self.current_classifier_id}'))
+            # Otherwise show distance if selected
+            elif self.current_distance_type:
+                prompt_parts.append(('class:separator', ':'))
+                prompt_parts.append(('class:distance', self.current_distance_type))
+
+            prompt_parts.append(('class:separator', ']'))
+
+        prompt_parts.append(('class:prompt', '> '))
+        return FormattedText(prompt_parts)
     
     def print_banner(self):
         """Print welcome banner"""
@@ -1462,19 +1500,75 @@ class MLDPShell:
         """Set configuration"""
         if len(args) != 2:
             print("Usage: set <parameter> <value>")
-            print("Parameters: experiment, distance")
+            print("Parameters: experiment, distance, classifier")
+            print("Examples:")
+            print("  set experiment 41")
+            print("  set distance l2")
+            print("  set classifier 1")
+            print("  set classifier none")
             return
-        
+
         param, value = args
-        
+
         if param == 'experiment':
             self.current_experiment = int(value)
-            print(f"✅ Current experiment set to: {self.current_experiment}")
+            print(f"[SUCCESS] Current experiment set to: {self.current_experiment}")
         elif param == 'distance':
             self.current_distance_type = value
-            print(f"✅ Current distance type set to: {self.current_distance_type}")
+            print(f"[SUCCESS] Current distance type set to: {self.current_distance_type}")
+        elif param == 'classifier':
+            # Handle classifier selection
+            if value.lower() == 'none':
+                self.current_classifier_id = None
+                self.current_classifier_name = None
+                print("[SUCCESS] Classifier deselected")
+            else:
+                # Validate classifier ID
+                try:
+                    classifier_id = int(value)
+                except ValueError:
+                    print(f"[ERROR] Invalid classifier ID: {value}")
+                    print("Usage: set classifier <id> or set classifier none")
+                    return
+
+                # Check if experiment is selected
+                if not self.current_experiment:
+                    print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+                    return
+
+                # Check if classifier exists
+                if not self.db_conn:
+                    print("[ERROR] Not connected to database. Use 'connect' first.")
+                    return
+
+                try:
+                    cursor = self.db_conn.cursor()
+                    cursor.execute("""
+                        SELECT classifier_name, is_archived
+                        FROM ml_experiment_classifiers
+                        WHERE experiment_id = %s AND classifier_id = %s
+                    """, (self.current_experiment, classifier_id))
+                    result = cursor.fetchone()
+
+                    if not result:
+                        print(f"[ERROR] Classifier {classifier_id} not found for experiment {self.current_experiment}")
+                        print("Use 'classifier-list' to see available classifiers")
+                        return
+
+                    classifier_name, is_archived = result
+
+                    if is_archived:
+                        print(f"[WARNING] Classifier {classifier_id} is archived")
+
+                    self.current_classifier_id = classifier_id
+                    self.current_classifier_name = classifier_name
+                    print(f"[SUCCESS] Current classifier set to: {classifier_id} ({classifier_name})")
+
+                except Exception as e:
+                    print(f"[ERROR] Failed to set classifier: {e}")
         else:
-            print(f"❌ Unknown parameter: {param}")
+            print(f"[ERROR] Unknown parameter: {param}")
+            print("Parameters: experiment, distance, classifier")
     
     def cmd_show(self, args):
         """Show current settings"""
@@ -1639,6 +1733,26 @@ class MLDPShell:
   generate-segment-fileset            Generate physical segment files from raw data
   generate-feature-fileset            Extract features and save to disk
 
+🤖 CLASSIFIER MANAGEMENT:
+  classifier-create-registry          Create ml_experiment_classifiers table (one-time setup)
+  classifier-new --name <name>        Create new classifier instance
+    [--description <desc>]            Optional description
+    [--type <type>]                   Classifier type (default: svm)
+    [--auto-select]                   Auto-select after creation (default: True)
+  classifier-remove --classifier-id <id> --confirm  Delete classifier
+    [--archive-instead]               Archive instead of deleting
+  classifier-list                     List all classifiers for current experiment
+    [--include-archived]              Show archived classifiers
+    [--show-tables]                   Show table counts for each classifier
+  set classifier <N>                  Select classifier N for current experiment
+  set classifier none                 Deselect current classifier
+
+  Examples:
+    classifier-new --name "baseline_svm" --description "Baseline configuration"
+    set classifier 1
+    classifier-list --include-archived
+    classifier-remove --classifier-id 2 --confirm
+
 📂 DATA MANAGEMENT:
   get-experiment-data-path            Show paths and file counts for experiment data
   set-experiment-data-path <path>     Set custom data storage paths (or --reset for default)
@@ -1653,7 +1767,7 @@ class MLDPShell:
   segment-plot                        Plot segment data
 
 ⚙️  SETTINGS:
-  set <param> <value>                 Set configuration (experiment, distance)
+  set <param> <value>                 Set configuration (experiment, distance, classifier)
   show                                Show current settings
 
 🖥️  SERVER MANAGEMENT:
@@ -1684,7 +1798,8 @@ class MLDPShell:
 💡 TIPS:
   • Use Tab for command completion
   • Use ↑/↓ arrows for command history
-  • Current settings shown in prompt: mldp[exp18:l2]>
+  • Current settings shown in prompt: mldp[exp41:cls1]> (or mldp[exp41:l2]>)
+  • Prompt shows classifier if selected, otherwise distance type
   • SQL queries support all PostgreSQL syntax
   • Export supports .csv and .json formats
   • Bash commands timeout after 5 minutes
@@ -8168,15 +8283,532 @@ class MLDPShell:
     
     def _create_segment_selector_module(self):
         """Create the segment selector module if it doesn't exist"""
-        print("\n📝 Creating ExperimentSegmentSelector module...")
+        print("\nCreating ExperimentSegmentSelector module...")
         # The module has been created separately
         print("   Module should be available at: experiment_segment_selector.py")
-    
+
+    # ========== Classifier Management Commands (Phase 0a) ==========
+
+    def cmd_classifier_create_registry(self, args):
+        """
+        Create ml_experiment_classifiers registry table
+
+        Usage: classifier-create-registry
+
+        Creates the global registry table for tracking classifier instances
+        across all experiments. This table stores metadata about each
+        classifier including name, type, creation date, and status.
+
+        Table Schema:
+        - experiment_id + classifier_id: Primary key
+        - classifier_name: Unique within experiment
+        - classifier_type: svm, random_forest, xgboost, etc.
+        - is_active, is_archived: Status flags
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Create ml_experiment_classifiers table
+            create_table_sql = """
+                CREATE TABLE IF NOT EXISTS ml_experiment_classifiers (
+                    experiment_id INTEGER NOT NULL,
+                    classifier_id INTEGER NOT NULL,
+                    classifier_name VARCHAR(255) NOT NULL,
+                    classifier_description TEXT,
+                    classifier_type VARCHAR(50) DEFAULT 'svm',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    created_by VARCHAR(100),
+                    is_active BOOLEAN DEFAULT TRUE,
+                    is_archived BOOLEAN DEFAULT FALSE,
+                    notes TEXT,
+                    PRIMARY KEY (experiment_id, classifier_id),
+                    FOREIGN KEY (experiment_id) REFERENCES ml_experiments(experiment_id) ON DELETE CASCADE,
+                    UNIQUE (experiment_id, classifier_name)
+                );
+            """
+
+            cursor.execute(create_table_sql)
+
+            # Create indexes
+            index_sqls = [
+                "CREATE INDEX IF NOT EXISTS idx_exp_classifiers_experiment ON ml_experiment_classifiers(experiment_id);",
+                "CREATE INDEX IF NOT EXISTS idx_exp_classifiers_active ON ml_experiment_classifiers(is_active);",
+                "CREATE INDEX IF NOT EXISTS idx_exp_classifiers_type ON ml_experiment_classifiers(classifier_type);"
+            ]
+
+            for index_sql in index_sqls:
+                cursor.execute(index_sql)
+
+            self.db_conn.commit()
+
+            print("[SUCCESS] Created ml_experiment_classifiers table")
+            print("  - Primary key: (experiment_id, classifier_id)")
+            print("  - Unique constraint: (experiment_id, classifier_name)")
+            print("  - Indexes: experiment_id, is_active, classifier_type")
+            print("  - Foreign key: experiment_id -> ml_experiments")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to create ml_experiment_classifiers table: {e}")
+
+    def cmd_classifier_new(self, args):
+        """
+        Create new classifier instance for current experiment
+
+        Usage: classifier-new --name <name> [OPTIONS]
+
+        Options:
+            --name <name>              Unique classifier name (required)
+            --description <desc>       Detailed description
+            --type <type>              Classifier type (default: svm)
+            --auto-select              Auto-select after creation (default: True)
+            --no-auto-select           Do not auto-select after creation
+
+        Example:
+            classifier-new --name "baseline_svm" --description "Baseline configuration"
+            classifier-new --name "multi_decimation" --type svm --no-auto-select
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        # Parse arguments
+        name = None
+        description = None
+        classifier_type = 'svm'
+        auto_select = True
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--name' and i + 1 < len(args):
+                name = args[i + 1]
+                i += 2
+            elif args[i] == '--description' and i + 1 < len(args):
+                description = args[i + 1]
+                i += 2
+            elif args[i] == '--type' and i + 1 < len(args):
+                classifier_type = args[i + 1]
+                i += 2
+            elif args[i] == '--auto-select':
+                auto_select = True
+                i += 1
+            elif args[i] == '--no-auto-select':
+                auto_select = False
+                i += 1
+            elif args[i] == '--help':
+                print("\nUsage: classifier-new --name <name> [OPTIONS]")
+                print("\nOptions:")
+                print("  --name <name>              Unique classifier name (required)")
+                print("  --description <desc>       Detailed description")
+                print("  --type <type>              Classifier type (default: svm)")
+                print("  --auto-select              Auto-select after creation (default)")
+                print("  --no-auto-select           Do not auto-select after creation")
+                print("\nExamples:")
+                print("  classifier-new --name \"baseline_svm\" --description \"Baseline config\"")
+                print("  classifier-new --name \"multi_decimation\" --type svm")
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        # Validate required arguments
+        if not name:
+            print("[ERROR] --name is required")
+            print("Usage: classifier-new --name <name> [OPTIONS]")
+            print("Try: classifier-new --help")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get next available classifier_id for this experiment
+            cursor.execute("""
+                SELECT COALESCE(MAX(classifier_id), 0) + 1 as next_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s
+            """, (self.current_experiment,))
+            next_id = cursor.fetchone()[0]
+
+            # Check if name is unique for this experiment
+            cursor.execute("""
+                SELECT COUNT(*) FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_name = %s
+            """, (self.current_experiment, name))
+            if cursor.fetchone()[0] > 0:
+                print(f"[ERROR] Classifier name '{name}' already exists for experiment {self.current_experiment}")
+                print("       Use a different name or remove the existing classifier")
+                return
+
+            # Insert new classifier
+            cursor.execute("""
+                INSERT INTO ml_experiment_classifiers
+                    (experiment_id, classifier_id, classifier_name, classifier_description, classifier_type)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (self.current_experiment, next_id, name, description, classifier_type))
+
+            self.db_conn.commit()
+
+            print(f"[SUCCESS] Created classifier {next_id} for experiment {self.current_experiment}")
+            print(f"  - Name: {name}")
+            print(f"  - Type: {classifier_type}")
+            if description:
+                print(f"  - Description: {description}")
+
+            # Auto-select if requested
+            if auto_select:
+                self.current_classifier_id = next_id
+                self.current_classifier_name = name
+                print(f"[INFO] Auto-selected classifier {next_id}")
+                print(f"       Prompt will update on next command")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to create classifier: {e}")
+
+    def cmd_classifier_remove(self, args):
+        """
+        Remove classifier instance (delete or archive)
+
+        Usage: classifier-remove --classifier-id <id> --confirm [OPTIONS]
+
+        Options:
+            --classifier-id <id>       Classifier ID to remove (required)
+            --confirm                  Confirm deletion (required)
+            --archive-instead          Archive instead of delete
+
+        Safety:
+            - Requires explicit --confirm flag
+            - Shows all tables that will be deleted
+            - Requires typed confirmation "DELETE CLASSIFIER <N>"
+            - Option to archive for safety
+
+        Example:
+            classifier-remove --classifier-id 2 --confirm
+            classifier-remove --classifier-id 1 --confirm --archive-instead
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        # Parse arguments
+        classifier_id = None
+        confirm = False
+        archive_instead = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--classifier-id' and i + 1 < len(args):
+                try:
+                    classifier_id = int(args[i + 1])
+                except ValueError:
+                    print(f"[ERROR] Invalid classifier ID: {args[i + 1]}")
+                    return
+                i += 2
+            elif args[i] == '--confirm':
+                confirm = True
+                i += 1
+            elif args[i] == '--archive-instead':
+                archive_instead = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_remove.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        # Validation
+        if classifier_id is None:
+            print("[ERROR] --classifier-id is required")
+            print("Usage: classifier-remove --classifier-id <id> --confirm [OPTIONS]")
+            return
+
+        if not confirm:
+            print("[ERROR] --confirm flag is required for safety")
+            print("Usage: classifier-remove --classifier-id <id> --confirm [OPTIONS]")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if classifier exists
+            cursor.execute("""
+                SELECT classifier_name, classifier_type, is_archived
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, classifier_id))
+            result = cursor.fetchone()
+
+            if not result:
+                print(f"[ERROR] Classifier {classifier_id} not found for experiment {self.current_experiment}")
+                return
+
+            classifier_name, classifier_type, is_archived = result
+
+            # Query for related tables
+            cursor.execute("""
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                AND tablename LIKE %s
+                ORDER BY tablename
+            """, (f"experiment_{self.current_experiment}_classifier_{classifier_id}_%",))
+
+            related_tables = [row[0] for row in cursor.fetchall()]
+
+            # Display warning
+            print("\n" + "=" * 80)
+            if archive_instead:
+                print("[WARNING] ARCHIVE CLASSIFIER OPERATION")
+            else:
+                print("[WARNING] DELETE CLASSIFIER OPERATION")
+            print("=" * 80)
+            print(f"Experiment: {self.current_experiment}")
+            print(f"Classifier ID: {classifier_id}")
+            print(f"Classifier Name: {classifier_name}")
+            print(f"Classifier Type: {classifier_type}")
+            print(f"Currently Archived: {is_archived}")
+            print()
+
+            if archive_instead:
+                print("This operation will:")
+                print("  - Set is_archived = TRUE in ml_experiment_classifiers")
+                print("  - Preserve all data and tables")
+                print("  - Classifier will be hidden from default listings")
+                print()
+            else:
+                print("This operation will:")
+                print("  - DELETE the classifier from ml_experiment_classifiers")
+                print("  - CASCADE DELETE all related tables")
+                print("  - ALL DATA WILL BE PERMANENTLY LOST")
+                print()
+
+                if related_tables:
+                    print(f"Related tables to be deleted ({len(related_tables)}):")
+                    for table in related_tables:
+                        print(f"  - {table}")
+                else:
+                    print("No related tables found (safe to delete)")
+                print()
+
+            # Require typed confirmation
+            if archive_instead:
+                required_text = f"ARCHIVE CLASSIFIER {classifier_id}"
+            else:
+                required_text = f"DELETE CLASSIFIER {classifier_id}"
+
+            print(f"To proceed, type: {required_text}")
+            print("=" * 80)
+
+            # Get confirmation from user
+            try:
+                user_input = input("Confirmation: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[INFO] Operation cancelled")
+                return
+
+            if user_input != required_text:
+                print("[ERROR] Confirmation text does not match. Operation cancelled.")
+                print(f"Expected: {required_text}")
+                print(f"Received: {user_input}")
+                return
+
+            # Perform operation
+            if archive_instead:
+                cursor.execute("""
+                    UPDATE ml_experiment_classifiers
+                    SET is_archived = TRUE, updated_at = NOW()
+                    WHERE experiment_id = %s AND classifier_id = %s
+                """, (self.current_experiment, classifier_id))
+                self.db_conn.commit()
+                print(f"[SUCCESS] Classifier {classifier_id} archived successfully")
+                print("  - is_archived set to TRUE")
+                print("  - All data preserved")
+            else:
+                cursor.execute("""
+                    DELETE FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s AND classifier_id = %s
+                """, (self.current_experiment, classifier_id))
+                self.db_conn.commit()
+                print(f"[SUCCESS] Classifier {classifier_id} deleted successfully")
+                if related_tables:
+                    print(f"  - Deleted {len(related_tables)} related tables")
+
+            # Deselect if currently selected classifier removed
+            if self.current_classifier_id == classifier_id:
+                self.current_classifier_id = None
+                self.current_classifier_name = None
+                print("[INFO] Deselected removed classifier")
+                print("       Prompt will update on next command")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to remove classifier: {e}")
+
+    def cmd_classifier_list(self, args):
+        """
+        List all classifiers for current experiment
+
+        Usage: classifier-list [OPTIONS]
+
+        Options:
+            --include-archived         Show archived classifiers
+            --show-tables              Show table names for each classifier
+
+        Example:
+            classifier-list
+            classifier-list --include-archived
+            classifier-list --show-tables
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        # Parse arguments
+        include_archived = False
+        show_tables = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--include-archived':
+                include_archived = True
+                i += 1
+            elif args[i] == '--show-tables':
+                show_tables = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_list.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Build query
+            where_clause = "WHERE experiment_id = %s"
+            params = [self.current_experiment]
+
+            if not include_archived:
+                where_clause += " AND is_archived = FALSE"
+
+            query = f"""
+                SELECT
+                    classifier_id,
+                    classifier_name,
+                    classifier_type,
+                    is_active,
+                    is_archived,
+                    created_at,
+                    classifier_description
+                FROM ml_experiment_classifiers
+                {where_clause}
+                ORDER BY classifier_id
+            """
+
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+
+            if not results:
+                if include_archived:
+                    print(f"[INFO] No classifiers found for experiment {self.current_experiment}")
+                else:
+                    print(f"[INFO] No active classifiers found for experiment {self.current_experiment}")
+                    print("       Use --include-archived to show archived classifiers")
+                return
+
+            # Prepare table data
+            table_data = []
+            for row in results:
+                classifier_id, name, ctype, is_active, is_archived, created_at, description = row
+
+                # Format status
+                status_parts = []
+                if is_active:
+                    status_parts.append("Active")
+                if is_archived:
+                    status_parts.append("Archived")
+                if not status_parts:
+                    status_parts.append("Inactive")
+                status = ", ".join(status_parts)
+
+                # Format created date
+                created_str = created_at.strftime("%Y-%m-%d %H:%M") if created_at else "N/A"
+
+                # Mark currently selected classifier
+                selected = "[SELECTED]" if self.current_classifier_id == classifier_id else ""
+
+                row_data = [
+                    classifier_id,
+                    name,
+                    ctype,
+                    status,
+                    created_str,
+                    selected
+                ]
+
+                # Add table count if requested
+                if show_tables:
+                    cursor.execute("""
+                        SELECT COUNT(*)
+                        FROM pg_tables
+                        WHERE schemaname = 'public'
+                        AND tablename LIKE %s
+                    """, (f"experiment_{self.current_experiment}_classifier_{classifier_id}_%",))
+                    table_count = cursor.fetchone()[0]
+                    row_data.append(table_count)
+
+                table_data.append(row_data)
+
+            # Print table
+            headers = ["ID", "Name", "Type", "Status", "Created", "Selected"]
+            if show_tables:
+                headers.append("Tables")
+
+            print()
+            print(f"Classifiers for experiment {self.current_experiment}:")
+            print()
+            print(tabulate(table_data, headers=headers, tablefmt="grid"))
+            print()
+            print(f"Total: {len(results)} classifier(s)")
+
+            if not include_archived:
+                # Check if there are archived classifiers
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s AND is_archived = TRUE
+                """, (self.current_experiment,))
+                archived_count = cursor.fetchone()[0]
+                if archived_count > 0:
+                    print(f"Note: {archived_count} archived classifier(s) hidden. Use --include-archived to show.")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to list classifiers: {e}")
+
     def cmd_exit(self, args):
         """Exit the shell"""
         if self.db_conn:
             self.db_conn.close()
-        print("\n👋 Goodbye! Thank you for using MLDP.")
+        print("\nGoodbye! Thank you for using MLDP.")
         self.running = False
     
     # ========== Server Management Commands ==========
