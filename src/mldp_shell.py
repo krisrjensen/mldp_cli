@@ -3,24 +3,94 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251018_220000
-File version: 2.0.6.14
+Date Revised: 20251019_000500
+File version: 2.0.6.28
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 14)
+- CHANGE: Tracks changes within current commit cycle (currently 28)
 
-Changes in this version (6.14):
-1. Phase 0b Task 1: Implement classifier-config-create command
-   - Create per-classifier config table on-demand
-   - Parse and validate configuration parameters
-   - Validate distance functions against experiment
-   - Convert function names to IDs
-   - Support array fields for hyperparameters
-   - Handle --set-active flag
+Changes in this version (6.28):
+1. PHASE 0b COMPLETION - Configuration Management System
+   - v2.0.6.26: Implemented classifier-config-list command with ARRAY_AGG queries
+   - v2.0.6.27: Implemented classifier-config-activate command
+   - v2.0.6.28: Implemented classifier-config-show command with detailed hyperparameter display
+   - Updated classifier-new to retrieve and display global_classifier_id
+   - Updated tab completion for all Phase 0b commands
+   - Updated help system with comprehensive Phase 0b documentation
+
+Changes in previous version (6.25):
+1. Add classifier-create-feature-builder-table command
+   - Creates ml_classifier_feature_builder table for feature vector construction
+   - Boolean flags: include_original_feature, compute_baseline_distances_inter/intra
+   - FK constraint to ml_classifier_configs with CASCADE delete
+   - UNIQUE constraint on config_id (one feature builder per config)
+   - References per-classifier reference_segments tables from Phase 2
+
+Changes in previous version (6.24):
+1. Add classifier-config-add-feature-sets command
+   - Helper command to add feature sets to existing configs
+   - Looks up experiment_feature_set_ids from feature_set_ids
+   - Inserts into ml_classifier_config_experiment_feature_sets junction table
+
+Changes in previous version (6.23):
+1. Add classifier-migrate-configs-to-global command
+   - Migrates data from old per-classifier tables to global ml_classifier_configs
+   - Preserves config_id values for junction table compatibility
+   - Must run BEFORE adding FK constraints
+
+Changes in previous version (6.22):
+1. CRITICAL FIX: Change config table design from per-classifier to GLOBAL
+   - Add classifier-create-global-config-table command
+   - Creates ml_classifier_configs (global for ALL classifiers)
+   - Add classifier-add-config-foreign-keys command
+   - Adds FK constraints from junction tables to global config table
+
+Changes in previous version (6.21):
+1. Phase 0b Task 0b.7: Implement classifier-config-delete command (DEPRECATED - used per-classifier tables)
+
+Changes in previous version (6.20):
+1. FEATURE: Add feature set support to classifier-config-create
+   - Query all feature sets when --feature-sets all (default)
+   - Validate feature set IDs against experiment configuration
+   - Insert into ml_classifier_config_experiment_feature_sets junction table
+
+Changes in previous version (6.19):
+1. BUGFIX: Fixed argument parsing in classifier-config-create and classifier-migrate-config-tables
+   - Remove incorrect shlex.split() usage (args is already a list)
+
+Changes in previous version (6.18):
+1. Phase 0b Task 0b.3: Rewrite classifier-config-create with junction tables
+   - Complete rewrite to use normalized junction tables
+   - Get global_classifier_id from ml_experiment_classifiers
+   - Insert config metadata into per-classifier table
+   - Insert hyperparameters into 6 global junction tables
+
+Changes in previous version (6.17):
+1. Phase 0b Task 0b.2: Drop/recreate config tables with new schema
+   - Add classifier-migrate-config-tables command
+   - Drop old array-based config tables
+
+Changes in previous version (6.16):
+1. Phase 0b Task 0b.1: Create 6 global junction tables
+   - Add classifier-create-junction-tables command
+   - Create all 6 junction tables with 4-part composite PKs
+   - Enable CASCADE deletes and foreign key validation
+
+Changes in previous version (6.15):
+1. Phase 0b Task 0b.0: Migrate ml_experiment_classifiers
+   - Add classifier-migrate-registry command
+   - Add global_classifier_id as new PRIMARY KEY
+   - Maintain (experiment_id, classifier_id) as UNIQUE constraint
+
+Changes in previous version (6.14):
+1. Phase 0b Task 1: Implement classifier-config-create command (DEPRECATED - needs rewrite)
+   - Initial array-based implementation
+   - Fixed SQL column name bug (df.function_name)
+   - Added data type name-to-ID conversion
 
 Changes in previous version (6.13):
 1. LOCAL COMMIT: Phase 0a Classifier Registry Setup complete
@@ -54,7 +124,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.6.14"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.23"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -202,6 +272,9 @@ class MLDPCompleter(Completer):
 
             # Classifier Management (Phase 0a)
             'classifier-create-registry': [],
+            'classifier-migrate-registry': ['--force', '--help'],
+            'classifier-create-junction-tables': ['--force', '--help'],
+            'classifier-migrate-config-tables': ['--experiment-id', '--classifier-id', '--all', '--force', '--help'],
             'classifier-new': ['--name', '--description', '--type', '--auto-select', '--no-auto-select', '--help'],
             'classifier-remove': ['--classifier-id', '--confirm', '--archive-instead', '--help'],
             'classifier-list': ['--include-archived', '--show-tables', '--help'],
@@ -210,6 +283,15 @@ class MLDPCompleter(Completer):
             'classifier-config-create': ['--config-name', '--decimation-factors', '--data-types',
                                         '--amplitude-methods', '--feature-sets', '--features',
                                         '--distance-functions', '--set-active', '--notes', '--help'],
+            'classifier-config-list': ['--all', '--experiment-id', '--classifier-id', '--help'],
+            'classifier-config-activate': ['--config-name', '--config-id', '--help'],
+            'classifier-config-show': ['--config-name', '--config-id', '--active', '--help'],
+            'classifier-config-delete': ['--config-name', '--config-id', '--confirm', '--help'],
+            'classifier-config-add-feature-sets': ['--config-id', '--feature-sets', '--experiment-id', '--help'],
+            'classifier-create-global-config-table': ['--force', '--help'],
+            'classifier-add-config-foreign-keys': ['--help'],
+            'classifier-migrate-configs-to-global': ['--experiment-id', '--classifier-id', '--help'],
+            'classifier-create-feature-builder-table': ['--force', '--help'],
 
             # Utilities
             'verify': [],
@@ -392,11 +474,19 @@ class MLDPShell:
             'mpcctl-execute-experiment': self.cmd_mpcctl_execute_experiment,
             # Classifier management commands (Phase 0a)
             'classifier-create-registry': self.cmd_classifier_create_registry,
+            'classifier-migrate-registry': self.cmd_classifier_migrate_registry,
+            'classifier-create-junction-tables': self.cmd_classifier_create_junction_tables,
+            'classifier-create-global-config-table': self.cmd_classifier_create_global_config_table,
+            'classifier-migrate-configs-to-global': self.cmd_classifier_migrate_configs_to_global,
+            'classifier-add-config-foreign-keys': self.cmd_classifier_add_config_foreign_keys,
+            'classifier-migrate-config-tables': self.cmd_classifier_migrate_config_tables,
             'classifier-new': self.cmd_classifier_new,
             'classifier-remove': self.cmd_classifier_remove,
             'classifier-list': self.cmd_classifier_list,
             # Classifier configuration commands (Phase 0b)
             'classifier-config-create': self.cmd_classifier_config_create,
+            'classifier-config-add-feature-sets': self.cmd_classifier_config_add_feature_sets,
+            'classifier-config-delete': self.cmd_classifier_config_delete,
         }
     
     def get_prompt(self):
@@ -1744,6 +1834,13 @@ class MLDPShell:
 
 🤖 CLASSIFIER MANAGEMENT:
   classifier-create-registry          Create ml_experiment_classifiers table (one-time setup)
+  classifier-migrate-registry         Migrate to global_classifier_id schema (Phase 0b)
+    [--force]                         Skip confirmation prompt
+  classifier-create-junction-tables   Create 6 junction tables for normalized config storage
+    [--force]                         Recreate tables if they exist
+  classifier-migrate-config-tables    Drop/recreate config tables with new schema
+    [--all]                           Migrate all classifiers in experiment
+    [--force]                         Skip confirmation prompt
   classifier-new --name <name>        Create new classifier instance
     [--description <desc>]            Optional description
     [--type <type>]                   Classifier type (default: svm)
@@ -1761,6 +1858,53 @@ class MLDPShell:
     set classifier 1
     classifier-list --include-archived
     classifier-remove --classifier-id 2 --confirm
+
+⚙️  CLASSIFIER CONFIGURATION (Phase 0b):
+  classifier-config-create            Create a new configuration for current classifier
+    --config-name <name>              Configuration name (required)
+    --decimation-factors <list>       Comma-separated decimation factors or "all"
+    --data-types <list>               Comma-separated data type names (e.g., adc6,adc8,adc10,adc12)
+    --amplitude-methods <list>        Comma-separated amplitude method IDs or "all"
+    --distance-functions <list>       Comma-separated distance function names or "all"
+    --feature-sets <list>             Comma-separated feature set IDs or "all" (default)
+    --set-active                      Set as active configuration
+    --notes <text>                    Optional notes
+
+  classifier-config-list              List all configurations for current classifier
+    [--all]                           Show configs for all classifiers
+    [--experiment-id <id>]            Specify experiment ID
+    [--classifier-id <id>]            Specify classifier ID
+
+  classifier-config-activate          Activate a configuration
+    --config-name <name>              Configuration name
+      or --config-id <id>             Configuration ID
+
+  classifier-config-show              Show detailed configuration information
+    [--config-name <name>]            Show specific config by name
+    [--config-id <id>]                Show specific config by ID
+    [--active]                        Show active config (default)
+
+  classifier-config-delete            Delete a configuration
+    --config-name <name>              Configuration name
+      or --config-id <id>             Configuration ID
+    [--confirm]                       Skip confirmation prompt
+
+  classifier-config-add-feature-sets  Add feature sets to existing config
+    --config-id <id>                  Configuration ID
+    --feature-sets <list>             Comma-separated feature_set_ids from ml_feature_sets_lut
+
+  classifier-create-global-config-table    Create global ml_classifier_configs table (one-time)
+  classifier-create-feature-builder-table  Create ml_classifier_feature_builder table (one-time)
+
+  Examples:
+    classifier-config-create --config-name "baseline" --decimation-factors all \\
+                             --data-types adc6,adc8,adc10,adc12 --feature-sets all \\
+                             --distance-functions all --set-active
+    classifier-config-list
+    classifier-config-show
+    classifier-config-activate --config-name "baseline"
+    classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
+    classifier-config-delete --config-name "test_config" --confirm
 
 📂 DATA MANAGEMENT:
   get-experiment-data-path            Show paths and file counts for experiment data
@@ -8365,6 +8509,885 @@ class MLDPShell:
             self.db_conn.rollback()
             print(f"[ERROR] Failed to create ml_experiment_classifiers table: {e}")
 
+    def cmd_classifier_migrate_registry(self, args):
+        """
+        Migrate ml_experiment_classifiers to add global_classifier_id
+
+        Usage: classifier-migrate-registry [--force]
+
+        This migration adds global_classifier_id as the new PRIMARY KEY.
+        The global_classifier_id is a SERIAL field that uniquely identifies
+        classifiers across ALL experiments, enabling proper CASCADE deletes
+        and junction table relationships.
+
+        Changes:
+        1. Add global_classifier_id SERIAL column
+        2. Backfill existing rows with sequential IDs
+        3. Change PRIMARY KEY from (experiment_id, classifier_id) to global_classifier_id
+        4. Add UNIQUE constraint on (experiment_id, classifier_id)
+        5. Create index on global_classifier_id
+
+        Options:
+            --force    Skip confirmation prompt
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        force = '--force' in args.split() if args else False
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if migration already done
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'ml_experiment_classifiers'
+                AND column_name = 'global_classifier_id'
+            """)
+
+            if cursor.fetchone():
+                print("[INFO] Migration already complete - global_classifier_id exists")
+                return
+
+            # Show warning and get confirmation
+            if not force:
+                print("\n[WARNING] This migration will modify ml_experiment_classifiers")
+                print("          - Add global_classifier_id as new PRIMARY KEY")
+                print("          - Change (experiment_id, classifier_id) to UNIQUE constraint")
+                print("          - This is a one-way migration")
+                print("\nType 'MIGRATE REGISTRY' to confirm:")
+
+                confirmation = input().strip()
+                if confirmation != 'MIGRATE REGISTRY':
+                    print("[CANCELLED] Migration aborted")
+                    return
+
+            print("\n[STEP 1/6] Adding global_classifier_id column...")
+            cursor.execute("""
+                ALTER TABLE ml_experiment_classifiers
+                ADD COLUMN global_classifier_id SERIAL
+            """)
+            print("  ✓ Column added")
+
+            print("\n[STEP 2/6] Backfilling existing rows...")
+            # The SERIAL type automatically assigns values via the sequence
+            # But we need to update rows that were added before the column existed
+            cursor.execute("""
+                SELECT COUNT(*) FROM ml_experiment_classifiers
+                WHERE global_classifier_id IS NULL
+            """)
+            null_count = cursor.fetchone()[0]
+
+            if null_count > 0:
+                cursor.execute("""
+                    UPDATE ml_experiment_classifiers
+                    SET global_classifier_id = nextval('ml_experiment_classifiers_global_classifier_id_seq')
+                    WHERE global_classifier_id IS NULL
+                """)
+                print(f"  ✓ Backfilled {null_count} rows")
+            else:
+                print("  ✓ No backfill needed")
+
+            print("\n[STEP 3/6] Dropping old PRIMARY KEY constraint...")
+            cursor.execute("""
+                ALTER TABLE ml_experiment_classifiers
+                DROP CONSTRAINT ml_experiment_classifiers_pkey
+            """)
+            print("  ✓ Old PRIMARY KEY dropped")
+
+            print("\n[STEP 4/6] Adding new PRIMARY KEY on global_classifier_id...")
+            cursor.execute("""
+                ALTER TABLE ml_experiment_classifiers
+                ADD PRIMARY KEY (global_classifier_id)
+            """)
+            print("  ✓ New PRIMARY KEY added")
+
+            print("\n[STEP 5/6] Adding UNIQUE constraint on (experiment_id, classifier_id)...")
+            cursor.execute("""
+                ALTER TABLE ml_experiment_classifiers
+                ADD CONSTRAINT ml_experiment_classifiers_exp_cls_unique
+                UNIQUE (experiment_id, classifier_id)
+            """)
+            print("  ✓ UNIQUE constraint added")
+
+            print("\n[STEP 6/6] Creating index on global_classifier_id...")
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_exp_classifiers_global
+                ON ml_experiment_classifiers(global_classifier_id)
+            """)
+            print("  ✓ Index created")
+
+            self.db_conn.commit()
+
+            print("\n[SUCCESS] Migration complete!")
+            print("  - global_classifier_id is now PRIMARY KEY")
+            print("  - (experiment_id, classifier_id) is now UNIQUE")
+            print("  - Ready for junction table creation")
+
+            # Show current state
+            cursor.execute("""
+                SELECT global_classifier_id, experiment_id, classifier_id, classifier_name
+                FROM ml_experiment_classifiers
+                ORDER BY global_classifier_id
+            """)
+            rows = cursor.fetchall()
+
+            if rows:
+                print("\nCurrent classifiers:")
+                headers = ['Global ID', 'Exp ID', 'Cls ID', 'Name']
+                print(tabulate(rows, headers=headers, tablefmt='simple'))
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Migration failed: {e}")
+            print("  Database rolled back to previous state")
+
+    def cmd_classifier_create_junction_tables(self, args):
+        """
+        Create 6 global junction tables for classifier configuration hyperparameters
+
+        Usage: classifier-create-junction-tables [--force]
+
+        Creates the normalized junction tables that replace array-based storage.
+        Each junction table has a 4-part composite PRIMARY KEY:
+        (global_classifier_id, experiment_id, config_id, element_id)
+
+        Junction Tables Created:
+        1. ml_classifier_config_decimation_factors
+        2. ml_classifier_config_data_types
+        3. ml_classifier_config_amplitude_methods
+        4. ml_classifier_config_experiment_feature_sets
+        5. ml_classifier_config_feature_set_features
+        6. ml_classifier_config_distance_functions
+
+        Benefits:
+        - Referential integrity with foreign keys
+        - Proper 1NF compliance (no arrays)
+        - Easy querying: "find all configs using decimation_factor=7"
+        - CASCADE deletes work properly
+        - Validates all hyperparameter values against lookup tables
+
+        Options:
+            --force    Recreate tables if they already exist
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        force = '--force' in args.split() if args else False
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if global_classifier_id exists
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'ml_experiment_classifiers'
+                AND column_name = 'global_classifier_id'
+            """)
+
+            if not cursor.fetchone():
+                print("[ERROR] ml_experiment_classifiers not migrated yet")
+                print("  Run: classifier-migrate-registry")
+                return
+
+            # Define all 6 junction tables
+            junction_tables = [
+                {
+                    'name': 'ml_classifier_config_decimation_factors',
+                    'element_column': 'decimation_factor',
+                    'element_type': 'INTEGER',
+                    'foreign_keys': []
+                },
+                {
+                    'name': 'ml_classifier_config_data_types',
+                    'element_column': 'data_type_id',
+                    'element_type': 'INTEGER',
+                    'foreign_keys': [
+                        ('data_type_id', 'ml_data_types_lut', 'data_type_id')
+                    ]
+                },
+                {
+                    'name': 'ml_classifier_config_amplitude_methods',
+                    'element_column': 'amplitude_processing_method_id',
+                    'element_type': 'INTEGER',
+                    'foreign_keys': []
+                },
+                {
+                    'name': 'ml_classifier_config_experiment_feature_sets',
+                    'element_column': 'experiment_feature_set_id',
+                    'element_type': 'BIGINT',
+                    'foreign_keys': []
+                },
+                {
+                    'name': 'ml_classifier_config_feature_set_features',
+                    'element_column': 'feature_set_feature_id',
+                    'element_type': 'BIGINT',
+                    'foreign_keys': []
+                },
+                {
+                    'name': 'ml_classifier_config_distance_functions',
+                    'element_column': 'distance_function_id',
+                    'element_type': 'INTEGER',
+                    'foreign_keys': [
+                        ('distance_function_id', 'ml_distance_functions_lut', 'distance_function_id')
+                    ]
+                }
+            ]
+
+            tables_created = []
+            tables_existed = []
+
+            for table_def in junction_tables:
+                table_name = table_def['name']
+                element_column = table_def['element_column']
+                element_type = table_def['element_type']
+                foreign_keys = table_def['foreign_keys']
+
+                # Check if table exists
+                cursor.execute("""
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_name = %s
+                """, (table_name,))
+
+                exists = cursor.fetchone()
+
+                if exists and not force:
+                    tables_existed.append(table_name)
+                    continue
+
+                if exists and force:
+                    print(f"  Dropping {table_name}...")
+                    cursor.execute(f"DROP TABLE {table_name} CASCADE")
+
+                # Create junction table
+                print(f"  Creating {table_name}...")
+
+                # Build foreign key clauses
+                fk_clauses = [
+                    """FOREIGN KEY (global_classifier_id)
+                        REFERENCES ml_experiment_classifiers(global_classifier_id)
+                        ON DELETE CASCADE"""
+                ]
+
+                for fk_col, fk_table, fk_ref_col in foreign_keys:
+                    fk_clauses.append(f"""FOREIGN KEY ({fk_col})
+                        REFERENCES {fk_table}({fk_ref_col})""")
+
+                fk_sql = ',\n    '.join(fk_clauses)
+
+                create_sql = f"""
+                    CREATE TABLE {table_name} (
+                        global_classifier_id INTEGER NOT NULL,
+                        experiment_id INTEGER NOT NULL,
+                        config_id INTEGER NOT NULL,
+                        {element_column} {element_type} NOT NULL,
+                        PRIMARY KEY (global_classifier_id, experiment_id, config_id, {element_column}),
+                        {fk_sql}
+                    )
+                """
+
+                cursor.execute(create_sql)
+
+                # Create indexes
+                index_prefix = table_name.replace('ml_classifier_config_', 'idx_clf_config_')
+                indexes = [
+                    f"CREATE INDEX {index_prefix}_global ON {table_name}(global_classifier_id)",
+                    f"CREATE INDEX {index_prefix}_exp ON {table_name}(experiment_id)",
+                    f"CREATE INDEX {index_prefix}_config ON {table_name}(config_id)"
+                ]
+
+                # Add index on element column for lookup tables
+                if foreign_keys:
+                    element_short = element_column.replace('_id', '')
+                    if element_short.endswith('_function'):
+                        element_short = 'func'
+                    elif element_short.endswith('_type'):
+                        element_short = 'type'
+                    elif element_short.endswith('_method'):
+                        element_short = 'method'
+
+                    indexes.append(f"CREATE INDEX {index_prefix}_{element_short} ON {table_name}({element_column})")
+
+                for index_sql in indexes:
+                    cursor.execute(index_sql)
+
+                tables_created.append(table_name)
+
+            self.db_conn.commit()
+
+            # Print summary
+            if tables_created:
+                print(f"\n[SUCCESS] Created {len(tables_created)} junction tables")
+                for table_name in tables_created:
+                    print(f"  ✓ {table_name}")
+
+            if tables_existed:
+                print(f"\n[INFO] {len(tables_existed)} tables already exist (use --force to recreate)")
+                for table_name in tables_existed:
+                    print(f"  - {table_name}")
+
+            if tables_created:
+                print("\nJunction tables ready for normalized config storage!")
+                print("  - 4-part composite PRIMARY KEY")
+                print("  - CASCADE deletes enabled")
+                print("  - Foreign key validation")
+                print("\nNext step: classifier-config-create (with junction tables)")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to create junction tables: {e}")
+            print("  Database rolled back to previous state")
+
+    def cmd_classifier_create_global_config_table(self, args):
+        """
+        Create the global ml_classifier_configs table
+
+        Usage: classifier-create-global-config-table [--force]
+
+        Creates a single GLOBAL config table for ALL classifiers across ALL experiments.
+        This replaces the per-classifier config tables and enables proper CASCADE deletes
+        from junction tables.
+
+        Schema:
+        - config_id: SERIAL PRIMARY KEY (unique across all configs)
+        - global_classifier_id: Links to ml_experiment_classifiers
+        - experiment_id: Denormalized for query optimization
+        - classifier_id: Denormalized for query optimization
+        - config_name: Must be unique within a classifier
+        - is_active: Boolean flag
+        - created_at, updated_at, notes
+
+        Options:
+            --force    Recreate table if it exists
+
+        IMPORTANT: This is a one-time setup command. After creating this table,
+        junction tables can have proper FK constraints with CASCADE delete.
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        force = '--force' in args if args else False
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'ml_classifier_configs'
+            """)
+
+            exists = cursor.fetchone()
+
+            if exists and not force:
+                print("[INFO] ml_classifier_configs table already exists")
+                print("  Use --force to recreate")
+                return
+
+            if exists and force:
+                print("[WARNING] Dropping existing ml_classifier_configs table...")
+                cursor.execute("DROP TABLE ml_classifier_configs CASCADE")
+                print("  ✓ Dropped")
+
+            # Create global config table
+            print("Creating ml_classifier_configs table...")
+
+            create_sql = """
+                CREATE TABLE ml_classifier_configs (
+                    config_id SERIAL PRIMARY KEY,
+                    global_classifier_id INTEGER NOT NULL,
+                    experiment_id INTEGER NOT NULL,
+                    classifier_id INTEGER NOT NULL,
+                    config_name VARCHAR(255) NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    notes TEXT,
+                    FOREIGN KEY (global_classifier_id)
+                        REFERENCES ml_experiment_classifiers(global_classifier_id)
+                        ON DELETE CASCADE,
+                    UNIQUE(global_classifier_id, config_name)
+                );
+
+                CREATE INDEX idx_classifier_configs_global ON ml_classifier_configs(global_classifier_id);
+                CREATE INDEX idx_classifier_configs_exp ON ml_classifier_configs(experiment_id);
+                CREATE INDEX idx_classifier_configs_active ON ml_classifier_configs(is_active);
+                CREATE INDEX idx_classifier_configs_lookup ON ml_classifier_configs(experiment_id, classifier_id);
+            """
+
+            cursor.execute(create_sql)
+            self.db_conn.commit()
+
+            print("\n[SUCCESS] Created ml_classifier_configs table")
+            print("  - config_id: SERIAL PRIMARY KEY (global)")
+            print("  - Foreign key to ml_experiment_classifiers")
+            print("  - Unique constraint on (global_classifier_id, config_name)")
+            print("  - Indexes for efficient querying")
+            print("\nNext: Update junction tables with FK constraints")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to create global config table: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_migrate_configs_to_global(self, args):
+        """
+        Migrate configs from per-classifier tables to global ml_classifier_configs table
+
+        Usage: classifier-migrate-configs-to-global [--experiment-id <N>] [--all]
+
+        This command finds existing per-classifier config tables and migrates
+        their data to the global ml_classifier_configs table. Run this BEFORE
+        adding foreign key constraints.
+
+        Steps:
+        1. Find all experiment_NNN_classifier_MMM_config tables
+        2. For each config row, copy to ml_classifier_configs
+        3. Preserve config_id so junction table data remains valid
+
+        Options:
+            --experiment-id <N>    Migrate only configs for specific experiment
+            --all                  Migrate configs from all experiments (default)
+
+        IMPORTANT: Run this BEFORE classifier-add-config-foreign-keys!
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        experiment_id = None
+        migrate_all = True
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--experiment-id' and i + 1 < len(args):
+                experiment_id = int(args[i + 1])
+                migrate_all = False
+                i += 2
+            elif args[i] == '--all':
+                migrate_all = True
+                i += 1
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if global config table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'ml_classifier_configs'
+            """)
+
+            if not cursor.fetchone():
+                print("[ERROR] ml_classifier_configs table does not exist")
+                print("  Run: classifier-create-global-config-table")
+                return
+
+            # Find all per-classifier config tables
+            pattern = 'experiment_%_classifier_%_config'
+            if not migrate_all:
+                pattern = f'experiment_{experiment_id:03d}_classifier_%_config'
+
+            cursor.execute("""
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                AND tablename LIKE %s
+                ORDER BY tablename
+            """, (pattern,))
+
+            tables = [row[0] for row in cursor.fetchall()]
+
+            if not tables:
+                print(f"[INFO] No per-classifier config tables found matching: {pattern}")
+                return
+
+            print(f"\n[MIGRATION] Found {len(tables)} config table(s) to migrate:")
+            for table in tables:
+                print(f"  - {table}")
+
+            # Migrate each table
+            total_migrated = 0
+            for table_name in tables:
+                # Parse experiment_id and classifier_id from table name
+                # Format: experiment_041_classifier_001_config
+                parts = table_name.split('_')
+                exp_id = int(parts[1])
+                cls_id = int(parts[3])
+
+                # Get global_classifier_id
+                cursor.execute("""
+                    SELECT global_classifier_id
+                    FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s AND classifier_id = %s
+                """, (exp_id, cls_id))
+
+                result = cursor.fetchone()
+                if not result:
+                    print(f"\n[WARNING] Skipping {table_name} - classifier not found")
+                    continue
+
+                global_cls_id = result[0]
+
+                # Select all configs from per-classifier table
+                cursor.execute(f"""
+                    SELECT config_id, config_name, is_active, created_at, updated_at, notes
+                    FROM {table_name}
+                    ORDER BY config_id
+                """)
+
+                configs = cursor.fetchall()
+
+                if not configs:
+                    print(f"\n  {table_name}: No configs to migrate")
+                    continue
+
+                print(f"\n  Migrating {len(configs)} config(s) from {table_name}...")
+
+                for config_row in configs:
+                    config_id, config_name, is_active, created_at, updated_at, notes = config_row
+
+                    # Check if config_id already exists in global table
+                    cursor.execute("""
+                        SELECT config_id
+                        FROM ml_classifier_configs
+                        WHERE config_id = %s
+                    """, (config_id,))
+
+                    if cursor.fetchone():
+                        print(f"    - Config {config_id} ({config_name}): Already exists, skipping")
+                        continue
+
+                    # Insert into global table, preserving config_id
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_configs
+                            (config_id, global_classifier_id, experiment_id, classifier_id,
+                             config_name, is_active, created_at, updated_at, notes)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (config_id, global_cls_id, exp_id, cls_id, config_name,
+                          is_active, created_at, updated_at, notes))
+
+                    print(f"    ✓ Migrated config {config_id}: {config_name}")
+                    total_migrated += 1
+
+                # Update sequence to prevent conflicts
+                cursor.execute("""
+                    SELECT setval('ml_classifier_configs_config_id_seq',
+                                  (SELECT MAX(config_id) FROM ml_classifier_configs))
+                """)
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Migration complete")
+            print(f"  - Total configs migrated: {total_migrated}")
+            print(f"  - Tables processed: {len(tables)}")
+            print("\nNext steps:")
+            print("  1. Run: classifier-add-config-foreign-keys")
+            print("  2. Optionally drop old per-classifier tables")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Migration failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_add_config_foreign_keys(self, args):
+        """
+        Add foreign key constraints from junction tables to ml_classifier_configs
+
+        Usage: classifier-add-config-foreign-keys
+
+        This adds FK constraints with CASCADE delete to all junction tables,
+        pointing to the global ml_classifier_configs table. This enables
+        automatic cleanup when configs are deleted.
+
+        FK Constraints Added:
+        1. ml_classifier_config_decimation_factors -> ml_classifier_configs(config_id)
+        2. ml_classifier_config_data_types -> ml_classifier_configs(config_id)
+        3. ml_classifier_config_amplitude_methods -> ml_classifier_configs(config_id)
+        4. ml_classifier_config_distance_functions -> ml_classifier_configs(config_id)
+        5. ml_classifier_config_experiment_feature_sets -> ml_classifier_configs(config_id)
+        6. ml_classifier_config_feature_set_features -> ml_classifier_configs(config_id)
+
+        IMPORTANT: Run classifier-create-global-config-table first!
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if global config table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'ml_classifier_configs'
+            """)
+
+            if not cursor.fetchone():
+                print("[ERROR] ml_classifier_configs table does not exist")
+                print("  Run: classifier-create-global-config-table")
+                return
+
+            # Define junction tables
+            junction_tables = [
+                'ml_classifier_config_decimation_factors',
+                'ml_classifier_config_data_types',
+                'ml_classifier_config_amplitude_methods',
+                'ml_classifier_config_distance_functions',
+                'ml_classifier_config_experiment_feature_sets',
+                'ml_classifier_config_feature_set_features'
+            ]
+
+            added = 0
+            skipped = 0
+
+            for table_name in junction_tables:
+                # Check if FK already exists
+                fk_name = f"fk_{table_name}_config"
+
+                cursor.execute("""
+                    SELECT constraint_name
+                    FROM information_schema.table_constraints
+                    WHERE table_name = %s
+                    AND constraint_type = 'FOREIGN KEY'
+                    AND constraint_name = %s
+                """, (table_name, fk_name))
+
+                if cursor.fetchone():
+                    print(f"  - {table_name}: FK already exists")
+                    skipped += 1
+                    continue
+
+                # Add FK constraint
+                print(f"  Adding FK to {table_name}...")
+
+                alter_sql = f"""
+                    ALTER TABLE {table_name}
+                    ADD CONSTRAINT {fk_name}
+                    FOREIGN KEY (config_id)
+                    REFERENCES ml_classifier_configs(config_id)
+                    ON DELETE CASCADE
+                """
+
+                cursor.execute(alter_sql)
+                print(f"    ✓ Added FK constraint: {fk_name}")
+                added += 1
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Foreign key constraints updated")
+            print(f"  - Added: {added}")
+            print(f"  - Skipped (already exists): {skipped}")
+            print("\nCASCADE delete now enabled:")
+            print("  Deleting a config from ml_classifier_configs will automatically")
+            print("  delete all associated entries from junction tables")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to add foreign keys: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_migrate_config_tables(self, args):
+        """
+        Drop old array-based config tables and recreate with normalized schema
+
+        Usage: classifier-migrate-config-tables [--experiment-id <N>] [--classifier-id <M>] [--all] [--force]
+
+        This command handles migration from array-based config storage to
+        normalized junction tables. It drops old config tables that used
+        PostgreSQL arrays and recreates them with the new schema (no arrays).
+
+        The new schema stores only metadata (config_name, is_active, etc.)
+        while hyperparameters are stored in the 6 global junction tables.
+
+        Options:
+            --experiment-id <N>       Target specific experiment (default: current)
+            --classifier-id <M>       Target specific classifier (default: current)
+            --all                     Migrate all config tables for current experiment
+            --force                   Skip confirmation prompt
+
+        Examples:
+            classifier-migrate-config-tables                    # Migrate current classifier
+            classifier-migrate-config-tables --all              # Migrate all classifiers in experiment
+            classifier-migrate-config-tables --experiment-id 41 --classifier-id 1
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments (args is already a list)
+        experiment_id = self.current_experiment
+        classifier_id = self.current_classifier_id
+        migrate_all = False
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--experiment-id' and i + 1 < len(args):
+                experiment_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--classifier-id' and i + 1 < len(args):
+                classifier_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--all':
+                migrate_all = True
+                i += 1
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not experiment_id:
+            print("[ERROR] No experiment selected. Use 'set experiment <N>' or --experiment-id")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Determine which config tables to migrate
+            if migrate_all:
+                # Get all classifiers for experiment
+                cursor.execute("""
+                    SELECT experiment_id, classifier_id, classifier_name, global_classifier_id
+                    FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s
+                    ORDER BY classifier_id
+                """, (experiment_id,))
+                classifiers = cursor.fetchall()
+
+                if not classifiers:
+                    print(f"[ERROR] No classifiers found for experiment {experiment_id}")
+                    return
+
+                tables_to_migrate = [
+                    (row[0], row[1], row[2], row[3])  # exp_id, cls_id, cls_name, global_cls_id
+                    for row in classifiers
+                ]
+            else:
+                if not classifier_id:
+                    print("[ERROR] No classifier selected. Use 'set classifier <N>' or --classifier-id")
+                    return
+
+                # Get single classifier
+                cursor.execute("""
+                    SELECT experiment_id, classifier_id, classifier_name, global_classifier_id
+                    FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s AND classifier_id = %s
+                """, (experiment_id, classifier_id))
+
+                row = cursor.fetchone()
+                if not row:
+                    print(f"[ERROR] Classifier {classifier_id} not found for experiment {experiment_id}")
+                    return
+
+                tables_to_migrate = [(row[0], row[1], row[2], row[3])]
+
+            # Show migration plan
+            print(f"\n[MIGRATION PLAN] Will migrate {len(tables_to_migrate)} config table(s):")
+            for exp_id, cls_id, cls_name, global_cls_id in tables_to_migrate:
+                table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_config"
+                print(f"  - {table_name} (classifier: {cls_name}, global_id: {global_cls_id})")
+
+            # Get confirmation
+            if not force:
+                print("\n[WARNING] This will DROP existing config tables and recreate with new schema")
+                print("          ALL configuration data in these tables will be LOST")
+                print("          Junction table data is unaffected")
+                print("\nType 'MIGRATE CONFIG' to confirm:")
+
+                confirmation = input().strip()
+                if confirmation != 'MIGRATE CONFIG':
+                    print("[CANCELLED] Migration aborted")
+                    return
+
+            # Migrate each table
+            migrated = 0
+            for exp_id, cls_id, cls_name, global_cls_id in tables_to_migrate:
+                table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_config"
+
+                # Check if table exists
+                cursor.execute("""
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_name = %s
+                """, (table_name,))
+
+                exists = cursor.fetchone()
+
+                if exists:
+                    print(f"\n  Dropping {table_name}...")
+                    cursor.execute(f"DROP TABLE {table_name} CASCADE")
+                    print("    ✓ Dropped")
+
+                # Create new schema (simplified, no arrays)
+                print(f"  Creating {table_name} (new schema)...")
+
+                create_sql = f"""
+                    CREATE TABLE {table_name} (
+                        config_id SERIAL PRIMARY KEY,
+                        global_classifier_id INTEGER NOT NULL,
+                        experiment_id INTEGER NOT NULL,
+                        config_name VARCHAR(255) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        notes TEXT,
+                        FOREIGN KEY (global_classifier_id)
+                            REFERENCES ml_experiment_classifiers(global_classifier_id)
+                            ON DELETE CASCADE,
+                        UNIQUE(global_classifier_id, config_name)
+                    )
+                """
+
+                cursor.execute(create_sql)
+
+                # Create indexes
+                cursor.execute(f"""
+                    CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_config_active
+                    ON {table_name}(is_active)
+                """)
+
+                cursor.execute(f"""
+                    CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_config_global
+                    ON {table_name}(global_classifier_id)
+                """)
+
+                print("    ✓ Created with new schema")
+                migrated += 1
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Migrated {migrated} config table(s)")
+            print("  - Array columns removed")
+            print("  - global_classifier_id added")
+            print("  - Foreign key constraints enabled")
+            print("  - Ready for junction table-based config creation")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Migration failed: {e}")
+            print("  Database rolled back to previous state")
+
     def cmd_classifier_new(self, args):
         """
         Create new classifier instance for current experiment
@@ -8457,18 +9480,22 @@ class MLDPShell:
                 print("       Use a different name or remove the existing classifier")
                 return
 
-            # Insert new classifier
+            # Insert new classifier and get global_classifier_id
             cursor.execute("""
                 INSERT INTO ml_experiment_classifiers
                     (experiment_id, classifier_id, classifier_name, classifier_description, classifier_type)
                 VALUES (%s, %s, %s, %s, %s)
+                RETURNING global_classifier_id
             """, (self.current_experiment, next_id, name, description, classifier_type))
+
+            global_classifier_id = cursor.fetchone()[0]
 
             self.db_conn.commit()
 
             print(f"[SUCCESS] Created classifier {next_id} for experiment {self.current_experiment}")
             print(f"  - Name: {name}")
             print(f"  - Type: {classifier_type}")
+            print(f"  - Global Classifier ID: {global_classifier_id}")
             if description:
                 print(f"  - Description: {description}")
 
@@ -8815,14 +9842,17 @@ class MLDPShell:
 
     def cmd_classifier_config_create(self, args):
         """
-        Create new configuration for currently selected classifier
+        Create new configuration for currently selected classifier (JUNCTION TABLE VERSION)
 
         Usage: classifier-config-create --config-name <name> [OPTIONS]
+
+        This command stores configuration metadata in the per-classifier config table
+        and hyperparameter values in the 6 global junction tables.
 
         Options:
             --config-name <name>           Unique configuration name (required)
             --decimation-factors <list>    Comma-separated or 'all' (default: 0)
-            --data-types <list>            Comma-separated or 'all' (default: adc12)
+            --data-types <list>            Comma-separated names/IDs or 'all' (default: adc12)
             --amplitude-methods <list>     Comma-separated IDs or 'all' (default: 1)
             --feature-sets <list>          Comma-separated IDs or 'all' (default: all)
             --features <list>              Comma-separated IDs or 'all' (default: all)
@@ -8831,7 +9861,8 @@ class MLDPShell:
             --notes <text>                 Configuration description
 
         Example:
-            classifier-config-create --config-name "baseline" --set-active
+            classifier-config-create --config-name "baseline" --decimation-factors 0,7,15 \
+                --data-types adc6,adc8,adc10,adc12 --distance-functions l1,l2,wasserstein --set-active
         """
         if not self.db_conn:
             print("[ERROR] Not connected to database. Use 'connect' first.")
@@ -8845,7 +9876,7 @@ class MLDPShell:
             print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
             return
 
-        # Parse arguments
+        # Parse arguments (args is already a list)
         config_name = None
         decimation_factors = '0'
         data_types = 'adc12'
@@ -8900,10 +9931,23 @@ class MLDPShell:
         try:
             cursor = self.db_conn.cursor()
 
-            # Build config table name
+            # STEP 1: Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
+                return
+
+            global_classifier_id = result[0]
+
+            # STEP 2: Build config table name and create if needed
             table_name = f"experiment_{self.current_experiment:03d}_classifier_{self.current_classifier_id:03d}_config"
 
-            # Check if config table exists, create if not
             cursor.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
@@ -8913,83 +9957,46 @@ class MLDPShell:
             """, (table_name,))
 
             if not cursor.fetchone()[0]:
-                # Create config table
+                # Create config table with NEW schema (no arrays)
                 create_table_sql = f"""
                     CREATE TABLE {table_name} (
                         config_id SERIAL PRIMARY KEY,
-                        classifier_id INTEGER NOT NULL DEFAULT {self.current_classifier_id},
+                        global_classifier_id INTEGER NOT NULL,
+                        experiment_id INTEGER NOT NULL,
                         config_name VARCHAR(255) NOT NULL,
-                        decimation_factors INTEGER[],
-                        data_type_ids INTEGER[],
-                        amplitude_processing_method_ids INTEGER[],
-                        experiment_feature_set_ids BIGINT[],
-                        feature_set_feature_ids BIGINT[],
-                        distance_function_ids INTEGER[],
                         is_active BOOLEAN DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW(),
                         notes TEXT,
-                        UNIQUE(config_name)
+                        FOREIGN KEY (global_classifier_id)
+                            REFERENCES ml_experiment_classifiers(global_classifier_id)
+                            ON DELETE CASCADE,
+                        UNIQUE(global_classifier_id, config_name)
                     );
 
                     CREATE INDEX idx_exp{self.current_experiment:03d}_cls{self.current_classifier_id:03d}_config_active
                         ON {table_name}(is_active);
+                    CREATE INDEX idx_exp{self.current_experiment:03d}_cls{self.current_classifier_id:03d}_config_global
+                        ON {table_name}(global_classifier_id);
                 """
                 cursor.execute(create_table_sql)
-                self.db_conn.commit()
                 print(f"[INFO] Created config table: {table_name}")
 
-            # Process distance functions - validate and convert names to IDs
-            distance_function_ids_array = None
-            if distance_functions.lower() != 'all':
-                # Query available distance functions for this experiment
-                cursor.execute("""
-                    SELECT df.distance_function_id, df.function_name
-                    FROM ml_experiments_distance_measurements edm
-                    JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
-                    WHERE edm.experiment_id = %s
-                """, (self.current_experiment,))
-
-                available_functions = {row[1]: row[0] for row in cursor.fetchall()}
-
-                if not available_functions:
-                    print(f"[ERROR] No distance functions configured for experiment {self.current_experiment}")
+            # STEP 3: Process decimation factors
+            decimation_factors_list = []
+            if decimation_factors.lower() != 'all':
+                try:
+                    decimation_factors_list = [int(x.strip()) for x in decimation_factors.split(',')]
+                except ValueError:
+                    print(f"[ERROR] Invalid decimation factors: {decimation_factors}")
                     return
 
-                # Convert names to IDs
-                requested_names = [name.strip() for name in distance_functions.split(',')]
-                distance_function_ids = []
-
-                for name in requested_names:
-                    if name not in available_functions:
-                        print(f"[ERROR] Distance function '{name}' not configured for experiment {self.current_experiment}")
-                        print(f"Available functions: {', '.join(available_functions.keys())}")
-                        return
-                    distance_function_ids.append(available_functions[name])
-
-                distance_function_ids_array = distance_function_ids
-
-            # Process other array fields
-            def parse_array(value_str, field_name):
-                if value_str.lower() == 'all':
-                    return None
-                try:
-                    return [int(x.strip()) for x in value_str.split(',')]
-                except ValueError:
-                    print(f"[ERROR] Invalid {field_name}: {value_str}")
-                    return None
-
-            decimation_factors_array = parse_array(decimation_factors, 'decimation_factors')
-            amplitude_methods_array = parse_array(amplitude_methods, 'amplitude_methods')
-            feature_sets_array = parse_array(feature_sets, 'feature_sets') if feature_sets.lower() != 'all' else None
-            features_array = parse_array(features, 'features') if features.lower() != 'all' else None
-
-            # Handle data_types (may be names like 'adc6', 'adc12' or IDs)
-            data_type_ids_array = None
+            # STEP 4: Process data types (convert names to IDs)
+            data_type_ids_list = []
             if data_types.lower() != 'all':
                 # Try to parse as integers first
                 try:
-                    data_type_ids_array = [int(x.strip()) for x in data_types.split(',')]
+                    data_type_ids_list = [int(x.strip()) for x in data_types.split(',')]
                 except ValueError:
                     # Names like 'adc6', 'adc12' - look up IDs
                     cursor.execute("""
@@ -9005,53 +10012,1137 @@ class MLDPShell:
                         print(f"[ERROR] No data types configured for experiment {self.current_experiment}")
                         return
 
-                    # Convert names to IDs
                     requested_types = [name.strip() for name in data_types.split(',')]
-                    data_type_ids = []
-
                     for name in requested_types:
                         if name not in available_types:
-                            print(f"[ERROR] Data type '{name}' not configured for experiment {self.current_experiment}")
-                            print(f"Available types: {', '.join(available_types.keys())}")
+                            print(f"[ERROR] Data type '{name}' not configured")
+                            print(f"Available: {', '.join(available_types.keys())}")
                             return
-                        data_type_ids.append(available_types[name])
+                        data_type_ids_list.append(available_types[name])
 
-                    data_type_ids_array = data_type_ids
+            # STEP 5: Process distance functions (convert names to IDs)
+            distance_function_ids_list = []
+            if distance_functions.lower() != 'all':
+                cursor.execute("""
+                    SELECT df.distance_function_id, df.function_name
+                    FROM ml_experiments_distance_measurements edm
+                    JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                    WHERE edm.experiment_id = %s
+                """, (self.current_experiment,))
 
-            # If set_active, deactivate all other configs for this classifier
+                available_functions = {row[1]: row[0] for row in cursor.fetchall()}
+
+                if not available_functions:
+                    print(f"[ERROR] No distance functions configured for experiment {self.current_experiment}")
+                    return
+
+                requested_names = [name.strip() for name in distance_functions.split(',')]
+                for name in requested_names:
+                    if name not in available_functions:
+                        print(f"[ERROR] Distance function '{name}' not configured")
+                        print(f"Available: {', '.join(available_functions.keys())}")
+                        return
+                    distance_function_ids_list.append(available_functions[name])
+
+            # STEP 6: Process amplitude methods
+            amplitude_methods_list = []
+            if amplitude_methods.lower() != 'all':
+                try:
+                    amplitude_methods_list = [int(x.strip()) for x in amplitude_methods.split(',')]
+                except ValueError:
+                    print(f"[ERROR] Invalid amplitude methods: {amplitude_methods}")
+                    return
+
+            # STEP 6b: Process feature sets
+            feature_sets_list = []
+            if feature_sets.lower() == 'all':
+                # Query all feature sets for this experiment
+                cursor.execute("""
+                    SELECT experiment_feature_set_id
+                    FROM ml_experiments_feature_sets
+                    WHERE experiment_id = %s
+                    ORDER BY experiment_feature_set_id
+                """, (self.current_experiment,))
+
+                feature_sets_list = [row[0] for row in cursor.fetchall()]
+
+                if not feature_sets_list:
+                    print(f"[ERROR] No feature sets configured for experiment {self.current_experiment}")
+                    print("  You need to configure feature sets before creating classifier configs")
+                    return
+            else:
+                # Parse specific feature set IDs
+                try:
+                    feature_sets_list = [int(x.strip()) for x in feature_sets.split(',')]
+                except ValueError:
+                    print(f"[ERROR] Invalid feature sets: {feature_sets}")
+                    return
+
+                # Validate feature sets exist for this experiment
+                for fs_id in feature_sets_list:
+                    cursor.execute("""
+                        SELECT 1
+                        FROM ml_experiments_feature_sets
+                        WHERE experiment_id = %s AND experiment_feature_set_id = %s
+                    """, (self.current_experiment, fs_id))
+
+                    if not cursor.fetchone():
+                        print(f"[ERROR] Feature set {fs_id} not configured for experiment {self.current_experiment}")
+                        return
+
+            # STEP 7: If set_active, deactivate all other configs
             if set_active:
                 cursor.execute(f"""
                     UPDATE {table_name}
-                    SET is_active = FALSE
-                    WHERE classifier_id = %s
-                """, (self.current_classifier_id,))
+                    SET is_active = FALSE, updated_at = NOW()
+                    WHERE global_classifier_id = %s
+                """, (global_classifier_id,))
 
-            # Insert new configuration
+            # STEP 8: Insert config row
             cursor.execute(f"""
                 INSERT INTO {table_name}
-                    (config_name, decimation_factors, data_type_ids,
-                     amplitude_processing_method_ids, experiment_feature_set_ids,
-                     feature_set_feature_ids, distance_function_ids, is_active, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (config_name, decimation_factors_array, data_type_ids_array,
-                  amplitude_methods_array, feature_sets_array, features_array,
-                  distance_function_ids_array, set_active, notes))
+                    (global_classifier_id, experiment_id, config_name, is_active, notes)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING config_id
+            """, (global_classifier_id, self.current_experiment, config_name, set_active, notes))
+
+            config_id = cursor.fetchone()[0]
+
+            # STEP 9: Insert into junction tables
+            inserted_counts = {}
+
+            # Insert decimation factors
+            if decimation_factors_list:
+                for df in decimation_factors_list:
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_decimation_factors
+                            (global_classifier_id, experiment_id, config_id, decimation_factor)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, df))
+                inserted_counts['decimation_factors'] = len(decimation_factors_list)
+
+            # Insert data types
+            if data_type_ids_list:
+                for dt_id in data_type_ids_list:
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_data_types
+                            (global_classifier_id, experiment_id, config_id, data_type_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, dt_id))
+                inserted_counts['data_types'] = len(data_type_ids_list)
+
+            # Insert amplitude methods
+            if amplitude_methods_list:
+                for am_id in amplitude_methods_list:
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_amplitude_methods
+                            (global_classifier_id, experiment_id, config_id, amplitude_processing_method_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, am_id))
+                inserted_counts['amplitude_methods'] = len(amplitude_methods_list)
+
+            # Insert distance functions
+            if distance_function_ids_list:
+                for dfunc_id in distance_function_ids_list:
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_distance_functions
+                            (global_classifier_id, experiment_id, config_id, distance_function_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, dfunc_id))
+                inserted_counts['distance_functions'] = len(distance_function_ids_list)
+
+            # Insert feature sets
+            if feature_sets_list:
+                for fs_id in feature_sets_list:
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_experiment_feature_sets
+                            (global_classifier_id, experiment_id, config_id, experiment_feature_set_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, fs_id))
+                inserted_counts['feature_sets'] = len(feature_sets_list)
 
             self.db_conn.commit()
 
-            print(f"[SUCCESS] Created configuration '{config_name}' for classifier {self.current_classifier_id}")
-            print(f"  - Decimation factors: {decimation_factors}")
-            print(f"  - Data types: {data_types}")
-            print(f"  - Amplitude methods: {amplitude_methods}")
-            print(f"  - Distance functions: {distance_functions}")
+            # Success message
+            print(f"\n[SUCCESS] Created configuration '{config_name}'")
+            print(f"  Config ID: {config_id}")
+            print(f"  Global Classifier ID: {global_classifier_id}")
+            print(f"  Experiment ID: {self.current_experiment}")
+            print(f"  Classifier ID: {self.current_classifier_id}")
+            print("\nHyperparameters stored in junction tables:")
+            print(f"  - Decimation factors: {decimation_factors} ({inserted_counts.get('decimation_factors', 0)} values)")
+            print(f"  - Data types: {data_types} ({inserted_counts.get('data_types', 0)} values)")
+            print(f"  - Amplitude methods: {amplitude_methods} ({inserted_counts.get('amplitude_methods', 0)} values)")
+            print(f"  - Distance functions: {distance_functions} ({inserted_counts.get('distance_functions', 0)} values)")
+            print(f"  - Feature sets: {feature_sets} ({inserted_counts.get('feature_sets', 0)} values)")
+
             if set_active:
-                print("  - Set as ACTIVE configuration")
+                print("\n  Status: ACTIVE configuration")
             if notes:
-                print(f"  - Notes: {notes}")
+                print(f"  Notes: {notes}")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"[ERROR] Failed to create configuration: {e}")
+            print(f"\n[ERROR] Failed to create configuration: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_add_feature_sets(self, args):
+        """
+        Add feature sets to an existing configuration
+
+        Usage: classifier-config-add-feature-sets --config-id <id> --feature-sets <list>
+
+        This command adds feature sets to a configuration by looking up the
+        experiment_feature_set_ids from feature_set_ids and inserting into
+        the ml_classifier_config_experiment_feature_sets junction table.
+
+        Options:
+            --config-id <id>           Config ID (required)
+            --feature-sets <list>      Comma-separated feature_set_ids from ml_feature_sets_lut (required)
+            --experiment-id <id>       Experiment ID (default: current experiment)
+
+        Examples:
+            classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
+            classifier-config-add-feature-sets --config-id 1 --feature-sets 3 --experiment-id 41
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        config_id = None
+        feature_sets = None
+        experiment_id = self.current_experiment
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--feature-sets' and i + 1 < len(args):
+                feature_sets = args[i + 1]
+                i += 2
+            elif args[i] == '--experiment-id' and i + 1 < len(args):
+                experiment_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_add_feature_sets.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_id:
+            print("[ERROR] --config-id is required")
+            return
+
+        if not feature_sets:
+            print("[ERROR] --feature-sets is required")
+            return
+
+        if not experiment_id:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' or --experiment-id")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Parse feature set IDs
+            feature_set_ids = [int(x.strip()) for x in feature_sets.split(',')]
+
+            # Get config info including global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id, experiment_id, classifier_id, config_name
+                FROM ml_classifier_configs
+                WHERE config_id = %s
+            """, (config_id,))
+
+            config_row = cursor.fetchone()
+            if not config_row:
+                print(f"[ERROR] Config ID {config_id} not found in ml_classifier_configs")
+                return
+
+            global_classifier_id, config_exp_id, classifier_id, config_name = config_row
+
+            # Verify experiment matches
+            if config_exp_id != experiment_id:
+                print(f"[ERROR] Config {config_id} belongs to experiment {config_exp_id}, not {experiment_id}")
+                return
+
+            print(f"\n[INFO] Adding feature sets to config '{config_name}' (ID: {config_id})")
+            print(f"  Experiment ID: {experiment_id}")
+            print(f"  Global Classifier ID: {global_classifier_id}")
+            print(f"  Requested feature_set_ids: {feature_set_ids}")
+
+            # Look up experiment_feature_set_ids
+            cursor.execute("""
+                SELECT efs.experiment_feature_set_id, efs.feature_set_id, fs.feature_set_name
+                FROM ml_experiments_feature_sets efs
+                JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                WHERE efs.experiment_id = %s
+                AND efs.feature_set_id = ANY(%s)
+                ORDER BY efs.feature_set_id
+            """, (experiment_id, feature_set_ids))
+
+            feature_set_mappings = cursor.fetchall()
+
+            if not feature_set_mappings:
+                print(f"\n[ERROR] No feature sets found for experiment {experiment_id}")
+                print(f"  Requested: {feature_set_ids}")
+                return
+
+            found_ids = {row[1] for row in feature_set_mappings}
+            missing_ids = set(feature_set_ids) - found_ids
+
+            if missing_ids:
+                print(f"\n[WARNING] Feature set IDs not configured for experiment {experiment_id}: {sorted(missing_ids)}")
+
+            # Insert feature sets
+            inserted = 0
+            skipped = 0
+
+            print(f"\nInserting feature sets into junction table...")
+            for exp_fs_id, fs_id, fs_name in feature_set_mappings:
+                # Check if already exists
+                cursor.execute("""
+                    SELECT 1
+                    FROM ml_classifier_config_experiment_feature_sets
+                    WHERE global_classifier_id = %s
+                    AND experiment_id = %s
+                    AND config_id = %s
+                    AND experiment_feature_set_id = %s
+                """, (global_classifier_id, experiment_id, config_id, exp_fs_id))
+
+                if cursor.fetchone():
+                    print(f"  - Feature set {fs_id} ({fs_name}): Already exists, skipping")
+                    skipped += 1
+                    continue
+
+                # Insert
+                cursor.execute("""
+                    INSERT INTO ml_classifier_config_experiment_feature_sets
+                        (global_classifier_id, experiment_id, config_id, experiment_feature_set_id)
+                    VALUES (%s, %s, %s, %s)
+                """, (global_classifier_id, experiment_id, config_id, exp_fs_id))
+
+                print(f"  ✓ Added feature set {fs_id} ({fs_name})")
+                inserted += 1
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Feature sets updated")
+            print(f"  - Inserted: {inserted}")
+            print(f"  - Skipped (already exists): {skipped}")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to add feature sets: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_delete(self, args):
+        """
+        Delete a configuration for the currently selected classifier
+
+        Usage: classifier-config-delete --config-name <name> [--confirm]
+
+        This command deletes a configuration and all associated hyperparameter
+        entries from the junction tables. Use with caution!
+
+        Options:
+            --config-name <name>    Configuration name to delete (required)
+            --config-id <id>        Or specify by config ID
+            --confirm               Skip confirmation prompt
+
+        Safety:
+            - Requires explicit confirmation unless --confirm flag is used
+            - Shows what will be deleted before proceeding
+            - Deletes from config table AND all 6 junction tables
+
+        Examples:
+            classifier-config-delete --config-name "baseline"
+            classifier-config-delete --config-id 1 --confirm
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name = None
+        config_id = None
+        confirm = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-name' and i + 1 < len(args):
+                config_name = args[i + 1]
+                i += 2
+            elif args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--confirm':
+                confirm = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_delete.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_name and not config_id:
+            print("[ERROR] Either --config-name or --config-id is required")
+            print("Usage: classifier-config-delete --config-name <name> [--confirm]")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
+                return
+
+            global_classifier_id = result[0]
+
+            # Build config table name
+            table_name = f"experiment_{self.current_experiment:03d}_classifier_{self.current_classifier_id:03d}_config"
+
+            # Check if config exists and get details
+            if config_name:
+                cursor.execute(f"""
+                    SELECT config_id, config_name, is_active, created_at, notes
+                    FROM {table_name}
+                    WHERE global_classifier_id = %s AND config_name = %s
+                """, (global_classifier_id, config_name))
+            else:
+                cursor.execute(f"""
+                    SELECT config_id, config_name, is_active, created_at, notes
+                    FROM {table_name}
+                    WHERE global_classifier_id = %s AND config_id = %s
+                """, (global_classifier_id, config_id))
+
+            config_row = cursor.fetchone()
+            if not config_row:
+                identifier = config_name if config_name else f"ID {config_id}"
+                print(f"[ERROR] Configuration '{identifier}' not found")
+                return
+
+            config_id, config_name, is_active, created_at, notes = config_row
+
+            # Count junction table entries that will be deleted
+            junction_counts = {}
+            junction_tables = [
+                ('decimation_factors', 'ml_classifier_config_decimation_factors'),
+                ('data_types', 'ml_classifier_config_data_types'),
+                ('amplitude_methods', 'ml_classifier_config_amplitude_methods'),
+                ('distance_functions', 'ml_classifier_config_distance_functions'),
+                ('feature_sets', 'ml_classifier_config_experiment_feature_sets'),
+            ]
+
+            for name, table in junction_tables:
+                cursor.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {table}
+                    WHERE global_classifier_id = %s AND experiment_id = %s AND config_id = %s
+                """, (global_classifier_id, self.current_experiment, config_id))
+                junction_counts[name] = cursor.fetchone()[0]
+
+            # Show warning
+            print("\n" + "=" * 80)
+            print("[WARNING] DELETE CONFIGURATION")
+            print("=" * 80)
+            print(f"Experiment ID: {self.current_experiment}")
+            print(f"Classifier ID: {self.current_classifier_id}")
+            print(f"Global Classifier ID: {global_classifier_id}")
+            print(f"Config ID: {config_id}")
+            print(f"Config Name: {config_name}")
+            print(f"Is Active: {is_active}")
+            print(f"Created: {created_at}")
+            if notes:
+                print(f"Notes: {notes}")
+            print()
+            print("This operation will DELETE:")
+            print(f"  - 1 config row from {table_name}")
+            print(f"  - {junction_counts['decimation_factors']} decimation factor entries")
+            print(f"  - {junction_counts['data_types']} data type entries")
+            print(f"  - {junction_counts['amplitude_methods']} amplitude method entries")
+            print(f"  - {junction_counts['distance_functions']} distance function entries")
+            print(f"  - {junction_counts['feature_sets']} feature set entries")
+            total = sum(junction_counts.values())
+            print(f"  TOTAL: {total} junction table entries + 1 config row")
+            print()
+
+            # Get confirmation
+            if not confirm:
+                print(f"To proceed, type: DELETE CONFIG {config_id}")
+                print("=" * 80)
+
+                try:
+                    user_input = input("Confirmation: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n[INFO] Operation cancelled")
+                    return
+
+                required_text = f"DELETE CONFIG {config_id}"
+                if user_input != required_text:
+                    print("[ERROR] Confirmation text does not match. Operation cancelled.")
+                    print(f"Expected: {required_text}")
+                    print(f"Received: {user_input}")
+                    return
+
+            # Delete from junction tables first
+            print("\nDeleting junction table entries...")
+            for name, table in junction_tables:
+                cursor.execute(f"""
+                    DELETE FROM {table}
+                    WHERE global_classifier_id = %s AND experiment_id = %s AND config_id = %s
+                """, (global_classifier_id, self.current_experiment, config_id))
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    print(f"  ✓ Deleted {deleted} {name} entries")
+
+            # Delete from config table
+            cursor.execute(f"""
+                DELETE FROM {table_name}
+                WHERE global_classifier_id = %s AND config_id = %s
+            """, (global_classifier_id, config_id))
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Configuration '{config_name}' (ID: {config_id}) deleted successfully")
+            print(f"  - Deleted {total} junction table entries")
+            print(f"  - Deleted 1 config row")
+
+            if is_active:
+                print("\n[WARNING] You deleted the ACTIVE configuration")
+                print("          Use classifier-config-activate to set a new active config")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to delete configuration: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_list(self, args):
+        """
+        List all configurations for the currently selected classifier
+
+        Usage: classifier-config-list [OPTIONS]
+
+        Displays all configurations with their hyperparameters, showing which one is active.
+
+        Options:
+            --all                  Show configs for all classifiers (not just current)
+            --experiment-id <id>   Specify experiment ID (default: current experiment)
+            --classifier-id <id>   Specify classifier ID (default: current classifier)
+
+        Examples:
+            classifier-config-list
+            classifier-config-list --all
+            classifier-config-list --experiment-id 41 --classifier-id 1
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        show_all = '--all' in args if args else False
+        experiment_id = self.current_experiment
+        classifier_id = self.current_classifier_id
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--experiment-id' and i + 1 < len(args):
+                experiment_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--classifier-id' and i + 1 < len(args):
+                classifier_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--all':
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_list.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not show_all and not experiment_id:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' or --experiment-id")
+            return
+
+        if not show_all and not classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' or --classifier-id")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Build WHERE clause
+            if show_all:
+                where_clause = ""
+                params = ()
+                print("\n[INFO] Listing ALL configurations")
+            else:
+                # Get global_classifier_id
+                cursor.execute("""
+                    SELECT global_classifier_id
+                    FROM ml_experiment_classifiers
+                    WHERE experiment_id = %s AND classifier_id = %s
+                """, (experiment_id, classifier_id))
+
+                result = cursor.fetchone()
+                if not result:
+                    print(f"[ERROR] Classifier {classifier_id} not found for experiment {experiment_id}")
+                    return
+
+                global_classifier_id = result[0]
+                where_clause = "WHERE c.global_classifier_id = %s"
+                params = (global_classifier_id,)
+                print(f"\n[INFO] Configurations for Experiment {experiment_id}, Classifier {classifier_id}")
+
+            # Query configurations with all hyperparameters using ARRAY_AGG
+            query = f"""
+                SELECT
+                    c.config_id,
+                    c.config_name,
+                    c.is_active,
+                    c.created_at,
+                    c.notes,
+                    c.experiment_id,
+                    c.classifier_id,
+                    ARRAY_AGG(DISTINCT df.decimation_factor ORDER BY df.decimation_factor)
+                        FILTER (WHERE df.decimation_factor IS NOT NULL) as decimation_factors,
+                    ARRAY_AGG(DISTINCT dt.data_type_id ORDER BY dt.data_type_id)
+                        FILTER (WHERE dt.data_type_id IS NOT NULL) as data_type_ids,
+                    ARRAY_AGG(DISTINCT am.amplitude_processing_method_id ORDER BY am.amplitude_processing_method_id)
+                        FILTER (WHERE am.amplitude_processing_method_id IS NOT NULL) as amplitude_methods,
+                    ARRAY_AGG(DISTINCT efs.experiment_feature_set_id ORDER BY efs.experiment_feature_set_id)
+                        FILTER (WHERE efs.experiment_feature_set_id IS NOT NULL) as feature_set_ids,
+                    ARRAY_AGG(DISTINCT dfunc.distance_function_id ORDER BY dfunc.distance_function_id)
+                        FILTER (WHERE dfunc.distance_function_id IS NOT NULL) as distance_function_ids
+                FROM ml_classifier_configs c
+                LEFT JOIN ml_classifier_config_decimation_factors df
+                    ON c.config_id = df.config_id
+                LEFT JOIN ml_classifier_config_data_types dt
+                    ON c.config_id = dt.config_id
+                LEFT JOIN ml_classifier_config_amplitude_methods am
+                    ON c.config_id = am.config_id
+                LEFT JOIN ml_classifier_config_experiment_feature_sets efs
+                    ON c.config_id = efs.config_id
+                LEFT JOIN ml_classifier_config_distance_functions dfunc
+                    ON c.config_id = dfunc.config_id
+                {where_clause}
+                GROUP BY c.config_id, c.config_name, c.is_active, c.created_at, c.notes,
+                         c.experiment_id, c.classifier_id
+                ORDER BY c.config_id
+            """
+
+            cursor.execute(query, params)
+            configs = cursor.fetchall()
+
+            if not configs:
+                print("\n[INFO] No configurations found")
+                return
+
+            # Display configurations
+            from tabulate import tabulate
+
+            table_data = []
+            for config in configs:
+                config_id, config_name, is_active, created_at, notes, exp_id, cls_id, \
+                    decimation_factors, data_type_ids, amplitude_methods, \
+                    feature_set_ids, distance_function_ids = config
+
+                # Format arrays
+                df_str = ','.join(map(str, decimation_factors)) if decimation_factors else 'None'
+                dt_str = ','.join(map(str, data_type_ids)) if data_type_ids else 'None'
+                am_str = ','.join(map(str, amplitude_methods)) if amplitude_methods else 'None'
+                fs_str = ','.join(map(str, feature_set_ids)) if feature_set_ids else 'None'
+                dfunc_str = ','.join(map(str, distance_function_ids)) if distance_function_ids else 'None'
+
+                active_marker = '[ACTIVE]' if is_active else ''
+
+                table_data.append([
+                    config_id,
+                    f"{config_name} {active_marker}",
+                    f"E{exp_id}/C{cls_id}",
+                    df_str,
+                    dt_str,
+                    am_str,
+                    fs_str,
+                    dfunc_str,
+                    created_at.strftime('%Y-%m-%d %H:%M') if created_at else ''
+                ])
+
+            headers = ['ID', 'Config Name', 'Exp/Cls', 'Dec. Factors', 'Data Types',
+                      'Amp Methods', 'Feature Sets', 'Dist Funcs', 'Created']
+
+            print(f"\n{tabulate(table_data, headers=headers, tablefmt='grid')}")
+            print(f"\nTotal configurations: {len(configs)}")
+
+        except Exception as e:
+            print(f"\n[ERROR] Failed to list configurations: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_activate(self, args):
+        """
+        Activate a configuration for the currently selected classifier
+
+        Usage: classifier-config-activate --config-name <name>
+           or: classifier-config-activate --config-id <id>
+
+        Sets the specified configuration as active and deactivates all other
+        configurations for this classifier. Only one configuration can be active
+        at a time per classifier.
+
+        Options:
+            --config-name <name>    Configuration name to activate (required if not using --config-id)
+            --config-id <id>        Configuration ID to activate (required if not using --config-name)
+
+        Examples:
+            classifier-config-activate --config-name "baseline"
+            classifier-config-activate --config-id 1
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name = None
+        config_id = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-name' and i + 1 < len(args):
+                config_name = args[i + 1]
+                i += 2
+            elif args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_activate.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_name and not config_id:
+            print("[ERROR] Either --config-name or --config-id is required")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found for experiment {self.current_experiment}")
+                return
+
+            global_classifier_id = result[0]
+
+            # Verify config exists
+            if config_name:
+                cursor.execute("""
+                    SELECT config_id, config_name
+                    FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND config_name = %s
+                """, (global_classifier_id, config_name))
+            else:
+                cursor.execute("""
+                    SELECT config_id, config_name
+                    FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND config_id = %s
+                """, (global_classifier_id, config_id))
+
+            result = cursor.fetchone()
+            if not result:
+                identifier = config_name if config_name else f"ID {config_id}"
+                print(f"[ERROR] Configuration '{identifier}' not found for this classifier")
+                return
+
+            config_id, config_name = result
+
+            # Deactivate all configs for this classifier
+            cursor.execute("""
+                UPDATE ml_classifier_configs
+                SET is_active = FALSE, updated_at = NOW()
+                WHERE global_classifier_id = %s
+            """, (global_classifier_id,))
+
+            deactivated_count = cursor.rowcount
+
+            # Activate the specified config
+            cursor.execute("""
+                UPDATE ml_classifier_configs
+                SET is_active = TRUE, updated_at = NOW()
+                WHERE global_classifier_id = %s AND config_id = %s
+            """, (global_classifier_id, config_id))
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Configuration '{config_name}' (ID: {config_id}) activated")
+            if deactivated_count > 1:
+                print(f"  - Deactivated {deactivated_count - 1} other configuration(s)")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to activate configuration: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_show(self, args):
+        """
+        Show detailed information about a configuration
+
+        Usage: classifier-config-show [OPTIONS]
+
+        Displays detailed hyperparameters for the active configuration or a specified configuration.
+
+        Options:
+            --config-name <name>    Show specific configuration by name
+            --config-id <id>        Show specific configuration by ID
+            --active                Show active configuration (default)
+
+        Examples:
+            classifier-config-show
+            classifier-config-show --config-name "baseline"
+            classifier-config-show --config-id 1
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name = None
+        config_id = None
+        show_active = True  # Default to showing active config
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-name' and i + 1 < len(args):
+                config_name = args[i + 1]
+                show_active = False
+                i += 2
+            elif args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                show_active = False
+                i += 2
+            elif args[i] == '--active':
+                show_active = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_show.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found for experiment {self.current_experiment}")
+                return
+
+            global_classifier_id = result[0]
+
+            # Build query based on arguments
+            if show_active:
+                where_clause = "WHERE c.global_classifier_id = %s AND c.is_active = TRUE"
+                params = (global_classifier_id,)
+            elif config_name:
+                where_clause = "WHERE c.global_classifier_id = %s AND c.config_name = %s"
+                params = (global_classifier_id, config_name)
+            else:
+                where_clause = "WHERE c.global_classifier_id = %s AND c.config_id = %s"
+                params = (global_classifier_id, config_id)
+
+            # Query configuration with all hyperparameters using ARRAY_AGG
+            query = f"""
+                SELECT
+                    c.config_id,
+                    c.config_name,
+                    c.is_active,
+                    c.created_at,
+                    c.updated_at,
+                    c.notes,
+                    c.experiment_id,
+                    c.classifier_id,
+                    ARRAY_AGG(DISTINCT df.decimation_factor ORDER BY df.decimation_factor)
+                        FILTER (WHERE df.decimation_factor IS NOT NULL) as decimation_factors,
+                    ARRAY_AGG(DISTINCT dt.data_type_id ORDER BY dt.data_type_id)
+                        FILTER (WHERE dt.data_type_id IS NOT NULL) as data_type_ids,
+                    ARRAY_AGG(DISTINCT am.amplitude_processing_method_id ORDER BY am.amplitude_processing_method_id)
+                        FILTER (WHERE am.amplitude_processing_method_id IS NOT NULL) as amplitude_methods,
+                    ARRAY_AGG(DISTINCT efs.experiment_feature_set_id ORDER BY efs.experiment_feature_set_id)
+                        FILTER (WHERE efs.experiment_feature_set_id IS NOT NULL) as feature_set_ids,
+                    ARRAY_AGG(DISTINCT dfunc.distance_function_id ORDER BY dfunc.distance_function_id)
+                        FILTER (WHERE dfunc.distance_function_id IS NOT NULL) as distance_function_ids
+                FROM ml_classifier_configs c
+                LEFT JOIN ml_classifier_config_decimation_factors df
+                    ON c.config_id = df.config_id
+                LEFT JOIN ml_classifier_config_data_types dt
+                    ON c.config_id = dt.config_id
+                LEFT JOIN ml_classifier_config_amplitude_methods am
+                    ON c.config_id = am.config_id
+                LEFT JOIN ml_classifier_config_experiment_feature_sets efs
+                    ON c.config_id = efs.config_id
+                LEFT JOIN ml_classifier_config_distance_functions dfunc
+                    ON c.config_id = dfunc.config_id
+                {where_clause}
+                GROUP BY c.config_id, c.config_name, c.is_active, c.created_at, c.updated_at,
+                         c.notes, c.experiment_id, c.classifier_id
+            """
+
+            cursor.execute(query, params)
+            config = cursor.fetchone()
+
+            if not config:
+                identifier = "active configuration" if show_active else \
+                            (config_name if config_name else f"ID {config_id}")
+                print(f"[INFO] No {identifier} found")
+                return
+
+            # Unpack configuration
+            config_id, config_name, is_active, created_at, updated_at, notes, exp_id, cls_id, \
+                decimation_factors, data_type_ids, amplitude_methods, \
+                feature_set_ids, distance_function_ids = config
+
+            # Display configuration details
+            print(f"\n{'='*60}")
+            print(f"Configuration: {config_name} (ID: {config_id})")
+            print(f"{'='*60}")
+            print(f"Experiment ID:  {exp_id}")
+            print(f"Classifier ID:  {cls_id}")
+            print(f"Status:         {'ACTIVE' if is_active else 'INACTIVE'}")
+            print(f"Created:        {created_at.strftime('%Y-%m-%d %H:%M:%S') if created_at else 'N/A'}")
+            print(f"Updated:        {updated_at.strftime('%Y-%m-%d %H:%M:%S') if updated_at else 'N/A'}")
+            if notes:
+                print(f"Notes:          {notes}")
+
+            print(f"\n{'Hyperparameters':-^60}")
+
+            # Decimation factors
+            if decimation_factors:
+                df_str = ', '.join(map(str, decimation_factors))
+                print(f"\nDecimation Factors ({len(decimation_factors)}):")
+                print(f"  {df_str}")
+
+            # Data types (look up names)
+            if data_type_ids:
+                cursor.execute("""
+                    SELECT data_type_id, data_type_name
+                    FROM ml_data_types_lut
+                    WHERE data_type_id = ANY(%s)
+                    ORDER BY data_type_id
+                """, (data_type_ids,))
+                dt_rows = cursor.fetchall()
+                print(f"\nData Types ({len(dt_rows)}):")
+                for dt_id, dt_name in dt_rows:
+                    print(f"  [{dt_id}] {dt_name}")
+
+            # Amplitude methods
+            if amplitude_methods:
+                am_str = ', '.join(map(str, amplitude_methods))
+                print(f"\nAmplitude Processing Methods ({len(amplitude_methods)}):")
+                print(f"  {am_str}")
+
+            # Feature sets (look up names)
+            if feature_set_ids:
+                cursor.execute("""
+                    SELECT efs.experiment_feature_set_id, fs.feature_set_id, fs.feature_set_name
+                    FROM ml_experiments_feature_sets efs
+                    JOIN ml_feature_sets_lut fs ON efs.feature_set_id = fs.feature_set_id
+                    WHERE efs.experiment_feature_set_id = ANY(%s)
+                    ORDER BY efs.experiment_feature_set_id
+                """, (feature_set_ids,))
+                fs_rows = cursor.fetchall()
+                print(f"\nFeature Sets ({len(fs_rows)}):")
+                for exp_fs_id, fs_id, fs_name in fs_rows:
+                    print(f"  [EFS:{exp_fs_id}, FS:{fs_id}] {fs_name}")
+
+            # Distance functions (look up names)
+            if distance_function_ids:
+                cursor.execute("""
+                    SELECT distance_function_id, function_name
+                    FROM ml_distance_functions_lut
+                    WHERE distance_function_id = ANY(%s)
+                    ORDER BY distance_function_id
+                """, (distance_function_ids,))
+                dfunc_rows = cursor.fetchall()
+                print(f"\nDistance Functions ({len(dfunc_rows)}):")
+                for dfunc_id, dfunc_name in dfunc_rows:
+                    print(f"  [{dfunc_id}] {dfunc_name}")
+
+            print(f"\n{'='*60}\n")
+
+        except Exception as e:
+            print(f"\n[ERROR] Failed to show configuration: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_create_feature_builder_table(self, args):
+        """
+        Create the ml_classifier_feature_builder table
+
+        Usage: classifier-create-feature-builder-table [--force]
+
+        Creates a table to control feature vector construction. This table specifies
+        which feature types should be included when building the X matrix for training.
+
+        Schema:
+        - feature_builder_id: SERIAL PRIMARY KEY
+        - config_id: Links to ml_classifier_configs (one feature builder per config)
+        - experiment_id: Denormalized for query optimization
+        - include_original_feature: Boolean - include raw feature values in X
+        - compute_baseline_distances_inter: Boolean - compute distances to OTHER class baselines
+        - compute_baseline_distances_intra: Boolean - compute distances to SAME class baseline
+        - statistical_features: Boolean - reserved for future statistical features
+        - external_function: Boolean - reserved for future external functions
+        - created_at, updated_at, notes
+
+        Baseline/reference segments are stored in per-classifier tables:
+        experiment_{exp}_classifier_{cls}_reference_segments (created in Phase 2)
+
+        Options:
+            --force    Recreate table if it exists
+
+        Examples:
+            classifier-create-feature-builder-table
+            classifier-create-feature-builder-table --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        force = '--force' in args if args else False
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'ml_classifier_feature_builder'
+            """)
+
+            exists = cursor.fetchone()
+
+            if exists and not force:
+                print("[INFO] ml_classifier_feature_builder table already exists")
+                print("  Use --force to recreate")
+                return
+
+            if exists and force:
+                print("[WARNING] Dropping existing ml_classifier_feature_builder table...")
+                cursor.execute("DROP TABLE ml_classifier_feature_builder CASCADE")
+                print("  ✓ Dropped")
+
+            # Create feature builder table
+            print("Creating ml_classifier_feature_builder table...")
+
+            create_sql = """
+                CREATE TABLE ml_classifier_feature_builder (
+                    feature_builder_id SERIAL PRIMARY KEY,
+                    config_id INTEGER NOT NULL,
+                    experiment_id INTEGER NOT NULL,
+
+                    -- Feature inclusion flags
+                    include_original_feature BOOLEAN DEFAULT FALSE,
+                    compute_baseline_distances_inter BOOLEAN DEFAULT FALSE,
+                    compute_baseline_distances_intra BOOLEAN DEFAULT FALSE,
+                    statistical_features BOOLEAN DEFAULT FALSE,
+                    external_function BOOLEAN DEFAULT FALSE,
+
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    notes TEXT,
+
+                    FOREIGN KEY (config_id)
+                        REFERENCES ml_classifier_configs(config_id)
+                        ON DELETE CASCADE,
+                    UNIQUE(config_id)
+                );
+
+                CREATE INDEX idx_feature_builder_config ON ml_classifier_feature_builder(config_id);
+                CREATE INDEX idx_feature_builder_exp ON ml_classifier_feature_builder(experiment_id);
+            """
+
+            cursor.execute(create_sql)
+            self.db_conn.commit()
+
+            print("  ✓ Table created: ml_classifier_feature_builder")
+            print("  ✓ Indexes created")
+            print("  ✓ Foreign key constraint to ml_classifier_configs added")
+            print("  ✓ UNIQUE constraint on config_id enforced")
+
+            print("\n[SUCCESS] ml_classifier_feature_builder table created successfully")
+            print("\nFeature builder flags:")
+            print("  - include_original_feature: Include raw feature values in X matrix")
+            print("  - compute_baseline_distances_inter: Compute distances to OTHER class baselines")
+            print("  - compute_baseline_distances_intra: Compute distances to SAME class baseline")
+            print("  - statistical_features: Reserved for future statistical features")
+            print("  - external_function: Reserved for future external functions")
+            print("\nBaseline segments are stored in per-classifier tables:")
+            print("  experiment_{exp}_classifier_{cls}_reference_segments (Phase 2)")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to create ml_classifier_feature_builder table: {e}")
+            import traceback
+            traceback.print_exc()
 
     def cmd_exit(self, args):
         """Exit the shell"""
