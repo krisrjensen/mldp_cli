@@ -3,31 +3,33 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251018_211000
-File version: 2.0.6.13
+Date Revised: 20251018_220000
+File version: 2.0.6.14
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 13)
+- CHANGE: Tracks changes within current commit cycle (currently 14)
 
-Changes in this version (6.13):
+Changes in this version (6.14):
+1. Phase 0b Task 1: Implement classifier-config-create command
+   - Create per-classifier config table on-demand
+   - Parse and validate configuration parameters
+   - Validate distance functions against experiment
+   - Convert function names to IDs
+   - Support array fields for hyperparameters
+   - Handle --set-active flag
+
+Changes in previous version (6.13):
 1. LOCAL COMMIT: Phase 0a Classifier Registry Setup complete
-   - All 9 tasks (1-9) implemented and tested
-   - Ready for local git commit
 
 Phase 0a Summary (versions 6.6-6.12):
 1. Created ml_experiment_classifiers table (global registry)
-2. Implemented classifier-new command (create instances)
-3. Implemented classifier-remove command (delete/archive)
-4. Implemented classifier-list command (display all)
-5. Session context for classifier selection
-6. Updated prompt to show selected classifier
-7. Added set classifier command
-8. Updated tab completion for all commands
-9. Added classifier commands to help system
+2. Implemented all classifier lifecycle commands
+3. Session context and prompt updates
+4. Tab completion and help system
 
 Changes in previous version (6.12):
 1. Task 9: Added classifier commands to help system
@@ -52,7 +54,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.6.13"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.14"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -203,6 +205,11 @@ class MLDPCompleter(Completer):
             'classifier-new': ['--name', '--description', '--type', '--auto-select', '--no-auto-select', '--help'],
             'classifier-remove': ['--classifier-id', '--confirm', '--archive-instead', '--help'],
             'classifier-list': ['--include-archived', '--show-tables', '--help'],
+
+            # Classifier Configuration Management (Phase 0b)
+            'classifier-config-create': ['--config-name', '--decimation-factors', '--data-types',
+                                        '--amplitude-methods', '--feature-sets', '--features',
+                                        '--distance-functions', '--set-active', '--notes', '--help'],
 
             # Utilities
             'verify': [],
@@ -388,6 +395,8 @@ class MLDPShell:
             'classifier-new': self.cmd_classifier_new,
             'classifier-remove': self.cmd_classifier_remove,
             'classifier-list': self.cmd_classifier_list,
+            # Classifier configuration commands (Phase 0b)
+            'classifier-config-create': self.cmd_classifier_config_create,
         }
     
     def get_prompt(self):
@@ -8803,6 +8812,246 @@ class MLDPShell:
 
         except Exception as e:
             print(f"[ERROR] Failed to list classifiers: {e}")
+
+    def cmd_classifier_config_create(self, args):
+        """
+        Create new configuration for currently selected classifier
+
+        Usage: classifier-config-create --config-name <name> [OPTIONS]
+
+        Options:
+            --config-name <name>           Unique configuration name (required)
+            --decimation-factors <list>    Comma-separated or 'all' (default: 0)
+            --data-types <list>            Comma-separated or 'all' (default: adc12)
+            --amplitude-methods <list>     Comma-separated IDs or 'all' (default: 1)
+            --feature-sets <list>          Comma-separated IDs or 'all' (default: all)
+            --features <list>              Comma-separated IDs or 'all' (default: all)
+            --distance-functions <list>    Comma-separated names or 'all' (default: all)
+            --set-active                   Set as active configuration
+            --notes <text>                 Configuration description
+
+        Example:
+            classifier-config-create --config-name "baseline" --set-active
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name = None
+        decimation_factors = '0'
+        data_types = 'adc12'
+        amplitude_methods = '1'
+        feature_sets = 'all'
+        features = 'all'
+        distance_functions = 'all'
+        set_active = False
+        notes = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-name' and i + 1 < len(args):
+                config_name = args[i + 1]
+                i += 2
+            elif args[i] == '--decimation-factors' and i + 1 < len(args):
+                decimation_factors = args[i + 1]
+                i += 2
+            elif args[i] == '--data-types' and i + 1 < len(args):
+                data_types = args[i + 1]
+                i += 2
+            elif args[i] == '--amplitude-methods' and i + 1 < len(args):
+                amplitude_methods = args[i + 1]
+                i += 2
+            elif args[i] == '--feature-sets' and i + 1 < len(args):
+                feature_sets = args[i + 1]
+                i += 2
+            elif args[i] == '--features' and i + 1 < len(args):
+                features = args[i + 1]
+                i += 2
+            elif args[i] == '--distance-functions' and i + 1 < len(args):
+                distance_functions = args[i + 1]
+                i += 2
+            elif args[i] == '--notes' and i + 1 < len(args):
+                notes = args[i + 1]
+                i += 2
+            elif args[i] == '--set-active':
+                set_active = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_create.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_name:
+            print("[ERROR] --config-name is required")
+            print("Usage: classifier-config-create --config-name <name> [OPTIONS]")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Build config table name
+            table_name = f"experiment_{self.current_experiment:03d}_classifier_{self.current_classifier_id:03d}_config"
+
+            # Check if config table exists, create if not
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = %s
+                )
+            """, (table_name,))
+
+            if not cursor.fetchone()[0]:
+                # Create config table
+                create_table_sql = f"""
+                    CREATE TABLE {table_name} (
+                        config_id SERIAL PRIMARY KEY,
+                        classifier_id INTEGER NOT NULL DEFAULT {self.current_classifier_id},
+                        config_name VARCHAR(255) NOT NULL,
+                        decimation_factors INTEGER[],
+                        data_type_ids INTEGER[],
+                        amplitude_processing_method_ids INTEGER[],
+                        experiment_feature_set_ids BIGINT[],
+                        feature_set_feature_ids BIGINT[],
+                        distance_function_ids INTEGER[],
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        notes TEXT,
+                        UNIQUE(config_name)
+                    );
+
+                    CREATE INDEX idx_exp{self.current_experiment:03d}_cls{self.current_classifier_id:03d}_config_active
+                        ON {table_name}(is_active);
+                """
+                cursor.execute(create_table_sql)
+                self.db_conn.commit()
+                print(f"[INFO] Created config table: {table_name}")
+
+            # Process distance functions - validate and convert names to IDs
+            distance_function_ids_array = None
+            if distance_functions.lower() != 'all':
+                # Query available distance functions for this experiment
+                cursor.execute("""
+                    SELECT df.distance_function_id, df.function_name
+                    FROM ml_experiments_distance_measurements edm
+                    JOIN ml_distance_functions_lut df ON edm.distance_function_id = df.distance_function_id
+                    WHERE edm.experiment_id = %s
+                """, (self.current_experiment,))
+
+                available_functions = {row[1]: row[0] for row in cursor.fetchall()}
+
+                if not available_functions:
+                    print(f"[ERROR] No distance functions configured for experiment {self.current_experiment}")
+                    return
+
+                # Convert names to IDs
+                requested_names = [name.strip() for name in distance_functions.split(',')]
+                distance_function_ids = []
+
+                for name in requested_names:
+                    if name not in available_functions:
+                        print(f"[ERROR] Distance function '{name}' not configured for experiment {self.current_experiment}")
+                        print(f"Available functions: {', '.join(available_functions.keys())}")
+                        return
+                    distance_function_ids.append(available_functions[name])
+
+                distance_function_ids_array = distance_function_ids
+
+            # Process other array fields
+            def parse_array(value_str, field_name):
+                if value_str.lower() == 'all':
+                    return None
+                try:
+                    return [int(x.strip()) for x in value_str.split(',')]
+                except ValueError:
+                    print(f"[ERROR] Invalid {field_name}: {value_str}")
+                    return None
+
+            decimation_factors_array = parse_array(decimation_factors, 'decimation_factors')
+            amplitude_methods_array = parse_array(amplitude_methods, 'amplitude_methods')
+            feature_sets_array = parse_array(feature_sets, 'feature_sets') if feature_sets.lower() != 'all' else None
+            features_array = parse_array(features, 'features') if features.lower() != 'all' else None
+
+            # Handle data_types (may be names like 'adc6', 'adc12' or IDs)
+            data_type_ids_array = None
+            if data_types.lower() != 'all':
+                # Try to parse as integers first
+                try:
+                    data_type_ids_array = [int(x.strip()) for x in data_types.split(',')]
+                except ValueError:
+                    # Names like 'adc6', 'adc12' - look up IDs
+                    cursor.execute("""
+                        SELECT edt.data_type_id, dt.data_type_name
+                        FROM ml_experiments_data_types edt
+                        JOIN ml_data_types_lut dt ON edt.data_type_id = dt.data_type_id
+                        WHERE edt.experiment_id = %s
+                    """, (self.current_experiment,))
+
+                    available_types = {row[1]: row[0] for row in cursor.fetchall()}
+
+                    if not available_types:
+                        print(f"[ERROR] No data types configured for experiment {self.current_experiment}")
+                        return
+
+                    # Convert names to IDs
+                    requested_types = [name.strip() for name in data_types.split(',')]
+                    data_type_ids = []
+
+                    for name in requested_types:
+                        if name not in available_types:
+                            print(f"[ERROR] Data type '{name}' not configured for experiment {self.current_experiment}")
+                            print(f"Available types: {', '.join(available_types.keys())}")
+                            return
+                        data_type_ids.append(available_types[name])
+
+                    data_type_ids_array = data_type_ids
+
+            # If set_active, deactivate all other configs for this classifier
+            if set_active:
+                cursor.execute(f"""
+                    UPDATE {table_name}
+                    SET is_active = FALSE
+                    WHERE classifier_id = %s
+                """, (self.current_classifier_id,))
+
+            # Insert new configuration
+            cursor.execute(f"""
+                INSERT INTO {table_name}
+                    (config_name, decimation_factors, data_type_ids,
+                     amplitude_processing_method_ids, experiment_feature_set_ids,
+                     feature_set_feature_ids, distance_function_ids, is_active, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (config_name, decimation_factors_array, data_type_ids_array,
+                  amplitude_methods_array, feature_sets_array, features_array,
+                  distance_function_ids_array, set_active, notes))
+
+            self.db_conn.commit()
+
+            print(f"[SUCCESS] Created configuration '{config_name}' for classifier {self.current_classifier_id}")
+            print(f"  - Decimation factors: {decimation_factors}")
+            print(f"  - Data types: {data_types}")
+            print(f"  - Amplitude methods: {amplitude_methods}")
+            print(f"  - Distance functions: {distance_functions}")
+            if set_active:
+                print("  - Set as ACTIVE configuration")
+            if notes:
+                print(f"  - Notes: {notes}")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to create configuration: {e}")
 
     def cmd_exit(self, args):
         """Exit the shell"""
