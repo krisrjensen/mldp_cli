@@ -3,17 +3,33 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_062000
-File version: 2.0.7.9
+Date Revised: 20251019_070000
+File version: 2.0.8.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 9)
+- COMMIT: Increments on every git commit/push (currently 8)
+- CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (7.9):
+Changes in this version (8.0):
+1. PHASE 3 START - Feature Vector Construction
+   - v2.0.8.0: Implemented classifier-build-features command (590 lines)
+   - Builds distance-based SVM feature vectors for ALL segments
+   - Feature dimensions: num_classes × 4 distance metrics
+   - For experiment 041: 13 × 4 = 52-dimensional vectors
+   - Distance metrics: L1 (Manhattan), L2 (Euclidean), Cosine, Pearson
+   - Creates experiment_{exp}_classifier_{cls}_svm_features table
+   - Saves feature vectors to .npy files
+   - Progress tracking with ETA display
+   - Batch commits for performance
+   - Error handling with extraction_status_id tracking
+   - Filters: --decimation-factor, --data-type, --amplitude-method, --feature-set
+   - Options: --force, --batch-size
+   - Estimated runtime: 4-6 hours for full dataset
+
+Changes in previous version (7.9):
 1. ENHANCEMENT - Added label names to feature plots
    - v2.0.7.9: Query segment_labels table to get actual label name
    - Display in plot title: "Class: arc_discharge (ID=1)"
@@ -295,7 +311,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.9"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.8.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -483,6 +499,10 @@ class MLDPCompleter(Completer):
             'classifier-plot-references': ['--plot-dir', '--pca-components', '--help'],
             'classifier-plot-reference-features': ['--plot-dir', '--decimation-factor', '--data-type',
                                                    '--amplitude-method', '--feature-set', '--help'],
+
+            # Classifier Feature Construction (Phase 3)
+            'classifier-build-features': ['--force', '--batch-size', '--decimation-factor', '--data-type',
+                                         '--amplitude-method', '--feature-set', '--help'],
 
             # Utilities
             'verify': [],
@@ -692,6 +712,8 @@ class MLDPShell:
             'classifier-select-references': self.cmd_classifier_select_references,
             'classifier-plot-references': self.cmd_classifier_plot_references,
             'classifier-plot-reference-features': self.cmd_classifier_plot_reference_features,
+            # Classifier feature construction commands (Phase 3)
+            'classifier-build-features': self.cmd_classifier_build_features,
         }
     
     def get_prompt(self):
@@ -13462,6 +13484,601 @@ class MLDPShell:
             print("Install with: pip install numpy matplotlib")
         except Exception as e:
             print(f"\n[ERROR] Failed to generate plots: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_build_features(self, args):
+        """
+        Build distance-based SVM feature vectors for all segments
+
+        Usage: classifier-build-features [OPTIONS]
+
+        Computes feature vectors for ALL segments in experiment using reference
+        segments from Phase 2. Feature dimensions = num_classes × 4 distance metrics.
+
+        Options:
+            --force                   Overwrite existing feature vectors
+            --batch-size <n>          Segments per batch (default: 100)
+            --decimation-factor <n>   Process only this decimation factor
+            --data-type <id>          Process only this data type
+            --amplitude-method <id>   Process only this amplitude method
+            --feature-set <id>        Process only this feature set
+
+        Examples:
+            classifier-build-features
+            classifier-build-features --decimation-factor 0 --data-type 4
+            classifier-build-features --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        force = False
+        batch_size = 100
+        filter_dec = None
+        filter_dtype = None
+        filter_amp = None
+        filter_efs = None
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--batch-size':
+                if i + 1 < len(args):
+                    batch_size = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --batch-size requires a number")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a number")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires an ID")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires an ID")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires an ID")
+                    return
+            else:
+                i += 1
+
+        try:
+            import numpy as np
+            from scipy.spatial.distance import cosine, correlation
+            import time
+
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            print(f"\n[INFO] Building SVM feature vectors for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] This process may take several hours depending on data size...\n")
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+            global_classifier_id = result[0]
+
+            # Check active configuration exists
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            config_row = cursor.fetchone()
+            if not config_row:
+                print("[ERROR] No active configuration found")
+                print("  Run 'classifier-config-activate' first")
+                return
+            config_id, config_name = config_row
+
+            print(f"[INFO] Using configuration: {config_name}")
+
+            # Check reference segments exist
+            ref_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (ref_table_name,))
+            if not cursor.fetchone()[0]:
+                print(f"[ERROR] Reference segments table does not exist: {ref_table_name}")
+                print("  Run 'classifier-select-references' first")
+                return
+
+            cursor.execute(f"SELECT COUNT(*) FROM {ref_table_name}")
+            ref_count = cursor.fetchone()[0]
+            if ref_count == 0:
+                print("[ERROR] No reference segments found")
+                print("  Run 'classifier-select-references' first")
+                return
+
+            print(f"[INFO] Found {ref_count} reference segments")
+
+            # Create svm_features table if needed
+            features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
+
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (features_table_name,))
+
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"[INFO] Creating table {features_table_name}...")
+
+                create_sql = f"""
+                CREATE TABLE {features_table_name} (
+                    feature_vector_id BIGSERIAL PRIMARY KEY,
+                    global_classifier_id INTEGER NOT NULL,
+                    classifier_id INTEGER NOT NULL DEFAULT {cls_id},
+                    segment_id INTEGER NOT NULL,
+                    segment_label_id INTEGER NOT NULL,
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    amplitude_processing_method_id INTEGER NOT NULL,
+                    experiment_feature_set_id BIGINT NOT NULL,
+                    svm_feature_file_path TEXT NOT NULL,
+                    feature_vector_dimensions INTEGER NOT NULL,
+                    num_classes INTEGER NOT NULL,
+                    num_distance_metrics INTEGER NOT NULL DEFAULT 4,
+                    extraction_status_id INTEGER NOT NULL DEFAULT 1,
+                    extraction_time_seconds DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE (segment_id, decimation_factor, data_type_id,
+                            amplitude_processing_method_id, experiment_feature_set_id),
+
+                    FOREIGN KEY (global_classifier_id)
+                        REFERENCES ml_experiment_classifiers(global_classifier_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (segment_id)
+                        REFERENCES data_segments(segment_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (segment_label_id)
+                        REFERENCES segment_labels(label_id),
+                    FOREIGN KEY (data_type_id)
+                        REFERENCES ml_data_types_lut(data_type_id),
+                    FOREIGN KEY (amplitude_processing_method_id)
+                        REFERENCES ml_amplitude_normalization_lut(method_id),
+                    FOREIGN KEY (experiment_feature_set_id)
+                        REFERENCES ml_experiments_feature_sets(experiment_feature_set_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (extraction_status_id)
+                        REFERENCES ml_extraction_status_lut(status_id)
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_features_segment
+                    ON {features_table_name}(segment_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_features_decimation
+                    ON {features_table_name}(decimation_factor);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_features_dtype
+                    ON {features_table_name}(data_type_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_features_label
+                    ON {features_table_name}(segment_label_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_features_status
+                    ON {features_table_name}(extraction_status_id);
+                """
+
+                cursor.execute(create_sql)
+                self.db_conn.commit()
+                print(f"[SUCCESS] Table {features_table_name} created")
+
+            # Check for existing features
+            if table_exists and not force:
+                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"\n[WARNING] {existing_count} existing feature vectors found")
+                    print("Use --force to overwrite existing vectors")
+                    return
+
+            if force and table_exists:
+                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"[INFO] Deleting {existing_count} existing feature vectors...")
+                    cursor.execute(f"DELETE FROM {features_table_name}")
+                    self.db_conn.commit()
+
+            print("[INFO] Feature construction starting...")
+            print(f"[INFO] Batch size: {batch_size} segments")
+
+            # Query hyperparameters from active configuration
+            cursor.execute("""
+                SELECT DISTINCT decimation_factor
+                FROM ml_classifier_config_decimation_factors
+                WHERE config_id = %s
+                ORDER BY decimation_factor
+            """, (config_id,))
+            decimation_factors = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT data_type_id
+                FROM ml_classifier_config_data_types
+                WHERE config_id = %s
+                ORDER BY data_type_id
+            """, (config_id,))
+            data_type_ids = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT amplitude_processing_method_id
+                FROM ml_classifier_config_amplitude_methods
+                WHERE config_id = %s
+                ORDER BY amplitude_processing_method_id
+            """, (config_id,))
+            amplitude_methods = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT experiment_feature_set_id
+                FROM ml_classifier_config_feature_sets
+                WHERE config_id = %s
+                ORDER BY experiment_feature_set_id
+            """, (config_id,))
+            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+
+            # Apply filters if specified
+            if filter_dec is not None:
+                decimation_factors = [d for d in decimation_factors if d == filter_dec]
+            if filter_dtype is not None:
+                data_type_ids = [d for d in data_type_ids if d == filter_dtype]
+            if filter_amp is not None:
+                amplitude_methods = [a for a in amplitude_methods if a == filter_amp]
+            if filter_efs is not None:
+                experiment_feature_sets = [e for e in experiment_feature_sets if e == filter_efs]
+
+            print(f"[INFO] Hyperparameters:")
+            print(f"  Decimation factors: {decimation_factors}")
+            print(f"  Data types: {data_type_ids}")
+            print(f"  Amplitude methods: {amplitude_methods}")
+            print(f"  Feature sets: {experiment_feature_sets}")
+
+            # Query all segment labels (classes)
+            cursor.execute(f"""
+                SELECT DISTINCT segment_label_id
+                FROM experiment_{exp_id:03d}_segment_training_data
+                ORDER BY segment_label_id
+            """)
+            segment_labels = [row[0] for row in cursor.fetchall()]
+            num_classes = len(segment_labels)
+
+            print(f"\n[INFO] Found {num_classes} classes: {segment_labels}")
+            print(f"[INFO] Feature vector dimensions: {num_classes} classes × 4 metrics = {num_classes * 4}")
+
+            # Query all segments to process
+            cursor.execute(f"""
+                SELECT segment_id, segment_label_id
+                FROM experiment_{exp_id:03d}_segment_training_data
+                ORDER BY segment_id
+            """)
+            all_segments = cursor.fetchall()
+            total_segments = len(all_segments)
+
+            print(f"\n[INFO] Total segments to process: {total_segments}")
+
+            # Distance metric functions
+            def compute_l1_distance(x, y):
+                """Manhattan distance"""
+                return np.sum(np.abs(x - y))
+
+            def compute_l2_distance(x, y):
+                """Euclidean distance"""
+                return np.sqrt(np.sum((x - y) ** 2))
+
+            def compute_cosine_distance(x, y):
+                """Cosine distance"""
+                try:
+                    return cosine(x, y)
+                except:
+                    return np.nan
+
+            def compute_pearson_distance(x, y):
+                """Pearson correlation distance"""
+                try:
+                    return correlation(x, y)
+                except:
+                    return np.nan
+
+            # Process each hyperparameter combination
+            total_vectors_created = 0
+            total_errors = 0
+            start_time = time.time()
+
+            for dec in decimation_factors:
+                for dtype in data_type_ids:
+                    for amp in amplitude_methods:
+                        for efs in experiment_feature_sets:
+
+                            print(f"\n{'='*60}")
+                            print(f"Processing: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
+                            print(f"{'='*60}")
+
+                            # Query features in this feature_set
+                            cursor.execute("""
+                                SELECT f.feature_id, f.feature_name, fsf.feature_order
+                                FROM ml_experiments_feature_sets efs_tbl
+                                JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
+                                JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                                WHERE efs_tbl.experiment_feature_set_id = %s
+                                ORDER BY fsf.feature_order
+                            """, (efs,))
+                            features_in_set = cursor.fetchall()
+                            feature_ids = [row[0] for row in features_in_set]
+                            feature_names = [row[1] for row in features_in_set]
+
+                            print(f"Features in set: {feature_names}")
+
+                            # Query reference segments for this configuration
+                            cursor.execute(f"""
+                                SELECT segment_label_id, reference_segment_id
+                                FROM {ref_table_name}
+                                WHERE decimation_factor = %s
+                                  AND data_type_id = %s
+                                  AND amplitude_processing_method_id = %s
+                                  AND experiment_feature_set_id = %s
+                                ORDER BY segment_label_id
+                            """, (dec, dtype, amp, efs))
+                            reference_segments = cursor.fetchall()
+
+                            if len(reference_segments) != num_classes:
+                                print(f"[WARNING] Expected {num_classes} reference segments, found {len(reference_segments)}")
+                                print(f"[SKIP] Skipping this configuration")
+                                continue
+
+                            # Build reference_map: {label_id: reference_segment_id}
+                            reference_map = {label_id: ref_seg_id for label_id, ref_seg_id in reference_segments}
+
+                            print(f"Reference segments: {len(reference_segments)}")
+
+                            # Load ALL reference features (once per configuration)
+                            reference_features = {}  # {label_id: concatenated_feature_vector}
+
+                            for label_id, ref_segment_id in reference_segments:
+                                ref_feature_parts = []
+
+                                for feature_id in feature_ids:
+                                    cursor.execute(f"""
+                                        SELECT feature_file_path
+                                        FROM experiment_{exp_id:03d}_feature_fileset
+                                        WHERE segment_id = %s
+                                          AND decimation_factor = %s
+                                          AND data_type_id = %s
+                                          AND amplitude_processing_method_id = %s
+                                          AND experiment_feature_set_id = %s
+                                          AND feature_set_feature_id = %s
+                                    """, (ref_segment_id, dec, dtype, amp, efs, feature_id))
+
+                                    result = cursor.fetchone()
+                                    if result:
+                                        feature_file_path = result[0]
+                                        try:
+                                            features = np.load(feature_file_path)
+                                            column_idx = amp - 1
+                                            features_1d = features[:, column_idx]
+                                            ref_feature_parts.append(features_1d)
+                                        except Exception as e:
+                                            print(f"[ERROR] Failed to load reference {ref_segment_id} feature {feature_id}: {e}")
+                                            ref_feature_parts = None
+                                            break
+
+                                if ref_feature_parts and len(ref_feature_parts) == len(feature_ids):
+                                    reference_features[label_id] = np.concatenate(ref_feature_parts)
+                                else:
+                                    print(f"[ERROR] Failed to load complete reference for label {label_id}")
+
+                            if len(reference_features) != num_classes:
+                                print(f"[ERROR] Failed to load all reference features")
+                                print(f"[SKIP] Skipping this configuration")
+                                continue
+
+                            print(f"[INFO] Loaded {len(reference_features)} reference feature vectors")
+
+                            # Process all segments
+                            segments_processed = 0
+                            segments_created = 0
+                            segments_failed = 0
+
+                            for segment_id, segment_label_id in all_segments:
+                                segments_processed += 1
+
+                                # Progress tracking
+                                if segments_processed % 10 == 0 or segments_processed == total_segments:
+                                    elapsed = time.time() - start_time
+                                    rate = segments_processed / elapsed if elapsed > 0 else 0
+                                    remaining = (total_segments - segments_processed) / rate if rate > 0 else 0
+                                    print(f"  Progress: {segments_processed}/{total_segments} "
+                                          f"({segments_processed/total_segments*100:.1f}%) - "
+                                          f"{rate:.1f} seg/sec - "
+                                          f"ETA: {remaining/60:.1f} min", end='\r')
+
+                                segment_start_time = time.time()
+
+                                try:
+                                    # Load segment features
+                                    segment_feature_parts = []
+
+                                    for feature_id in feature_ids:
+                                        cursor.execute(f"""
+                                            SELECT feature_file_path
+                                            FROM experiment_{exp_id:03d}_feature_fileset
+                                            WHERE segment_id = %s
+                                              AND decimation_factor = %s
+                                              AND data_type_id = %s
+                                              AND amplitude_processing_method_id = %s
+                                              AND experiment_feature_set_id = %s
+                                              AND feature_set_feature_id = %s
+                                        """, (segment_id, dec, dtype, amp, efs, feature_id))
+
+                                        result = cursor.fetchone()
+                                        if result:
+                                            feature_file_path = result[0]
+                                            features = np.load(feature_file_path)
+                                            column_idx = amp - 1
+                                            features_1d = features[:, column_idx]
+                                            segment_feature_parts.append(features_1d)
+                                        else:
+                                            raise ValueError(f"Missing feature file for segment {segment_id}, feature {feature_id}")
+
+                                    if len(segment_feature_parts) != len(feature_ids):
+                                        raise ValueError(f"Incomplete features for segment {segment_id}")
+
+                                    segment_features = np.concatenate(segment_feature_parts)
+
+                                    # Build feature vector: compute distances to all references
+                                    feature_vector = np.zeros(num_classes * 4)
+
+                                    for class_idx, label_id in enumerate(segment_labels):
+                                        if label_id not in reference_features:
+                                            raise ValueError(f"Missing reference for label {label_id}")
+
+                                        ref_features = reference_features[label_id]
+
+                                        # Compute 4 distances
+                                        base_idx = class_idx * 4
+                                        feature_vector[base_idx + 0] = compute_l1_distance(segment_features, ref_features)
+                                        feature_vector[base_idx + 1] = compute_l2_distance(segment_features, ref_features)
+                                        feature_vector[base_idx + 2] = compute_cosine_distance(segment_features, ref_features)
+                                        feature_vector[base_idx + 3] = compute_pearson_distance(segment_features, ref_features)
+
+                                    # Check for NaN values
+                                    if np.any(np.isnan(feature_vector)):
+                                        raise ValueError(f"NaN values in feature vector")
+
+                                    # Construct file path
+                                    base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_features"
+                                    classifier_dir = f"classifier_{cls_id:03d}"
+                                    dec_dir = f"D{dec:06d}"
+                                    dtype_name = f"TADC{dtype}"  # Assuming data_type_id maps to ADC bit depth
+                                    amp_name = f"A{amp}"
+                                    efs_dir = f"EFS{efs:03d}"
+
+                                    full_dir = os.path.join(base_dir, classifier_dir, dec_dir, dtype_name, amp_name, efs_dir)
+                                    os.makedirs(full_dir, exist_ok=True)
+
+                                    filename = f"SID{segment_id:08d}_SVM_FEATURES_{num_classes * 4:03d}.npy"
+                                    file_path = os.path.join(full_dir, filename)
+
+                                    # Save feature vector
+                                    np.save(file_path, feature_vector)
+
+                                    # Insert database record
+                                    extraction_time = time.time() - segment_start_time
+
+                                    cursor.execute(f"""
+                                        INSERT INTO {features_table_name} (
+                                            global_classifier_id, classifier_id, segment_id, segment_label_id,
+                                            decimation_factor, data_type_id, amplitude_processing_method_id,
+                                            experiment_feature_set_id, svm_feature_file_path,
+                                            feature_vector_dimensions, num_classes, num_distance_metrics,
+                                            extraction_status_id, extraction_time_seconds
+                                        ) VALUES (
+                                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                        )
+                                    """, (
+                                        global_classifier_id, cls_id, segment_id, segment_label_id,
+                                        dec, dtype, amp, efs, file_path,
+                                        num_classes * 4, num_classes, 4,
+                                        2, extraction_time  # status_id=2 (complete)
+                                    ))
+
+                                    segments_created += 1
+
+                                except Exception as e:
+                                    # Mark as error in database
+                                    try:
+                                        cursor.execute(f"""
+                                            INSERT INTO {features_table_name} (
+                                                global_classifier_id, classifier_id, segment_id, segment_label_id,
+                                                decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                experiment_feature_set_id, svm_feature_file_path,
+                                                feature_vector_dimensions, num_classes, num_distance_metrics,
+                                                extraction_status_id
+                                            ) VALUES (
+                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                            )
+                                        """, (
+                                            global_classifier_id, cls_id, segment_id, segment_label_id,
+                                            dec, dtype, amp, efs, '',
+                                            num_classes * 4, num_classes, 4,
+                                            3  # status_id=3 (error)
+                                        ))
+                                    except:
+                                        pass
+
+                                    segments_failed += 1
+                                    total_errors += 1
+
+                                # Commit every batch_size segments
+                                if segments_processed % batch_size == 0:
+                                    self.db_conn.commit()
+
+                            # Final commit for this configuration
+                            self.db_conn.commit()
+
+                            print(f"\n  Created: {segments_created}, Failed: {segments_failed}")
+                            total_vectors_created += segments_created
+
+            # Display final summary
+            elapsed_total = time.time() - start_time
+            print(f"\n{'='*60}")
+            print(f"Feature Construction Summary")
+            print(f"{'='*60}")
+            print(f"Total feature vectors created: {total_vectors_created}")
+            print(f"Total errors: {total_errors}")
+            print(f"Total time: {elapsed_total/60:.1f} minutes ({elapsed_total/3600:.2f} hours)")
+            print(f"Average time per vector: {elapsed_total/total_vectors_created:.2f} seconds")
+            print(f"Table: {features_table_name}")
+            print(f"{'='*60}")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Missing required package: {e}")
+            print("Install with: pip install numpy scipy")
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to build features: {e}")
             import traceback
             traceback.print_exc()
 
