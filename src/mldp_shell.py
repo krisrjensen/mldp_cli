@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.3
+File version: 2.0.9.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
-Changes in this version (9.3):
-1. PHASE 4 START - SVM Training & Evaluation (Step 2)
+Changes in this version (9.4):
+1. PHASE 4 START - SVM Training & Evaluation (Step 3)
+   - v2.0.9.4: Implemented SVM worker function and helpers (~470 lines)
    - v2.0.9.3: Implemented SVM training helper functions (~427 lines)
    - v2.0.9.2: Fixed NameError for 'force' variable in classifier-train-svm-init
    - v2.0.9.1: Renamed classifier-train-svm to classifier-train-svm-init
@@ -346,7 +347,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -579,6 +580,479 @@ class MLDPCompleter(Completer):
                 for option in self.commands[cmd]:
                     if not current_word or option.startswith(current_word):
                         yield Completion(option, start_position=start_pos)
+
+
+
+# ========== SVM Training Worker Function (Phase 4 Step 3) ==========
+# This function must be defined at module level (not inside a class) for multiprocessing
+
+def train_svm_worker(config_tuple):
+    """
+    Train one SVM model for a specific configuration
+
+    This function runs in a subprocess via multiprocessing.Pool.
+
+    Args:
+        config_tuple: Tuple containing:
+            - dec: Decimation factor
+            - dtype: Data type ID
+            - amp: Amplitude processing method ID
+            - efs: Experiment feature set ID
+            - svm_params: Dictionary with 'kernel', 'C', 'gamma' (optional)
+            - db_config: Dictionary with database connection parameters
+            - label_categories: Dictionary mapping label_id to category ('arc', 'normal', 'transient')
+            - exp_id: Experiment ID
+            - cls_id: Classifier ID
+            - global_classifier_id: Global classifier ID
+
+    Returns:
+        Dictionary with training results and metrics
+    """
+    import numpy as np
+    import psycopg2
+    import time
+    import os
+    from sklearn.svm import SVC
+    from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
+                                 confusion_matrix, roc_auc_score, roc_curve,
+                                 precision_recall_curve, average_precision_score)
+    from sklearn.model_selection import cross_val_score
+    import joblib
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Unpack configuration
+    dec, dtype, amp, efs, svm_params, db_config, label_categories, exp_id, cls_id, global_classifier_id = config_tuple
+
+    try:
+        # Connect to database
+        conn = psycopg2.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Load feature vectors for all three splits
+        X_train, y_train = load_feature_vectors_from_db_worker(
+            cursor, exp_id, cls_id, dec, dtype, amp, efs, 'training'
+        )
+        X_test, y_test = load_feature_vectors_from_db_worker(
+            cursor, exp_id, cls_id, dec, dtype, amp, efs, 'test'
+        )
+        X_verify, y_verify = load_feature_vectors_from_db_worker(
+            cursor, exp_id, cls_id, dec, dtype, amp, efs, 'verification'
+        )
+
+        # Train SVM
+        start_time = time.time()
+
+        # Build SVM parameters
+        svm_kwargs = {
+            'kernel': svm_params['kernel'],
+            'C': svm_params['C'],
+            'class_weight': 'balanced',
+            'random_state': 42,
+            'probability': True  # Required for ROC/PR curves
+        }
+
+        # Add gamma for rbf and poly kernels
+        if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
+            svm_kwargs['gamma'] = svm_params['gamma']
+
+        svm = SVC(**svm_kwargs)
+        svm.fit(X_train, y_train)
+        training_time = time.time() - start_time
+
+        # Cross-validation on training set
+        cv_scores = cross_val_score(svm, X_train, y_train, cv=5, scoring='accuracy')
+        cv_mean = np.mean(cv_scores)
+        cv_std = np.std(cv_scores)
+
+        # Make predictions on all splits
+        start_pred_time = time.time()
+        y_pred_train = svm.predict(X_train)
+        y_pred_test = svm.predict(X_test)
+        y_pred_verify = svm.predict(X_verify)
+
+        # Get probability scores for ROC/PR curves
+        y_proba_train = svm.predict_proba(X_train)
+        y_proba_test = svm.predict_proba(X_test)
+        y_proba_verify = svm.predict_proba(X_verify)
+        prediction_time = time.time() - start_pred_time
+
+        # Compute 13-class metrics using helper function
+        metrics_train = compute_multiclass_metrics_worker(y_train, y_pred_train)
+        metrics_test = compute_multiclass_metrics_worker(y_test, y_pred_test)
+        metrics_verify = compute_multiclass_metrics_worker(y_verify, y_pred_verify)
+
+        # Compute binary arc detection metrics using helper function
+        binary_metrics_train = compute_binary_arc_metrics_worker(
+            y_train, y_pred_train, y_proba_train, label_categories
+        )
+        binary_metrics_test = compute_binary_arc_metrics_worker(
+            y_test, y_pred_test, y_proba_test, label_categories
+        )
+        binary_metrics_verify = compute_binary_arc_metrics_worker(
+            y_verify, y_pred_verify, y_proba_verify, label_categories
+        )
+
+        # Save SVM model using helper function
+        model_path = save_svm_model_worker(svm, exp_id, cls_id, dec, dtype, amp, efs, svm_params)
+
+        # Save confusion matrices using helper function
+        cm_paths = save_confusion_matrices_worker(
+            y_train, y_pred_train, y_test, y_pred_test,
+            y_verify, y_pred_verify, label_categories,
+            exp_id, cls_id, dec, dtype, amp, efs, svm_params
+        )
+
+        # Save ROC and PR curves using helper function
+        curve_paths = save_curves_worker(
+            y_train, y_proba_train, y_test, y_proba_test,
+            y_verify, y_proba_verify, label_categories,
+            exp_id, cls_id, dec, dtype, amp, efs, svm_params
+        )
+
+        # Close database connection
+        cursor.close()
+        conn.close()
+
+        # Return results
+        return {
+            'success': True,
+            'config': (dec, dtype, amp, efs),
+            'svm_params': svm_params,
+            'global_classifier_id': global_classifier_id,
+            'training_time': training_time,
+            'prediction_time': prediction_time,
+            'cv_mean': cv_mean,
+            'cv_std': cv_std,
+            'metrics_train': metrics_train,
+            'metrics_test': metrics_test,
+            'metrics_verify': metrics_verify,
+            'binary_metrics_train': binary_metrics_train,
+            'binary_metrics_test': binary_metrics_test,
+            'binary_metrics_verify': binary_metrics_verify,
+            'model_path': model_path,
+            'cm_paths': cm_paths,
+            'curve_paths': curve_paths,
+            'unique_labels': np.unique(y_train).tolist()
+        }
+
+    except Exception as e:
+        import traceback
+        return {
+            'success': False,
+            'config': (dec, dtype, amp, efs),
+            'svm_params': svm_params,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }
+
+
+# ========== Worker Helper Functions (duplicated for multiprocessing) ==========
+# These functions are copies of the class methods but standalone for worker processes
+
+def load_feature_vectors_from_db_worker(cursor, exp_id, cls_id, dec, dtype, amp, efs, split_type):
+    """Load feature vectors for worker process"""
+    import numpy as np
+
+    cursor.execute(f"""
+        SELECT sf.segment_id, sf.segment_label_id, sf.svm_feature_file_path
+        FROM experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features sf
+        JOIN experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits ds
+            ON sf.segment_id = ds.segment_id
+            AND sf.decimation_factor = ds.decimation_factor
+            AND sf.data_type_id = ds.data_type_id
+        WHERE sf.decimation_factor = %s
+          AND sf.data_type_id = %s
+          AND sf.amplitude_processing_method_id = %s
+          AND sf.experiment_feature_set_id = %s
+          AND ds.split_type = %s
+          AND sf.extraction_status_id = 2
+        ORDER BY sf.segment_id
+    """, (dec, dtype, amp, efs, split_type))
+
+    rows = cursor.fetchall()
+
+    if len(rows) == 0:
+        raise ValueError(f"No feature vectors found for config: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, split={split_type}")
+
+    X = []
+    y = []
+
+    for segment_id, label_id, file_path in rows:
+        try:
+            features = np.load(file_path)
+            X.append(features)
+            y.append(label_id)
+        except Exception:
+            pass  # Skip failed loads silently in worker
+
+    if len(X) == 0:
+        raise ValueError(f"No valid feature vectors loaded for split {split_type}")
+
+    return np.array(X), np.array(y)
+
+
+def compute_multiclass_metrics_worker(y_true, y_pred):
+    """Compute multiclass metrics for worker process"""
+    from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+
+    accuracy = accuracy_score(y_true, y_pred)
+    precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+        y_true, y_pred, average='macro', zero_division=0
+    )
+    precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+        y_true, y_pred, average='weighted', zero_division=0
+    )
+    precision_per_class, recall_per_class, f1_per_class, support_per_class = \
+        precision_recall_fscore_support(y_true, y_pred, zero_division=0)
+
+    return {
+        'accuracy': accuracy,
+        'precision_macro': precision_macro,
+        'recall_macro': recall_macro,
+        'f1_macro': f1_macro,
+        'precision_weighted': precision_weighted,
+        'recall_weighted': recall_weighted,
+        'f1_weighted': f1_weighted,
+        'per_class': {
+            'precision': precision_per_class,
+            'recall': recall_per_class,
+            'f1': f1_per_class,
+            'support': support_per_class
+        }
+    }
+
+
+def compute_binary_arc_metrics_worker(y_true, y_pred, y_proba, label_categories):
+    """Compute binary arc metrics for worker process"""
+    import numpy as np
+    from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
+                                 confusion_matrix, roc_auc_score, average_precision_score)
+
+    y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+    y_pred_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_pred])
+
+    unique_labels = np.unique(y_true)
+    arc_label_indices = [i for i, label in enumerate(unique_labels)
+                         if label_categories.get(int(label), 'unknown') == 'arc']
+
+    if len(arc_label_indices) > 0 and y_proba.shape[1] >= len(unique_labels):
+        y_proba_arc = np.sum(y_proba[:, arc_label_indices], axis=1)
+    else:
+        y_proba_arc = np.zeros(len(y_true))
+
+    accuracy = accuracy_score(y_true_binary, y_pred_binary)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y_true_binary, y_pred_binary, average='binary', zero_division=0
+    )
+
+    cm = confusion_matrix(y_true_binary, y_pred_binary)
+    if cm.size == 4:
+        tn, fp, fn, tp = cm.ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    else:
+        tn, fp, fn, tp = 0, 0, 0, 0
+        specificity = 0.0
+
+    try:
+        if len(np.unique(y_true_binary)) > 1:
+            roc_auc = roc_auc_score(y_true_binary, y_proba_arc)
+        else:
+            roc_auc = np.nan
+    except Exception:
+        roc_auc = np.nan
+
+    try:
+        if len(np.unique(y_true_binary)) > 1:
+            pr_auc = average_precision_score(y_true_binary, y_proba_arc)
+        else:
+            pr_auc = np.nan
+    except Exception:
+        pr_auc = np.nan
+
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'specificity': specificity,
+        'roc_auc': roc_auc,
+        'pr_auc': pr_auc
+    }
+
+
+def save_confusion_matrices_worker(y_train, y_pred_train, y_test, y_pred_test,
+                                   y_verify, y_pred_verify, label_categories,
+                                   exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+    """Save confusion matrices for worker process"""
+    import os
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.metrics import confusion_matrix
+
+    base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_results"
+    classifier_dir = f"classifier_{cls_id:03d}"
+    config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+    svm_dir = f"{svm_params['kernel']}_C{svm_params['C']}"
+    if svm_params.get('gamma'):
+        svm_dir += f"_G{svm_params['gamma']}"
+
+    full_dir = os.path.join(base_dir, classifier_dir, config_dir, svm_dir)
+    os.makedirs(full_dir, exist_ok=True)
+
+    paths = {}
+
+    # 13-class confusion matrices
+    for split_name, y_true, y_pred in [
+        ('train', y_train, y_pred_train),
+        ('test', y_test, y_pred_test),
+        ('verify', y_verify, y_pred_verify)
+    ]:
+        cm = confusion_matrix(y_true, y_pred)
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f'13-Class Confusion Matrix ({split_name.title()} Set)')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        filename = f"confusion_matrix_13class_{split_name}.png"
+        filepath = os.path.join(full_dir, filename)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        paths[f'cm_13class_{split_name}'] = filepath
+
+    # Binary arc detection confusion matrices
+    for split_name, y_true, y_pred in [
+        ('train', y_train, y_pred_train),
+        ('test', y_test, y_pred_test),
+        ('verify', y_verify, y_pred_verify)
+    ]:
+        y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+        y_pred_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_pred])
+        cm = confusion_matrix(y_true_binary, y_pred_binary)
+        plt.figure(figsize=(6, 5))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Oranges',
+                   xticklabels=['Non-arc', 'Arc'],
+                   yticklabels=['Non-arc', 'Arc'])
+        plt.title(f'Binary Arc Detection ({split_name.title()} Set)')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        filename = f"confusion_matrix_binary_{split_name}.png"
+        filepath = os.path.join(full_dir, filename)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        paths[f'cm_binary_{split_name}'] = filepath
+
+    return paths
+
+
+def save_curves_worker(y_train, y_proba_train, y_test, y_proba_test,
+                      y_verify, y_proba_verify, label_categories,
+                      exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+    """Save ROC and PR curves for worker process"""
+    import os
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import roc_curve, precision_recall_curve, roc_auc_score, average_precision_score
+
+    base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_results"
+    classifier_dir = f"classifier_{cls_id:03d}"
+    config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+    svm_dir = f"{svm_params['kernel']}_C{svm_params['C']}"
+    if svm_params.get('gamma'):
+        svm_dir += f"_G{svm_params['gamma']}"
+
+    full_dir = os.path.join(base_dir, classifier_dir, config_dir, svm_dir)
+    os.makedirs(full_dir, exist_ok=True)
+
+    paths = {}
+
+    unique_labels = np.unique(y_train)
+    arc_label_indices = [i for i, label in enumerate(unique_labels)
+                         if label_categories.get(int(label), 'unknown') == 'arc']
+
+    for split_name, y_true, y_proba in [
+        ('train', y_train, y_proba_train),
+        ('test', y_test, y_proba_test),
+        ('verify', y_verify, y_proba_verify)
+    ]:
+        y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+
+        if len(arc_label_indices) > 0 and y_proba.shape[1] >= len(unique_labels):
+            y_proba_arc = np.sum(y_proba[:, arc_label_indices], axis=1)
+        else:
+            y_proba_arc = np.zeros(len(y_true))
+
+        if len(np.unique(y_true_binary)) <= 1:
+            continue
+
+        try:
+            fpr, tpr, _ = roc_curve(y_true_binary, y_proba_arc)
+            roc_auc = roc_auc_score(y_true_binary, y_proba_arc)
+            plt.figure(figsize=(8, 6))
+            plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {roc_auc:.3f})')
+            plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title(f'ROC Curve - Arc Detection ({split_name.title()} Set)')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            filename = f"roc_curve_binary_{split_name}.png"
+            filepath = os.path.join(full_dir, filename)
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            paths[f'roc_binary_{split_name}'] = filepath
+        except Exception:
+            pass
+
+        try:
+            precision, recall, _ = precision_recall_curve(y_true_binary, y_proba_arc)
+            pr_auc = average_precision_score(y_true_binary, y_proba_arc)
+            plt.figure(figsize=(8, 6))
+            plt.plot(recall, precision, label=f'PR Curve (AUC = {pr_auc:.3f})')
+            plt.xlabel('Recall')
+            plt.ylabel('Precision')
+            plt.title(f'Precision-Recall Curve - Arc Detection ({split_name.title()} Set)')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            filename = f"pr_curve_binary_{split_name}.png"
+            filepath = os.path.join(full_dir, filename)
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            paths[f'pr_binary_{split_name}'] = filepath
+        except Exception:
+            pass
+
+    return paths
+
+
+def save_svm_model_worker(svm_model, exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+    """Save SVM model for worker process"""
+    import os
+    import joblib
+
+    base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_models"
+    classifier_dir = f"classifier_{cls_id:03d}"
+    config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+
+    full_dir = os.path.join(base_dir, classifier_dir, config_dir)
+    os.makedirs(full_dir, exist_ok=True)
+
+    filename = f"svm_{svm_params['kernel']}_C{svm_params['C']}"
+    if svm_params.get('gamma'):
+        filename += f"_G{svm_params['gamma']}"
+    filename += ".pkl"
+
+    filepath = os.path.join(full_dir, filename)
+    joblib.dump(svm_model, filepath, compress=3)
+
+    return filepath
 
 
 class MLDPShell:
