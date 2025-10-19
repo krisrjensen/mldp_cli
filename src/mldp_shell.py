@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.0
+File version: 2.0.9.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (9.0):
+Changes in this version (9.1):
 1. PHASE 4 START - SVM Training & Evaluation
+   - v2.0.9.1: Renamed classifier-train-svm to classifier-train-svm-init
    - v2.0.9.0: Implementing classifier-train-svm command
    - Train SVM classifiers on distance-based feature vectors
    - Two confusion matrices: 13-class and binary arc detection
@@ -343,7 +344,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
