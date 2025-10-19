@@ -3,17 +3,31 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_013000
-File version: 2.0.6.34
+Date Revised: 20251019_020000
+File version: 2.0.6.35
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 34)
+- CHANGE: Tracks changes within current commit cycle (currently 35)
 
-Changes in this version (6.34):
+Changes in this version (6.35):
+1. FEATURE BUILDER MANAGEMENT - Phase 0b Enhancement
+   - v2.0.6.35: Implemented feature builder management commands
+   - classifier-config-set-feature-builder: Create/update feature builder flags
+   - classifier-config-show-feature-builder: Display feature builder settings
+   - Updated classifier-config-list: Added "FeatBuilder" column (Yes/No)
+   - Feature builder controls which feature types are included in X matrix:
+     * include_original_feature: Raw feature values
+     * compute_baseline_distances_inter: Distances to OTHER class baselines
+     * compute_baseline_distances_intra: Distances to SAME class baseline
+     * statistical_features: Reserved for future use
+     * external_function: Reserved for future use
+   - Updated tab completion and help system
+
+Changes in previous version (6.34):
 1. CRITICAL FIX - Command Registration
    - v2.0.6.34: Registered Phase 0b and Phase 1 commands in command handler
    - Added missing Phase 0b commands: classifier-config-list, classifier-config-activate,
@@ -175,7 +189,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.6.34"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.35"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -343,6 +357,13 @@ class MLDPCompleter(Completer):
             'classifier-add-config-foreign-keys': ['--help'],
             'classifier-migrate-configs-to-global': ['--experiment-id', '--classifier-id', '--help'],
             'classifier-create-feature-builder-table': ['--force', '--help'],
+            'classifier-config-set-feature-builder': ['--config-id', '--include-original', '--no-include-original',
+                                                     '--compute-distances-inter', '--no-compute-distances-inter',
+                                                     '--compute-distances-intra', '--no-compute-distances-intra',
+                                                     '--statistical-features', '--no-statistical-features',
+                                                     '--external-function', '--no-external-function',
+                                                     '--notes', '--help'],
+            'classifier-config-show-feature-builder': ['--config-id', '--config-name', '--active', '--help'],
 
             # Classifier Data Split Assignment (Phase 1)
             'classifier-create-splits-table': ['--force', '--help'],
@@ -548,6 +569,8 @@ class MLDPShell:
             'classifier-config-activate': self.cmd_classifier_config_activate,
             'classifier-config-show': self.cmd_classifier_config_show,
             'classifier-create-feature-builder-table': self.cmd_classifier_create_feature_builder_table,
+            'classifier-config-set-feature-builder': self.cmd_classifier_config_set_feature_builder,
+            'classifier-config-show-feature-builder': self.cmd_classifier_config_show_feature_builder,
             # Classifier data split assignment commands (Phase 1)
             'classifier-create-splits-table': self.cmd_classifier_create_splits_table,
             'classifier-assign-splits': self.cmd_classifier_assign_splits,
@@ -1958,8 +1981,25 @@ class MLDPShell:
     --config-id <id>                  Configuration ID
     --feature-sets <list>             Comma-separated feature_set_ids from ml_feature_sets_lut
 
-  classifier-create-global-config-table    Create global ml_classifier_configs table (one-time)
-  classifier-create-feature-builder-table  Create ml_classifier_feature_builder table (one-time)
+  classifier-create-global-config-table       Create global ml_classifier_configs table (one-time)
+  classifier-create-feature-builder-table     Create ml_classifier_feature_builder table (one-time)
+
+  classifier-config-set-feature-builder       Set feature builder flags for a configuration
+    --config-id <id>                          Configuration ID (required)
+    [--include-original]                      Include raw feature values in X matrix
+    [--no-include-original]                   Exclude raw feature values
+    [--compute-distances-inter]               Compute distances to OTHER class baselines
+    [--no-compute-distances-inter]            Don't compute inter-class distances
+    [--compute-distances-intra]               Compute distances to SAME class baseline
+    [--no-compute-distances-intra]            Don't compute intra-class distances
+    [--statistical-features]                  Enable statistical features (reserved)
+    [--external-function]                     Enable external function (reserved)
+    [--notes <text>]                          Optional notes
+
+  classifier-config-show-feature-builder      Show feature builder settings
+    [--config-id <id>]                        Show for specific config ID
+    [--config-name <name>]                    Show for specific config name
+    [--active]                                Show for active config (default)
 
   Examples:
     classifier-config-create --config-name "baseline" --decimation-factors all \\
@@ -1969,6 +2009,8 @@ class MLDPShell:
     classifier-config-show
     classifier-config-activate --config-name "baseline"
     classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
+    classifier-config-set-feature-builder --config-id 1 --include-original --compute-distances-inter
+    classifier-config-show-feature-builder
     classifier-config-delete --config-name "test_config" --confirm
 
 ⚙️  DATA SPLIT ASSIGNMENT (Phase 1):
@@ -10723,7 +10765,8 @@ class MLDPShell:
                     ARRAY_AGG(DISTINCT efs.experiment_feature_set_id ORDER BY efs.experiment_feature_set_id)
                         FILTER (WHERE efs.experiment_feature_set_id IS NOT NULL) as feature_set_ids,
                     ARRAY_AGG(DISTINCT dfunc.distance_function_id ORDER BY dfunc.distance_function_id)
-                        FILTER (WHERE dfunc.distance_function_id IS NOT NULL) as distance_function_ids
+                        FILTER (WHERE dfunc.distance_function_id IS NOT NULL) as distance_function_ids,
+                    CASE WHEN fb.feature_builder_id IS NOT NULL THEN true ELSE false END as has_feature_builder
                 FROM ml_classifier_configs c
                 LEFT JOIN ml_classifier_config_decimation_factors df
                     ON c.config_id = df.config_id
@@ -10735,9 +10778,11 @@ class MLDPShell:
                     ON c.config_id = efs.config_id
                 LEFT JOIN ml_classifier_config_distance_functions dfunc
                     ON c.config_id = dfunc.config_id
+                LEFT JOIN ml_classifier_feature_builder fb
+                    ON c.config_id = fb.config_id
                 {where_clause}
                 GROUP BY c.config_id, c.config_name, c.is_active, c.created_at, c.notes,
-                         c.experiment_id, c.classifier_id
+                         c.experiment_id, c.classifier_id, fb.feature_builder_id
                 ORDER BY c.config_id
             """
 
@@ -10755,7 +10800,7 @@ class MLDPShell:
             for config in configs:
                 config_id, config_name, is_active, created_at, notes, exp_id, cls_id, \
                     decimation_factors, data_type_ids, amplitude_methods, \
-                    feature_set_ids, distance_function_ids = config
+                    feature_set_ids, distance_function_ids, has_feature_builder = config
 
                 # Format arrays
                 df_str = ','.join(map(str, decimation_factors)) if decimation_factors else 'None'
@@ -10765,6 +10810,7 @@ class MLDPShell:
                 dfunc_str = ','.join(map(str, distance_function_ids)) if distance_function_ids else 'None'
 
                 active_marker = '[ACTIVE]' if is_active else ''
+                fb_marker = 'Yes' if has_feature_builder else 'No'
 
                 table_data.append([
                     config_id,
@@ -10775,11 +10821,12 @@ class MLDPShell:
                     am_str,
                     fs_str,
                     dfunc_str,
+                    fb_marker,
                     created_at.strftime('%Y-%m-%d %H:%M') if created_at else ''
                 ])
 
             headers = ['ID', 'Config Name', 'Exp/Cls', 'Dec. Factors', 'Data Types',
-                      'Amp Methods', 'Feature Sets', 'Dist Funcs', 'Created']
+                      'Amp Methods', 'Feature Sets', 'Dist Funcs', 'FeatBuilder', 'Created']
 
             print(f"\n{tabulate(table_data, headers=headers, tablefmt='grid')}")
             print(f"\nTotal configurations: {len(configs)}")
@@ -11227,6 +11274,357 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to create ml_classifier_feature_builder table: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_set_feature_builder(self, args):
+        """
+        Set feature builder flags for a configuration
+
+        Usage: classifier-config-set-feature-builder --config-id <id> [OPTIONS]
+
+        Creates or updates the feature builder entry for a configuration.
+        The feature builder controls which feature types are included when
+        building the X matrix for SVM training.
+
+        Options:
+            --config-id <id>                      Config ID (required)
+            --include-original                    Include raw feature values
+            --no-include-original                 Exclude raw feature values
+            --compute-distances-inter             Compute distances to OTHER class baselines
+            --no-compute-distances-inter          Don't compute inter-class distances
+            --compute-distances-intra             Compute distances to SAME class baseline
+            --no-compute-distances-intra          Don't compute intra-class distances
+            --statistical-features                Enable statistical features (reserved)
+            --no-statistical-features             Disable statistical features
+            --external-function                   Enable external function (reserved)
+            --no-external-function                Disable external function
+            --notes <text>                        Optional notes
+
+        Examples:
+            classifier-config-set-feature-builder --config-id 1 --include-original --compute-distances-inter
+            classifier-config-set-feature-builder --config-id 1 --no-include-original
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        # Parse arguments
+        config_id = None
+        include_original = None
+        compute_inter = None
+        compute_intra = None
+        statistical = None
+        external = None
+        notes = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                i += 2
+            elif args[i] == '--include-original':
+                include_original = True
+                i += 1
+            elif args[i] == '--no-include-original':
+                include_original = False
+                i += 1
+            elif args[i] == '--compute-distances-inter':
+                compute_inter = True
+                i += 1
+            elif args[i] == '--no-compute-distances-inter':
+                compute_inter = False
+                i += 1
+            elif args[i] == '--compute-distances-intra':
+                compute_intra = True
+                i += 1
+            elif args[i] == '--no-compute-distances-intra':
+                compute_intra = False
+                i += 1
+            elif args[i] == '--statistical-features':
+                statistical = True
+                i += 1
+            elif args[i] == '--no-statistical-features':
+                statistical = False
+                i += 1
+            elif args[i] == '--external-function':
+                external = True
+                i += 1
+            elif args[i] == '--no-external-function':
+                external = False
+                i += 1
+            elif args[i] == '--notes' and i + 1 < len(args):
+                notes = args[i + 1]
+                i += 2
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_set_feature_builder.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if config_id is None:
+            print("[ERROR] --config-id is required")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get config info
+            cursor.execute("""
+                SELECT experiment_id, config_name
+                FROM ml_classifier_configs
+                WHERE config_id = %s
+            """, (config_id,))
+
+            config_row = cursor.fetchone()
+            if not config_row:
+                print(f"[ERROR] Config ID {config_id} not found")
+                return
+
+            experiment_id, config_name = config_row
+
+            # Check if feature builder entry exists
+            cursor.execute("""
+                SELECT feature_builder_id
+                FROM ml_classifier_feature_builder
+                WHERE config_id = %s
+            """, (config_id,))
+
+            existing = cursor.fetchone()
+
+            if existing:
+                # UPDATE existing entry
+                update_fields = []
+                update_values = []
+
+                if include_original is not None:
+                    update_fields.append("include_original_feature = %s")
+                    update_values.append(include_original)
+
+                if compute_inter is not None:
+                    update_fields.append("compute_baseline_distances_inter = %s")
+                    update_values.append(compute_inter)
+
+                if compute_intra is not None:
+                    update_fields.append("compute_baseline_distances_intra = %s")
+                    update_values.append(compute_intra)
+
+                if statistical is not None:
+                    update_fields.append("statistical_features = %s")
+                    update_values.append(statistical)
+
+                if external is not None:
+                    update_fields.append("external_function = %s")
+                    update_values.append(external)
+
+                if notes is not None:
+                    update_fields.append("notes = %s")
+                    update_values.append(notes)
+
+                update_fields.append("updated_at = NOW()")
+
+                if not update_fields:
+                    print("[WARNING] No changes specified")
+                    return
+
+                update_values.append(config_id)
+
+                cursor.execute(f"""
+                    UPDATE ml_classifier_feature_builder
+                    SET {', '.join(update_fields)}
+                    WHERE config_id = %s
+                """, update_values)
+
+                print(f"[SUCCESS] Updated feature builder for config '{config_name}' (ID: {config_id})")
+
+            else:
+                # INSERT new entry
+                cursor.execute("""
+                    INSERT INTO ml_classifier_feature_builder
+                        (config_id, experiment_id, include_original_feature,
+                         compute_baseline_distances_inter, compute_baseline_distances_intra,
+                         statistical_features, external_function, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    config_id,
+                    experiment_id,
+                    include_original if include_original is not None else False,
+                    compute_inter if compute_inter is not None else False,
+                    compute_intra if compute_intra is not None else False,
+                    statistical if statistical is not None else False,
+                    external if external is not None else False,
+                    notes
+                ))
+
+                print(f"[SUCCESS] Created feature builder for config '{config_name}' (ID: {config_id})")
+
+            self.db_conn.commit()
+
+            # Display current settings
+            cursor.execute("""
+                SELECT include_original_feature, compute_baseline_distances_inter,
+                       compute_baseline_distances_intra, statistical_features,
+                       external_function, notes
+                FROM ml_classifier_feature_builder
+                WHERE config_id = %s
+            """, (config_id,))
+
+            row = cursor.fetchone()
+            if row:
+                print("\nCurrent Feature Builder Settings:")
+                print(f"  Include original features: {row[0]}")
+                print(f"  Compute inter-class baseline distances: {row[1]}")
+                print(f"  Compute intra-class baseline distances: {row[2]}")
+                print(f"  Statistical features: {row[3]} (reserved)")
+                print(f"  External function: {row[4]} (reserved)")
+                if row[5]:
+                    print(f"  Notes: {row[5]}")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to set feature builder: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_show_feature_builder(self, args):
+        """
+        Show feature builder settings for a configuration
+
+        Usage: classifier-config-show-feature-builder [OPTIONS]
+
+        Displays the feature builder settings for a configuration.
+
+        Options:
+            --config-id <id>        Show for specific config ID
+            --config-name <name>    Show for specific config name
+            --active                Show for active config (default)
+
+        Examples:
+            classifier-config-show-feature-builder
+            classifier-config-show-feature-builder --config-id 1
+            classifier-config-show-feature-builder --config-name "baseline"
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_id = None
+        config_name = None
+        use_active = True
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config-id' and i + 1 < len(args):
+                config_id = int(args[i + 1])
+                use_active = False
+                i += 2
+            elif args[i] == '--config-name' and i + 1 < len(args):
+                config_name = args[i + 1]
+                use_active = False
+                i += 2
+            elif args[i] == '--active':
+                use_active = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_show_feature_builder.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
+                return
+
+            global_classifier_id = result[0]
+
+            # Determine which config to show
+            if config_id:
+                # Use specified config_id
+                pass
+            elif config_name:
+                # Look up config by name
+                cursor.execute("""
+                    SELECT config_id
+                    FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND config_name = %s
+                """, (global_classifier_id, config_name))
+                result = cursor.fetchone()
+                if not result:
+                    print(f"[ERROR] Config '{config_name}' not found")
+                    return
+                config_id = result[0]
+            elif use_active:
+                # Use active config
+                cursor.execute("""
+                    SELECT config_id
+                    FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND is_active = TRUE
+                """, (global_classifier_id,))
+                result = cursor.fetchone()
+                if not result:
+                    print("[ERROR] No active configuration found")
+                    return
+                config_id = result[0]
+
+            # Get feature builder settings
+            cursor.execute("""
+                SELECT c.config_name, c.is_active,
+                       fb.include_original_feature, fb.compute_baseline_distances_inter,
+                       fb.compute_baseline_distances_intra, fb.statistical_features,
+                       fb.external_function, fb.notes, fb.created_at, fb.updated_at
+                FROM ml_classifier_configs c
+                LEFT JOIN ml_classifier_feature_builder fb ON c.config_id = fb.config_id
+                WHERE c.config_id = %s
+            """, (config_id,))
+
+            row = cursor.fetchone()
+            if not row:
+                print(f"[ERROR] Config ID {config_id} not found")
+                return
+
+            config_name, is_active, inc_orig, comp_inter, comp_intra, stat_feat, ext_func, notes, created, updated = row
+
+            print(f"\nConfiguration: {config_name} (ID: {config_id})")
+            print(f"Status: {'ACTIVE' if is_active else 'Inactive'}")
+
+            if inc_orig is None:
+                print("\n[INFO] No feature builder configured for this configuration")
+                print("  Use 'classifier-config-set-feature-builder' to configure")
+                return
+
+            print("\nFeature Builder Settings:")
+            print(f"  Include original features: {inc_orig}")
+            print(f"  Compute inter-class baseline distances: {comp_inter}")
+            print(f"  Compute intra-class baseline distances: {comp_intra}")
+            print(f"  Statistical features: {stat_feat} (reserved)")
+            print(f"  External function: {ext_func} (reserved)")
+
+            if notes:
+                print(f"\nNotes: {notes}")
+
+            print(f"\nCreated: {created}")
+            print(f"Updated: {updated}")
+
+        except Exception as e:
+            print(f"\n[ERROR] Failed to show feature builder: {e}")
             import traceback
             traceback.print_exc()
 
