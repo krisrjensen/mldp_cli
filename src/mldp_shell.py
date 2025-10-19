@@ -3,17 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_060000
-File version: 2.0.7.7
+Date Revised: 20251019_061500
+File version: 2.0.7.8
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 7)
+- CHANGE: Tracks changes within current commit cycle (currently 8)
 
-Changes in this version (7.7):
+Changes in this version (7.8):
+1. NEW COMMAND - classifier-plot-reference-features
+   - v2.0.7.8: Added command to plot ACTUAL FEATURE DATA of selected segments
+   - Shows the actual waveforms/time series of selected reference segments
+   - One plot per reference segment showing all features (voltage, current, etc.)
+   - Multi-subplot layout with one subplot per feature
+   - Filters: --decimation-factor, --data-type, --amplitude-method, --feature-set
+   - THIS is what the user wanted - plots of the actual selected segments!
+
+Changes in previous version (7.7):
 1. NEW COMMAND - classifier-plot-references
    - v2.0.7.7: Added separate command to generate PCA plots from existing references
    - Reads reference segments from database
@@ -278,7 +287,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.7"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.8"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -464,6 +473,8 @@ class MLDPCompleter(Completer):
             'classifier-select-references': ['--force', '--plot', '--plot-dir', '--min-segments',
                                             '--pca-components', '--help'],
             'classifier-plot-references': ['--plot-dir', '--pca-components', '--help'],
+            'classifier-plot-reference-features': ['--plot-dir', '--decimation-factor', '--data-type',
+                                                   '--amplitude-method', '--feature-set', '--help'],
 
             # Utilities
             'verify': [],
@@ -672,6 +683,7 @@ class MLDPShell:
             'classifier-drop-references-table': self.cmd_classifier_drop_references_table,
             'classifier-select-references': self.cmd_classifier_select_references,
             'classifier-plot-references': self.cmd_classifier_plot_references,
+            'classifier-plot-reference-features': self.cmd_classifier_plot_reference_features,
         }
     
     def get_prompt(self):
@@ -13176,6 +13188,258 @@ class MLDPShell:
         except ImportError as e:
             print(f"\n[ERROR] Missing required package: {e}")
             print("Install with: pip install numpy scikit-learn matplotlib")
+        except Exception as e:
+            print(f"\n[ERROR] Failed to generate plots: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_plot_reference_features(self, args):
+        """
+        Plot the actual feature data of selected reference segments
+
+        Usage: classifier-plot-reference-features [OPTIONS]
+
+        Reads reference segments from the database and plots the actual feature
+        data (waveforms) for each selected reference segment. Shows what the
+        representative segment for each class actually looks like.
+
+        Options:
+            --plot-dir <path>      Directory for plots (default: ~/plots)
+            --decimation-factor <n>  Filter by decimation factor
+            --data-type <id>         Filter by data type
+            --amplitude-method <id>  Filter by amplitude method
+            --feature-set <id>       Filter by experiment feature set
+
+        Examples:
+            classifier-plot-reference-features --plot-dir ~/plots/exp041_cls001_refs
+            classifier-plot-reference-features --decimation-factor 0 --data-type 4
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        plot_dir = os.path.expanduser('~/plots')
+        filter_dec = None
+        filter_dtype = None
+        filter_amp = None
+        filter_efs = None
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--plot-dir':
+                if i + 1 < len(args):
+                    plot_dir = os.path.expanduser(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --plot-dir requires a path argument")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a number")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires an ID")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires an ID")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires an ID")
+                    return
+            else:
+                i += 1
+
+        try:
+            import numpy as np
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (table_name,))
+
+            if not cursor.fetchone()[0]:
+                print(f"[ERROR] Reference segments table does not exist: {table_name}")
+                print("  Run 'classifier-select-references' first")
+                return
+
+            # Build WHERE clause with filters
+            where_conditions = []
+            params = []
+            if filter_dec is not None:
+                where_conditions.append("decimation_factor = %s")
+                params.append(filter_dec)
+            if filter_dtype is not None:
+                where_conditions.append("data_type_id = %s")
+                params.append(filter_dtype)
+            if filter_amp is not None:
+                where_conditions.append("amplitude_processing_method_id = %s")
+                params.append(filter_amp)
+            if filter_efs is not None:
+                where_conditions.append("experiment_feature_set_id = %s")
+                params.append(filter_efs)
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = "WHERE " + " AND ".join(where_conditions)
+
+            # Query all reference segments
+            cursor.execute(f"""
+                SELECT
+                    segment_label_id,
+                    decimation_factor,
+                    data_type_id,
+                    amplitude_processing_method_id,
+                    experiment_feature_set_id,
+                    reference_segment_id,
+                    total_segments_in_class
+                FROM {table_name}
+                {where_clause}
+                ORDER BY decimation_factor, data_type_id, amplitude_processing_method_id,
+                         experiment_feature_set_id, segment_label_id
+            """, params)
+
+            reference_rows = cursor.fetchall()
+
+            if not reference_rows:
+                print("[ERROR] No reference segments found")
+                print("  Run 'classifier-select-references' first or adjust filters")
+                return
+
+            print(f"[INFO] Found {len(reference_rows)} reference segments")
+            print(f"[INFO] Generating feature plots in {plot_dir}...")
+
+            os.makedirs(plot_dir, exist_ok=True)
+
+            plot_count = 0
+
+            for row in reference_rows:
+                label_id = row[0]
+                dec = row[1]
+                dtype = row[2]
+                amp = row[3]
+                efs = row[4]
+                ref_segment_id = row[5]
+                total_segments = row[6]
+
+                print(f"\nProcessing: Class {label_id}, dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, segment={ref_segment_id}")
+
+                # Query all features in this feature_set
+                cursor.execute("""
+                    SELECT f.feature_id, f.feature_name, fsf.feature_order
+                    FROM ml_experiments_feature_sets efs_tbl
+                    JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
+                    JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                    WHERE efs_tbl.experiment_feature_set_id = %s
+                    ORDER BY fsf.feature_order
+                """, (efs,))
+                features_in_set = cursor.fetchall()
+                feature_ids = [row[0] for row in features_in_set]
+                feature_names = [row[1] for row in features_in_set]
+
+                # Load feature files for this reference segment
+                feature_data = []
+                for feature_id, feature_name in zip(feature_ids, feature_names):
+                    cursor.execute(f"""
+                        SELECT f.feature_file_path
+                        FROM experiment_{exp_id:03d}_feature_fileset f
+                        WHERE f.segment_id = %s
+                          AND f.decimation_factor = %s
+                          AND f.data_type_id = %s
+                          AND f.amplitude_processing_method_id = %s
+                          AND f.experiment_feature_set_id = %s
+                          AND f.feature_set_feature_id = %s
+                    """, (ref_segment_id, dec, dtype, amp, efs, feature_id))
+
+                    result = cursor.fetchone()
+                    if result:
+                        feature_file_path = result[0]
+                        try:
+                            features = np.load(feature_file_path)
+                            # Select correct amplitude column
+                            column_idx = amp - 1
+                            features_1d = features[:, column_idx]
+                            feature_data.append((feature_name, features_1d))
+                        except Exception as e:
+                            print(f"  [WARNING] Failed to load {feature_file_path}: {e}")
+                            continue
+
+                if not feature_data:
+                    print(f"  [SKIP] No feature data found for segment {ref_segment_id}")
+                    continue
+
+                # Create plot
+                num_features = len(feature_data)
+                fig, axes = plt.subplots(num_features, 1, figsize=(12, 3 * num_features))
+                if num_features == 1:
+                    axes = [axes]
+
+                for ax, (feature_name, data) in zip(axes, feature_data):
+                    ax.plot(data, linewidth=0.5)
+                    ax.set_ylabel(feature_name)
+                    ax.grid(True, alpha=0.3)
+                    ax.set_xlim(0, len(data))
+
+                axes[-1].set_xlabel('Sample Index')
+
+                fig.suptitle(f'Reference Segment Features\n'
+                            f'Exp {exp_id}, Classifier {cls_id}, Class {label_id}\n'
+                            f'Segment {ref_segment_id} (1 of {total_segments} in class)\n'
+                            f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}',
+                            fontsize=12)
+
+                plot_filename = (f'exp{exp_id:03d}_cls{cls_id:03d}_'
+                                f'class{label_id}_seg{ref_segment_id}_'
+                                f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_features.png')
+                plot_path = os.path.join(plot_dir, plot_filename)
+
+                plt.tight_layout()
+                plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                print(f"  Saved: {plot_filename}")
+                plot_count += 1
+
+            print(f"\n[SUCCESS] Generated {plot_count} feature plots in {plot_dir}")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Missing required package: {e}")
+            print("Install with: pip install numpy matplotlib")
         except Exception as e:
             print(f"\n[ERROR] Failed to generate plots: {e}")
             import traceback
