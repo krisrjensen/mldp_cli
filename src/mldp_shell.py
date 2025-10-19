@@ -3,17 +3,59 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_000500
-File version: 2.0.6.28
+Date Revised: 20251019_012000
+File version: 2.0.6.33
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 28)
+- CHANGE: Tracks changes within current commit cycle (currently 33)
 
-Changes in this version (6.28):
+Changes in this version (6.33):
+1. PHASE 1 COMPLETION - Data Split Assignment System
+   - v2.0.6.33: Updated help system with Phase 1 documentation
+   - Added comprehensive help for all three split commands
+   - Documented all command options and default values
+   - Included usage examples for common scenarios
+   - Phase 1 implementation complete (ready for commit)
+
+Changes in previous version (6.32):
+1. PHASE 1 - Data Split Assignment System (continued)
+   - v2.0.6.32: Updated tab completion for Phase 1 commands
+   - Added classifier-create-splits-table completion
+   - Added classifier-assign-splits completion with all options
+   - Added classifier-show-splits completion with filters
+
+Changes in previous version (6.31):
+1. PHASE 1 - Data Split Assignment System (continued)
+   - v2.0.6.31: Implemented classifier-show-splits command
+   - Displays split statistics with tabulated output
+   - Summary view shows segments and classes per split type
+   - Detail view shows per-class breakdown for each combination
+   - Supports filtering by decimation_factor and data_type
+   - Displays split percentages and totals
+
+Changes in previous version (6.30):
+1. PHASE 1 - Data Split Assignment System (continued)
+   - v2.0.6.30: Implemented classifier-assign-splits command
+   - Stratified sampling using sklearn.model_selection.train_test_split
+   - Configurable train/test/verification ratios (default: 70/20/10)
+   - Uses active configuration to determine decimation_factors and data_types
+   - Processes all (decimation_factor, data_type_id) combinations
+   - Per-class stratification ensures balanced representation
+   - Random seed for reproducibility
+
+Changes in previous version (6.29):
+1. PHASE 1 START - Data Split Assignment System
+   - v2.0.6.29: Implemented classifier-create-splits-table command
+   - Creates per-classifier data_splits table for train/test/verification assignments
+   - Table schema includes stratification fields (segment_label_id)
+   - UNIQUE constraint on (segment_id, decimation_factor, data_type_id)
+   - Four indexes for efficient querying by split_type, segment, label, and experiment data
+
+Changes in previous version (6.28):
 1. PHASE 0b COMPLETION - Configuration Management System
    - v2.0.6.26: Implemented classifier-config-list command with ARRAY_AGG queries
    - v2.0.6.27: Implemented classifier-config-activate command
@@ -292,6 +334,12 @@ class MLDPCompleter(Completer):
             'classifier-add-config-foreign-keys': ['--help'],
             'classifier-migrate-configs-to-global': ['--experiment-id', '--classifier-id', '--help'],
             'classifier-create-feature-builder-table': ['--force', '--help'],
+
+            # Classifier Data Split Assignment (Phase 1)
+            'classifier-create-splits-table': ['--force', '--help'],
+            'classifier-assign-splits': ['--train-ratio', '--test-ratio', '--verification-ratio',
+                                        '--seed', '--force', '--help'],
+            'classifier-show-splits': ['--decimation-factor', '--data-type', '--detail', '--help'],
 
             # Utilities
             'verify': [],
@@ -1905,6 +1953,27 @@ class MLDPShell:
     classifier-config-activate --config-name "baseline"
     classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
     classifier-config-delete --config-name "test_config" --confirm
+
+⚙️  DATA SPLIT ASSIGNMENT (Phase 1):
+  classifier-create-splits-table  Create data_splits table (one-time setup)
+    [--force]                     Recreate table if exists
+
+  classifier-assign-splits        Assign train/test/verification splits
+    [--train-ratio <float>]       Training set ratio (default: 0.70)
+    [--test-ratio <float>]        Test set ratio (default: 0.20)
+    [--verification-ratio <float>] Verification set ratio (default: 0.10)
+    [--seed <int>]                Random seed (default: 42)
+    [--force]                     Overwrite existing splits
+
+  classifier-show-splits          Display split statistics
+    [--decimation-factor <n>]     Filter by decimation factor
+    [--data-type <id>]            Filter by data type
+    [--detail]                    Show per-class breakdown
+
+  Examples:
+    classifier-create-splits-table
+    classifier-assign-splits --train-ratio 0.80 --test-ratio 0.15 --verification-ratio 0.05
+    classifier-show-splits --detail
 
 📂 DATA MANAGEMENT:
   get-experiment-data-path            Show paths and file counts for experiment data
@@ -11141,6 +11210,638 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to create ml_classifier_feature_builder table: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ========== Phase 1: Data Split Assignment Commands ==========
+
+    def cmd_classifier_create_splits_table(self, args):
+        """
+        Create data_splits table for current classifier
+
+        Usage: classifier-create-splits-table [--force]
+
+        Creates experiment_{exp}_classifier_{cls}_data_splits table for storing
+        train/test/verification split assignments.
+
+        Schema:
+        - split_id: BIGSERIAL PRIMARY KEY
+        - classifier_id: Links to current classifier
+        - segment_id: Links to data_segments
+        - split_type: 'training', 'test', or 'verification'
+        - split_assignment_date: When split was assigned
+        - random_seed: For reproducibility
+        - decimation_factor: Configuration parameter
+        - data_type_id: Configuration parameter
+        - is_experiment_data: Boolean flag
+        - segment_label_id: For stratified sampling
+        - created_at: Timestamp
+
+        Options:
+            --force    Recreate table if it exists (WARNING: deletes existing splits)
+
+        Examples:
+            classifier-create-splits-table
+            classifier-create-splits-table --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        force = '--force' in args if args else False
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Build table name
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits"
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = %s
+            """, (table_name,))
+
+            exists = cursor.fetchone()
+
+            if exists and not force:
+                print(f"[INFO] Table {table_name} already exists")
+                print("  Use --force to recreate (WARNING: will delete existing splits)")
+                return
+
+            if exists and force:
+                print(f"[WARNING] Dropping existing table {table_name}...")
+                cursor.execute(f"DROP TABLE {table_name} CASCADE")
+                print("  ✓ Dropped")
+
+            # Create data splits table
+            print(f"Creating table {table_name}...")
+
+            create_sql = f"""
+                CREATE TABLE {table_name} (
+                    split_id BIGSERIAL PRIMARY KEY,
+                    classifier_id INTEGER NOT NULL DEFAULT {cls_id},
+                    segment_id INTEGER NOT NULL,
+                    split_type VARCHAR(20) NOT NULL,
+                    split_assignment_date TIMESTAMP DEFAULT NOW(),
+                    random_seed INTEGER,
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    is_experiment_data BOOLEAN NOT NULL DEFAULT TRUE,
+                    segment_label_id INTEGER,
+                    created_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE (segment_id, decimation_factor, data_type_id),
+                    FOREIGN KEY (segment_id) REFERENCES data_segments(segment_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_type
+                    ON {table_name}(split_type);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_segment
+                    ON {table_name}(segment_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_label
+                    ON {table_name}(segment_label_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_exp_data
+                    ON {table_name}(is_experiment_data);
+            """
+
+            cursor.execute(create_sql)
+            self.db_conn.commit()
+
+            print(f"  ✓ Table created: {table_name}")
+            print("  ✓ Indexes created:")
+            print(f"    - idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_type")
+            print(f"    - idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_segment")
+            print(f"    - idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_label")
+            print(f"    - idx_exp{exp_id:03d}_cls{cls_id:03d}_splits_exp_data")
+            print("  ✓ Foreign key constraint to data_segments added")
+            print("  ✓ UNIQUE constraint on (segment_id, decimation_factor, data_type_id) enforced")
+
+            print(f"\n[SUCCESS] Data splits table created successfully")
+            print("\nNext steps:")
+            print("  1. classifier-assign-splits - Assign segments to training/test/verification splits")
+            print("  2. classifier-show-splits - View split statistics")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to create data splits table: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_assign_splits(self, args):
+        """
+        Assign segments to train/test/verification splits
+
+        Usage: classifier-assign-splits [OPTIONS]
+
+        Assigns segments from experiment_NNN_segment_training_data to splits using
+        stratified sampling by segment_label_id. Uses active configuration to determine
+        which decimation_factors and data_types to process.
+
+        Options:
+            --train-ratio <float>        Training set ratio (default: 0.70)
+            --test-ratio <float>         Test set ratio (default: 0.20)
+            --verification-ratio <float> Verification set ratio (default: 0.10)
+            --seed <int>                 Random seed for reproducibility (default: 42)
+            --force                      Overwrite existing splits
+
+        Examples:
+            classifier-assign-splits
+            classifier-assign-splits --train-ratio 0.80 --test-ratio 0.15 --verification-ratio 0.05
+            classifier-assign-splits --seed 123 --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        train_ratio = 0.70
+        test_ratio = 0.20
+        verification_ratio = 0.10
+        seed = 42
+        force = False
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--train-ratio' and i + 1 < len(args):
+                train_ratio = float(args[i + 1])
+                i += 2
+            elif args[i] == '--test-ratio' and i + 1 < len(args):
+                test_ratio = float(args[i + 1])
+                i += 2
+            elif args[i] == '--verification-ratio' and i + 1 < len(args):
+                verification_ratio = float(args[i + 1])
+                i += 2
+            elif args[i] == '--seed' and i + 1 < len(args):
+                seed = int(args[i + 1])
+                i += 2
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                i += 1
+
+        # Validate split ratios
+        total_ratio = train_ratio + test_ratio + verification_ratio
+        if abs(total_ratio - 1.0) > 0.001:
+            print(f"[ERROR] Split ratios must sum to 1.0 (got {total_ratio})")
+            return
+
+        if not (0.0 <= train_ratio <= 1.0 and 0.0 <= test_ratio <= 1.0 and 0.0 <= verification_ratio <= 1.0):
+            print("[ERROR] All ratios must be between 0.0 and 1.0")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits"
+
+            # Check if splits table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = %s
+            """, (table_name,))
+
+            if not cursor.fetchone():
+                print(f"[ERROR] Table {table_name} does not exist")
+                print("  Run 'classifier-create-splits-table' first")
+                return
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+
+            global_classifier_id = result[0]
+
+            # Check for active configuration
+            cursor.execute("""
+                SELECT config_id
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+
+            config_result = cursor.fetchone()
+            if not config_result:
+                print("[ERROR] No active configuration found for current classifier")
+                print("  Use 'classifier-config-activate' to activate a configuration")
+                return
+
+            config_id = config_result[0]
+
+            # Get decimation factors from active config
+            cursor.execute("""
+                SELECT DISTINCT decimation_factor
+                FROM ml_classifier_config_decimation_factors
+                WHERE config_id = %s
+                ORDER BY decimation_factor
+            """, (config_id,))
+
+            decimation_factors = [row[0] for row in cursor.fetchall()]
+
+            if not decimation_factors:
+                print("[ERROR] Active configuration has no decimation factors")
+                return
+
+            # Get data types from active config
+            cursor.execute("""
+                SELECT DISTINCT data_type_id
+                FROM ml_classifier_config_data_types
+                WHERE config_id = %s
+                ORDER BY data_type_id
+            """, (config_id,))
+
+            data_type_ids = [row[0] for row in cursor.fetchall()]
+
+            if not data_type_ids:
+                print("[ERROR] Active configuration has no data types")
+                return
+
+            print(f"Using active configuration {config_id}:")
+            print(f"  Decimation factors: {decimation_factors}")
+            print(f"  Data type IDs: {data_type_ids}")
+            print(f"\nSplit ratios:")
+            print(f"  Training: {train_ratio * 100:.1f}%")
+            print(f"  Test: {test_ratio * 100:.1f}%")
+            print(f"  Verification: {verification_ratio * 100:.1f}%")
+            print(f"  Random seed: {seed}\n")
+
+            # Check for existing splits
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            existing_count = cursor.fetchone()[0]
+
+            if existing_count > 0 and not force:
+                print(f"[ERROR] Table already contains {existing_count} split assignments")
+                print("  Use --force to overwrite existing splits")
+                return
+
+            if existing_count > 0 and force:
+                print(f"[WARNING] Deleting {existing_count} existing split assignments...")
+                cursor.execute(f"DELETE FROM {table_name}")
+                print("  ✓ Deleted")
+
+            # Import sklearn for stratified sampling
+            try:
+                from sklearn.model_selection import train_test_split
+            except ImportError:
+                print("[ERROR] scikit-learn not installed")
+                print("  Install with: pip install scikit-learn")
+                return
+
+            # Process each (decimation_factor, data_type_id) combination
+            from collections import defaultdict
+
+            total_assigned = 0
+            combination_count = 0
+
+            for dec_factor in decimation_factors:
+                for data_type_id in data_type_ids:
+                    print(f"\nProcessing decimation_factor={dec_factor}, data_type_id={data_type_id}...")
+
+                    # Query all segments for this combination
+                    query = f"""
+                        SELECT DISTINCT
+                            s.segment_id,
+                            s.segment_label_id
+                        FROM experiment_{exp_id:03d}_segment_training_data s
+                        WHERE EXISTS (
+                            SELECT 1 FROM experiment_{exp_id:03d}_feature_fileset f
+                            WHERE f.segment_id = s.segment_id
+                            AND f.decimation_factor = %s
+                            AND f.data_type_id = %s
+                        )
+                        ORDER BY s.segment_label_id, s.segment_id
+                    """
+
+                    cursor.execute(query, (dec_factor, data_type_id))
+                    segments = cursor.fetchall()
+
+                    if not segments:
+                        print(f"  ⚠ No segments found - skipping")
+                        continue
+
+                    # Group segments by label_id
+                    segments_by_label = defaultdict(list)
+                    for segment_id, label_id in segments:
+                        segments_by_label[label_id].append(segment_id)
+
+                    print(f"  Found {len(segments)} segments across {len(segments_by_label)} classes")
+
+                    # Perform stratified split for each class
+                    all_train_ids = []
+                    all_test_ids = []
+                    all_verify_ids = []
+
+                    for label_id, segment_ids in segments_by_label.items():
+                        # First split: training vs. (test + verification)
+                        train_ids, temp_ids = train_test_split(
+                            segment_ids,
+                            train_size=train_ratio,
+                            random_state=seed,
+                            shuffle=True
+                        )
+
+                        # Second split: test vs. verification
+                        if verification_ratio > 0:
+                            test_size_adjusted = test_ratio / (test_ratio + verification_ratio)
+                            test_ids, verify_ids = train_test_split(
+                                temp_ids,
+                                train_size=test_size_adjusted,
+                                random_state=seed,
+                                shuffle=True
+                            )
+                        else:
+                            test_ids = temp_ids
+                            verify_ids = []
+
+                        all_train_ids.extend([(sid, label_id) for sid in train_ids])
+                        all_test_ids.extend([(sid, label_id) for sid in test_ids])
+                        all_verify_ids.extend([(sid, label_id) for sid in verify_ids])
+
+                        print(f"    Class {label_id}: {len(segment_ids)} segments -> "
+                              f"{len(train_ids)} train, {len(test_ids)} test, {len(verify_ids)} verify")
+
+                    # Insert split assignments
+                    for segment_id, label_id in all_train_ids:
+                        cursor.execute(f"""
+                            INSERT INTO {table_name}
+                                (classifier_id, segment_id, split_type, random_seed,
+                                 decimation_factor, data_type_id, is_experiment_data, segment_label_id)
+                            VALUES (%s, %s, 'training', %s, %s, %s, TRUE, %s)
+                        """, (cls_id, segment_id, seed, dec_factor, data_type_id, label_id))
+
+                    for segment_id, label_id in all_test_ids:
+                        cursor.execute(f"""
+                            INSERT INTO {table_name}
+                                (classifier_id, segment_id, split_type, random_seed,
+                                 decimation_factor, data_type_id, is_experiment_data, segment_label_id)
+                            VALUES (%s, %s, 'test', %s, %s, %s, TRUE, %s)
+                        """, (cls_id, segment_id, seed, dec_factor, data_type_id, label_id))
+
+                    for segment_id, label_id in all_verify_ids:
+                        cursor.execute(f"""
+                            INSERT INTO {table_name}
+                                (classifier_id, segment_id, split_type, random_seed,
+                                 decimation_factor, data_type_id, is_experiment_data, segment_label_id)
+                            VALUES (%s, %s, 'verification', %s, %s, %s, TRUE, %s)
+                        """, (cls_id, segment_id, seed, dec_factor, data_type_id, label_id))
+
+                    combination_total = len(all_train_ids) + len(all_test_ids) + len(all_verify_ids)
+                    total_assigned += combination_total
+                    combination_count += 1
+
+                    print(f"  ✓ Assigned {combination_total} segments")
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Split assignment complete!")
+            print(f"  Total segments assigned: {total_assigned}")
+            print(f"  Combinations processed: {combination_count}")
+            print(f"  Random seed: {seed}")
+            print("\nNext steps:")
+            print("  classifier-show-splits - View split statistics")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to assign splits: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_show_splits(self, args):
+        """
+        Display split statistics for current classifier
+
+        Usage: classifier-show-splits [OPTIONS]
+
+        Shows train/test/verification split counts and distribution by class.
+
+        Options:
+            --decimation-factor <n>  Show splits for specific decimation factor
+            --data-type <id>         Show splits for specific data type
+            --detail                 Show detailed per-class breakdown
+
+        Examples:
+            classifier-show-splits
+            classifier-show-splits --decimation-factor 0 --data-type 4
+            classifier-show-splits --detail
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        decimation_factor_filter = None
+        data_type_filter = None
+        detail = False
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--decimation-factor' and i + 1 < len(args):
+                decimation_factor_filter = int(args[i + 1])
+                i += 2
+            elif args[i] == '--data-type' and i + 1 < len(args):
+                data_type_filter = int(args[i + 1])
+                i += 2
+            elif args[i] == '--detail':
+                detail = True
+                i += 1
+            else:
+                i += 1
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits"
+
+            # Check if splits table exists
+            cursor.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = %s
+            """, (table_name,))
+
+            if not cursor.fetchone():
+                print(f"[ERROR] Table {table_name} does not exist")
+                print("  Run 'classifier-create-splits-table' first")
+                return
+
+            # Query random seed
+            cursor.execute(f"""
+                SELECT DISTINCT random_seed
+                FROM {table_name}
+                LIMIT 1
+            """)
+
+            seed_result = cursor.fetchone()
+            if seed_result:
+                random_seed = seed_result[0]
+                print(f"Random seed: {random_seed}\n")
+            else:
+                print("[INFO] No splits assigned yet\n")
+                print("  Use 'classifier-assign-splits' to assign splits")
+                return
+
+            # Build WHERE clause for filters
+            where_conditions = []
+            params = []
+
+            if decimation_factor_filter is not None:
+                where_conditions.append("decimation_factor = %s")
+                params.append(decimation_factor_filter)
+
+            if data_type_filter is not None:
+                where_conditions.append("data_type_id = %s")
+                params.append(data_type_filter)
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = "WHERE " + " AND ".join(where_conditions)
+
+            # Query split summary
+            query = f"""
+                SELECT
+                    split_type,
+                    decimation_factor,
+                    data_type_id,
+                    COUNT(*) as segment_count,
+                    COUNT(DISTINCT segment_label_id) as class_count
+                FROM {table_name}
+                {where_clause}
+                GROUP BY split_type, decimation_factor, data_type_id
+                ORDER BY decimation_factor, data_type_id, split_type
+            """
+
+            cursor.execute(query, params)
+            summary = cursor.fetchall()
+
+            if not summary:
+                print("[INFO] No splits found matching the specified filters")
+                return
+
+            # Display summary using tabulate
+            from tabulate import tabulate
+
+            headers = ["Split Type", "Dec Factor", "Data Type", "Segments", "Classes"]
+            table_data = []
+
+            for split_type, dec_factor, data_type_id, segment_count, class_count in summary:
+                table_data.append([split_type, dec_factor, data_type_id, segment_count, class_count])
+
+            print("Split Summary:")
+            print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+            # Calculate totals
+            total_segments = sum(row[3] for row in summary)
+            unique_combinations = len(set((row[1], row[2]) for row in summary))
+
+            print(f"\nTotals:")
+            print(f"  Total segments: {total_segments}")
+            print(f"  Unique (decimation_factor, data_type) combinations: {unique_combinations}")
+
+            # If --detail, show per-class breakdown
+            if detail:
+                print("\nPer-Class Breakdown:")
+
+                for dec_factor, data_type_id in sorted(set((row[1], row[2]) for row in summary)):
+                    print(f"\n  Decimation Factor: {dec_factor}, Data Type: {data_type_id}")
+
+                    # Query per-class breakdown for this combination
+                    detail_query = f"""
+                        SELECT
+                            split_type,
+                            segment_label_id,
+                            COUNT(*) as segment_count
+                        FROM {table_name}
+                        WHERE decimation_factor = %s AND data_type_id = %s
+                        GROUP BY split_type, segment_label_id
+                        ORDER BY segment_label_id, split_type
+                    """
+
+                    cursor.execute(detail_query, (dec_factor, data_type_id))
+                    detail_results = cursor.fetchall()
+
+                    # Group by class
+                    from collections import defaultdict
+                    class_data = defaultdict(dict)
+
+                    for split_type, label_id, count in detail_results:
+                        class_data[label_id][split_type] = count
+
+                    # Build detail table
+                    detail_headers = ["Class", "Training", "Test", "Verification", "Total"]
+                    detail_table = []
+
+                    for label_id in sorted(class_data.keys()):
+                        train = class_data[label_id].get('training', 0)
+                        test = class_data[label_id].get('test', 0)
+                        verify = class_data[label_id].get('verification', 0)
+                        total = train + test + verify
+
+                        detail_table.append([label_id, train, test, verify, total])
+
+                    # Add totals row
+                    total_train = sum(row[1] for row in detail_table)
+                    total_test = sum(row[2] for row in detail_table)
+                    total_verify = sum(row[3] for row in detail_table)
+                    total_all = sum(row[4] for row in detail_table)
+
+                    detail_table.append(["TOTAL", total_train, total_test, total_verify, total_all])
+
+                    print(tabulate(detail_table, headers=detail_headers, tablefmt="grid"))
+
+                    # Show percentages
+                    if total_all > 0:
+                        train_pct = (total_train / total_all) * 100
+                        test_pct = (total_test / total_all) * 100
+                        verify_pct = (total_verify / total_all) * 100
+
+                        print(f"    Percentages: Training={train_pct:.1f}%, Test={test_pct:.1f}%, Verification={verify_pct:.1f}%")
+
+        except Exception as e:
+            print(f"\n[ERROR] Failed to show splits: {e}")
             import traceback
             traceback.print_exc()
 
