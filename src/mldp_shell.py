@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.1
+File version: 2.0.9.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (9.1):
+Changes in this version (9.2):
 1. PHASE 4 START - SVM Training & Evaluation
+   - v2.0.9.2: Fixed NameError for 'force' variable in classifier-train-svm-init
    - v2.0.9.1: Renamed classifier-train-svm to classifier-train-svm-init
    - v2.0.9.0: Implementing classifier-train-svm command
    - Train SVM classifiers on distance-based feature vectors
@@ -344,7 +345,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -14397,31 +14398,15 @@ class MLDPShell:
                 cursor.execute(create_per_class_sql)
                 self.db_conn.commit()
                 print(f"[SUCCESS] Tables created: {results_table_name}, {per_class_table_name}")
+            else:
+                print(f"[INFO] Tables already exist: {results_table_name}, {per_class_table_name}")
 
-            # Check for existing results
-            if table_exists and not force:
-                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
-                existing_count = cursor.fetchone()[0]
-                if existing_count > 0:
-                    print(f"\n[WARNING] {existing_count} existing results found")
-                    print("Use --force to overwrite existing results")
-                    return
-
-            if force and table_exists:
-                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
-                existing_count = cursor.fetchone()[0]
-                if existing_count > 0:
-                    print(f"[INFO] Deleting {existing_count} existing results...")
-                    cursor.execute(f"DELETE FROM {results_table_name}")
-                    self.db_conn.commit()
-
-            # [PLACEHOLDER: Rest of implementation will be added in next steps]
-            print("[INFO] Command structure and table creation complete")
-            print("[INFO] SVM training implementation in progress...")
+            print("\n[SUCCESS] Initialization complete!")
+            print("[INFO] You can now run 'classifier-train-svm' to train the SVM classifier.")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"\n[ERROR] Failed to train SVM: {e}")
+            print(f"\n[ERROR] Failed to initialize SVM training: {e}")
             import traceback
             traceback.print_exc()
 
