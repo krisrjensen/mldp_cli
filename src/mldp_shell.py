@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_181000
-File version: 2.0.9.17
+Date Revised: 20251019_182000
+File version: 2.0.9.18
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,11 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.17):
-1. PHASE 4 DIAGNOSTICS - Bug fix and enhancements
+Changes in this version (9.18):
+1. PHASE 4 DIAGNOSTICS - Bug fixes
+   - v2.0.9.18: Fixed SQL column name error in classifier-test-svm-single
+                Changed local_classifier_id to classifier_id in query
+                Matches actual ml_experiment_classifiers table schema
    - v2.0.9.17: Fixed AttributeError in classifier-test-svm-single
                 Changed self.current_classifier to self.current_classifier_id
                 Now matches convention used by all other classifier commands
@@ -375,7 +378,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.17"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.18"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15649,7 +15652,7 @@ class MLDPShell:
         cursor.execute("""
             SELECT global_classifier_id
             FROM ml_experiment_classifiers
-            WHERE experiment_id = %s AND local_classifier_id = %s
+            WHERE experiment_id = %s AND classifier_id = %s
         """, (exp_id, cls_id))
         row = cursor.fetchone()
         if not row:
