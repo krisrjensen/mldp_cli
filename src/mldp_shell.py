@@ -3,17 +3,30 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_024500
-File version: 2.0.7.0
+Date Revised: 20251019_030000
+File version: 2.0.7.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (7.0):
+Changes in this version (7.1):
+1. PHASE 2 START - Reference Segment Selection
+   - v2.0.7.1: Implemented classifier-select-references command
+   - Uses PCA dimensionality reduction to 2D + centroid analysis
+   - Selects one representative reference segment per class
+   - Creates experiment_{exp}_classifier_{cls}_reference_segments table
+   - Loads feature vectors from .npy files
+   - Performs stratified selection by segment_label_id
+   - Optional PCA visualization plots (--plot option)
+   - Configurable minimum segments per class (--min-segments)
+   - Stores PCA metadata (centroid coordinates, explained variance)
+   - Ready for Phase 3 (Feature Vector Construction)
+
+Changes in previous version (7.0):
 1. MILESTONE RELEASE - Phase 0b and Phase 1 Complete
    - v2.0.7.0: Phase 0b (Configuration Management) fully implemented and tested
    - v2.0.7.0: Phase 1 (Data Split Assignment) fully implemented and tested
@@ -210,7 +223,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -390,6 +403,10 @@ class MLDPCompleter(Completer):
             'classifier-assign-splits': ['--train-ratio', '--test-ratio', '--verification-ratio',
                                         '--seed', '--force', '--help'],
             'classifier-show-splits': ['--decimation-factor', '--data-type', '--detail', '--help'],
+
+            # Classifier Reference Selection (Phase 2)
+            'classifier-select-references': ['--force', '--plot', '--plot-dir', '--min-segments',
+                                            '--pca-components', '--help'],
 
             # Utilities
             'verify': [],
@@ -594,6 +611,8 @@ class MLDPShell:
             'classifier-create-splits-table': self.cmd_classifier_create_splits_table,
             'classifier-assign-splits': self.cmd_classifier_assign_splits,
             'classifier-show-splits': self.cmd_classifier_show_splits,
+            # Classifier reference selection commands (Phase 2)
+            'classifier-select-references': self.cmd_classifier_select_references,
         }
     
     def get_prompt(self):
@@ -2050,6 +2069,18 @@ class MLDPShell:
     classifier-create-splits-table
     classifier-assign-splits --train-ratio 0.80 --test-ratio 0.15 --verification-ratio 0.05
     classifier-show-splits --detail
+
+📊 REFERENCE SELECTION (Phase 2):
+  classifier-select-references   Select reference segments using PCA + centroid
+    [--force]                    Overwrite existing references
+    [--plot]                     Generate PCA visualization plots
+    [--plot-dir <path>]          Directory for plots (default: ~/plots)
+    [--min-segments <n>]         Minimum segments per class (default: 5)
+    [--pca-components <n>]       PCA components (default: 2)
+
+  Examples:
+    classifier-select-references --plot
+    classifier-select-references --plot --plot-dir ~/plots/exp041_cls001_refs
 
 📂 DATA MANAGEMENT:
   get-experiment-data-path            Show paths and file counts for experiment data
@@ -12161,6 +12192,484 @@ class MLDPShell:
 
         except Exception as e:
             print(f"\n[ERROR] Failed to show splits: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_select_references(self, args):
+        """
+        Select reference segments for each class using PCA + centroid analysis
+
+        Usage: classifier-select-references [OPTIONS]
+
+        For each class in experiment_NNN_segment_training_data, performs PCA
+        dimensionality reduction to 2D and selects the segment nearest to the
+        centroid as the reference segment. Uses active configuration to determine
+        which hyperparameter combinations to process.
+
+        Options:
+            --force                Overwrite existing reference selections
+            --plot                 Generate PCA visualization plots
+            --plot-dir <path>      Directory for plots (default: ~/plots)
+            --min-segments <n>     Minimum segments per class (default: 5)
+            --pca-components <n>   PCA components (default: 2)
+
+        Examples:
+            classifier-select-references
+            classifier-select-references --plot --plot-dir ~/plots/exp041_cls001_refs
+            classifier-select-references --force --min-segments 3
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        force = False
+        plot = False
+        plot_dir = None
+        min_segments = 5
+        pca_components = 2
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--plot':
+                plot = True
+                i += 1
+            elif args[i] == '--plot-dir' and i + 1 < len(args):
+                plot_dir = args[i + 1]
+                i += 2
+            elif args[i] == '--min-segments' and i + 1 < len(args):
+                min_segments = int(args[i + 1])
+                i += 2
+            elif args[i] == '--pca-components' and i + 1 < len(args):
+                pca_components = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        if plot_dir is None:
+            import os
+            plot_dir = os.path.expanduser('~/plots')
+
+        try:
+            import numpy as np
+            from sklearn.decomposition import PCA
+            from collections import defaultdict
+
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            # Get global_classifier_id from registry
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+
+            row = cursor.fetchone()
+            if not row:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+
+            global_classifier_id = row[0]
+
+            # Query active configuration
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+
+            config_row = cursor.fetchone()
+            if not config_row:
+                print(f"[ERROR] No active configuration for classifier {cls_id}")
+                print("Use 'classifier-config-activate --config-name <name>' to activate a configuration")
+                return
+
+            config_id, config_name = config_row
+
+            print(f"Using active configuration: {config_name}")
+
+            # Query hyperparameters from active configuration
+            cursor.execute("""
+                SELECT DISTINCT decimation_factor
+                FROM ml_classifier_config_decimation_factors
+                WHERE config_id = %s
+                ORDER BY decimation_factor
+            """, (config_id,))
+            decimation_factors = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT data_type_id
+                FROM ml_classifier_config_data_types
+                WHERE config_id = %s
+                ORDER BY data_type_id
+            """, (config_id,))
+            data_type_ids = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT amplitude_processing_method_id
+                FROM ml_classifier_config_amplitude_methods
+                WHERE config_id = %s
+            """, (config_id,))
+            amplitude_methods = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT experiment_feature_set_id
+                FROM ml_classifier_config_experiment_feature_sets
+                WHERE config_id = %s
+            """, (config_id,))
+            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT feature_set_feature_id
+                FROM ml_classifier_config_feature_set_features
+                WHERE config_id = %s
+            """, (config_id,))
+            feature_set_features = [row[0] for row in cursor.fetchall()]
+
+            print(f"\nProcessing {len(decimation_factors)} decimation factor(s)")
+            print(f"Processing {len(data_type_ids)} data type(s)")
+            print(f"Processing {len(amplitude_methods)} amplitude method(s)")
+            print(f"Processing {len(experiment_feature_sets)} experiment feature set(s)")
+            print(f"Processing {len(feature_set_features)} feature(s)")
+
+            # Check if reference_segments table exists
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (table_name,))
+
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"\n[INFO] Creating table {table_name}...")
+
+                create_sql = f"""
+                CREATE TABLE {table_name} (
+                    reference_id BIGSERIAL PRIMARY KEY,
+                    global_classifier_id INTEGER NOT NULL,
+                    classifier_id INTEGER NOT NULL DEFAULT {cls_id},
+                    segment_label_id INTEGER NOT NULL,
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    amplitude_processing_method_id INTEGER NOT NULL,
+                    experiment_feature_set_id BIGINT NOT NULL,
+                    feature_set_feature_id BIGINT NOT NULL,
+                    reference_segment_id INTEGER NOT NULL,
+                    centroid_x DOUBLE PRECISION,
+                    centroid_y DOUBLE PRECISION,
+                    distance_to_centroid DOUBLE PRECISION,
+                    total_segments_in_class INTEGER,
+                    pca_explained_variance_ratio_1 DOUBLE PRECISION,
+                    pca_explained_variance_ratio_2 DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE (segment_label_id, decimation_factor, data_type_id,
+                            amplitude_processing_method_id, experiment_feature_set_id,
+                            feature_set_feature_id),
+
+                    FOREIGN KEY (global_classifier_id)
+                        REFERENCES ml_experiment_classifiers(global_classifier_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (segment_label_id)
+                        REFERENCES segment_labels(label_id),
+                    FOREIGN KEY (reference_segment_id)
+                        REFERENCES data_segments(segment_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (data_type_id)
+                        REFERENCES ml_data_types_lut(data_type_id),
+                    FOREIGN KEY (amplitude_processing_method_id)
+                        REFERENCES ml_amplitude_normalization_lut(method_id),
+                    FOREIGN KEY (experiment_feature_set_id)
+                        REFERENCES ml_experiments_feature_sets(experiment_feature_set_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_global
+                    ON {table_name}(global_classifier_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_label
+                    ON {table_name}(segment_label_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_dec
+                    ON {table_name}(decimation_factor);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_dtype
+                    ON {table_name}(data_type_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_segment
+                    ON {table_name}(reference_segment_id);
+                """
+
+                cursor.execute(create_sql)
+                self.db_conn.commit()
+                print(f"[SUCCESS] Table {table_name} created")
+
+            # Check for existing references
+            if table_exists or force:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                existing_count = cursor.fetchone()[0]
+
+                if existing_count > 0 and not force:
+                    print(f"\n[WARNING] {existing_count} existing reference segments found")
+                    print("Use --force to overwrite existing references")
+                    return
+
+                if existing_count > 0 and force:
+                    print(f"[INFO] Deleting {existing_count} existing reference segments...")
+                    cursor.execute(f"DELETE FROM {table_name}")
+                    self.db_conn.commit()
+
+            # Query all segment labels
+            cursor.execute(f"""
+                SELECT DISTINCT segment_label_id
+                FROM experiment_{exp_id:03d}_segment_training_data
+                ORDER BY segment_label_id
+            """)
+            segment_labels = [row[0] for row in cursor.fetchall()]
+
+            print(f"\nFound {len(segment_labels)} unique classes (segment labels)")
+
+            total_references = 0
+            reference_selections = []
+            skipped_count = 0
+
+            # Process each hyperparameter combination
+            for decimation_factor in decimation_factors:
+                for data_type_id in data_type_ids:
+                    for amplitude_method_id in amplitude_methods:
+                        for exp_feature_set_id in experiment_feature_sets:
+                            for feature_set_feature_id in feature_set_features:
+
+                                print(f"\nProcessing: dec={decimation_factor}, dtype={data_type_id}, "
+                                      f"amp={amplitude_method_id}, efs={exp_feature_set_id}, "
+                                      f"fsf={feature_set_feature_id}")
+
+                                # For each class (segment label)
+                                for label_id in segment_labels:
+
+                                    # Query all segments in this class with this hyperparameter combo
+                                    cursor.execute(f"""
+                                        SELECT DISTINCT
+                                            f.segment_id,
+                                            f.feature_file_path
+                                        FROM experiment_{exp_id:03d}_feature_fileset f
+                                        INNER JOIN experiment_{exp_id:03d}_segment_training_data s
+                                            ON f.segment_id = s.segment_id
+                                        WHERE s.segment_label_id = %s
+                                          AND f.decimation_factor = %s
+                                          AND f.data_type_id = %s
+                                          AND f.amplitude_processing_method_id = %s
+                                          AND f.experiment_feature_set_id = %s
+                                          AND f.feature_set_feature_id = %s
+                                        ORDER BY f.segment_id
+                                    """, (label_id, decimation_factor, data_type_id,
+                                          amplitude_method_id, exp_feature_set_id,
+                                          feature_set_feature_id))
+
+                                    segments = cursor.fetchall()
+
+                                    if len(segments) < min_segments:
+                                        print(f"  [SKIP] Class {label_id}: Only {len(segments)} segments "
+                                              f"(min {min_segments} required)")
+                                        skipped_count += 1
+                                        continue
+
+                                    # Load feature vectors for all segments in this class
+                                    feature_vectors = []
+                                    segment_ids = []
+
+                                    for segment_id, feature_file_path in segments:
+                                        try:
+                                            features = np.load(feature_file_path)
+                                            feature_vectors.append(features)
+                                            segment_ids.append(segment_id)
+                                        except Exception as e:
+                                            print(f"  [WARNING] Failed to load {feature_file_path}: {e}")
+                                            continue
+
+                                    if len(feature_vectors) < min_segments:
+                                        print(f"  [SKIP] Class {label_id}: Only {len(feature_vectors)} "
+                                              f"valid feature files")
+                                        skipped_count += 1
+                                        continue
+
+                                    # Convert to numpy array
+                                    X = np.array(feature_vectors)  # Shape: (n_segments, n_features)
+
+                                    # Apply PCA to reduce to 2D
+                                    pca = PCA(n_components=pca_components)
+                                    X_pca = pca.fit_transform(X)  # Shape: (n_segments, 2)
+
+                                    # Calculate centroid in PCA space
+                                    centroid = np.mean(X_pca, axis=0)  # Shape: (2,)
+
+                                    # Find segment nearest to centroid (L2 distance)
+                                    distances_to_centroid = np.linalg.norm(X_pca - centroid, axis=1)
+                                    nearest_idx = np.argmin(distances_to_centroid)
+
+                                    reference_segment_id = segment_ids[nearest_idx]
+                                    distance_to_centroid = distances_to_centroid[nearest_idx]
+
+                                    # Store reference selection
+                                    ref_data = {
+                                        'global_classifier_id': global_classifier_id,
+                                        'classifier_id': cls_id,
+                                        'segment_label_id': label_id,
+                                        'decimation_factor': decimation_factor,
+                                        'data_type_id': data_type_id,
+                                        'amplitude_processing_method_id': amplitude_method_id,
+                                        'experiment_feature_set_id': exp_feature_set_id,
+                                        'feature_set_feature_id': feature_set_feature_id,
+                                        'reference_segment_id': reference_segment_id,
+                                        'centroid_x': float(centroid[0]),
+                                        'centroid_y': float(centroid[1]),
+                                        'distance_to_centroid': float(distance_to_centroid),
+                                        'total_segments_in_class': len(segment_ids),
+                                        'pca_explained_variance_ratio_1': float(pca.explained_variance_ratio_[0]),
+                                        'pca_explained_variance_ratio_2': float(pca.explained_variance_ratio_[1]),
+                                        'X_pca': X_pca,  # For plotting
+                                        'nearest_idx': nearest_idx
+                                    }
+                                    reference_selections.append(ref_data)
+
+                                    print(f"  [OK] Class {label_id}: Selected segment {reference_segment_id} "
+                                          f"({len(segment_ids)} total segments, "
+                                          f"dist={distance_to_centroid:.4f})")
+
+                                    total_references += 1
+
+            # Insert reference segments into database
+            if reference_selections:
+                print(f"\n[INFO] Inserting {len(reference_selections)} reference segments into database...")
+
+                for ref in reference_selections:
+                    cursor.execute(f"""
+                        INSERT INTO {table_name} (
+                            global_classifier_id, classifier_id, segment_label_id,
+                            decimation_factor, data_type_id, amplitude_processing_method_id,
+                            experiment_feature_set_id, feature_set_feature_id,
+                            reference_segment_id, centroid_x, centroid_y,
+                            distance_to_centroid, total_segments_in_class,
+                            pca_explained_variance_ratio_1, pca_explained_variance_ratio_2
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                    """, (
+                        ref['global_classifier_id'], ref['classifier_id'], ref['segment_label_id'],
+                        ref['decimation_factor'], ref['data_type_id'], ref['amplitude_processing_method_id'],
+                        ref['experiment_feature_set_id'], ref['feature_set_feature_id'],
+                        ref['reference_segment_id'], ref['centroid_x'], ref['centroid_y'],
+                        ref['distance_to_centroid'], ref['total_segments_in_class'],
+                        ref['pca_explained_variance_ratio_1'], ref['pca_explained_variance_ratio_2']
+                    ))
+
+                self.db_conn.commit()
+                print(f"[SUCCESS] Inserted {len(reference_selections)} reference segments")
+
+            # Generate PCA plots if requested
+            if plot and reference_selections:
+                import matplotlib
+                matplotlib.use('Agg')  # Non-interactive backend
+                import matplotlib.pyplot as plt
+                import os
+
+                os.makedirs(plot_dir, exist_ok=True)
+
+                print(f"\n[INFO] Generating PCA plots in {plot_dir}...")
+
+                # Group by hyperparameter combination
+                plots_by_config = defaultdict(list)
+
+                for ref in reference_selections:
+                    key = (ref['decimation_factor'], ref['data_type_id'],
+                           ref['amplitude_processing_method_id'],
+                           ref['experiment_feature_set_id'],
+                           ref['feature_set_feature_id'])
+                    plots_by_config[key].append(ref)
+
+                # Generate one plot per hyperparameter combination
+                plot_count = 0
+                for (dec, dtype, amp, efs, fsf), refs in plots_by_config.items():
+
+                    fig, ax = plt.subplots(figsize=(12, 10))
+
+                    # Plot each class
+                    for ref in refs:
+                        X_pca = ref['X_pca']
+                        label_id = ref['segment_label_id']
+                        centroid = np.array([ref['centroid_x'], ref['centroid_y']])
+                        nearest_idx = ref['nearest_idx']
+
+                        # Scatter all segments in class
+                        ax.scatter(X_pca[:, 0], X_pca[:, 1], alpha=0.5, label=f'Class {label_id}', s=30)
+
+                        # Mark centroid
+                        ax.scatter(centroid[0], centroid[1], marker='X', s=200,
+                                  edgecolors='black', linewidths=2, zorder=10)
+
+                        # Mark selected reference segment
+                        ax.scatter(X_pca[nearest_idx, 0], X_pca[nearest_idx, 1],
+                                  marker='*', s=300, edgecolors='red', linewidths=2, zorder=11)
+
+                    ax.set_xlabel(f'PC1 ({refs[0]["pca_explained_variance_ratio_1"]*100:.1f}% variance)')
+                    ax.set_ylabel(f'PC2 ({refs[0]["pca_explained_variance_ratio_2"]*100:.1f}% variance)')
+                    ax.set_title(f'PCA Reference Selection\n'
+                                f'Exp {exp_id}, Classifier {cls_id}\n'
+                                f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}, FSF={fsf}')
+                    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+                    ax.grid(True, alpha=0.3)
+
+                    plot_filename = (f'exp{exp_id:03d}_cls{cls_id:03d}_'
+                                    f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_fsf{fsf}_pca_references.png')
+                    plot_path = os.path.join(plot_dir, plot_filename)
+
+                    plt.tight_layout()
+                    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+                    plt.close()
+
+                    print(f"  Saved: {plot_filename}")
+                    plot_count += 1
+
+                print(f"[SUCCESS] Generated {plot_count} PCA plots")
+
+            # Display summary
+            print(f"\n{'='*60}")
+            print(f"Reference Selection Summary")
+            print(f"{'='*60}")
+            print(f"Experiment:              {exp_id}")
+            print(f"Classifier:              {cls_id}")
+            print(f"Configuration:           {config_name}")
+            print(f"Total references:        {total_references}")
+            print(f"Classes processed:       {len(segment_labels)}")
+            print(f"Skipped (insufficient):  {skipped_count}")
+            print(f"Table:                   {table_name}")
+            if plot:
+                print(f"Plots saved to:          {plot_dir}")
+            print(f"{'='*60}")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Missing required package: {e}")
+            print("Install with: pip install numpy scikit-learn matplotlib")
+        except Exception as e:
+            print(f"\n[ERROR] Failed to select references: {e}")
             import traceback
             traceback.print_exc()
 
