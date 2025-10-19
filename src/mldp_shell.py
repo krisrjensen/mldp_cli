@@ -3,17 +3,30 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_032000
-File version: 2.0.7.2
+Date Revised: 20251019_040000
+File version: 2.0.7.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
-Changes in this version (7.2):
+Changes in this version (7.3):
+1. CRITICAL ARCHITECTURE FIX - Feature concatenation within feature_sets
+   - v2.0.7.3: Rewrote loop structure to properly handle multi-feature feature_sets
+   - REMOVED inner loop over individual features
+   - Now queries ALL features belonging to a feature_set
+   - Loads each feature separately and concatenates in order
+   - Result vectors:
+     * efs=1 (current_only, feature 18): (8192,)
+     * efs=2 (voltage_only, feature 16): (8192,)
+     * efs=5 (all_electrical, features 16+18): (16384,) concatenated
+   - Fixed plot grouping to use experiment_feature_set_id only
+   - Removed obsolete feature_set_feature_id from plot titles/filenames
+
+Changes in previous version (7.2):
 1. CRITICAL FIX - Feature file amplitude column selection
    - v2.0.7.2: Fixed feature loading to select correct amplitude method column
    - Feature files have shape (n_samples, 2) with TWO amplitude methods:
@@ -12342,18 +12355,10 @@ class MLDPShell:
             """, (config_id,))
             experiment_feature_sets = [row[0] for row in cursor.fetchall()]
 
-            cursor.execute("""
-                SELECT DISTINCT feature_set_feature_id
-                FROM ml_classifier_config_feature_set_features
-                WHERE config_id = %s
-            """, (config_id,))
-            feature_set_features = [row[0] for row in cursor.fetchall()]
-
             print(f"\nProcessing {len(decimation_factors)} decimation factor(s)")
             print(f"Processing {len(data_type_ids)} data type(s)")
             print(f"Processing {len(amplitude_methods)} amplitude method(s)")
             print(f"Processing {len(experiment_feature_sets)} experiment feature set(s)")
-            print(f"Processing {len(feature_set_features)} feature(s)")
 
             # Check if reference_segments table exists
             table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
@@ -12466,111 +12471,144 @@ class MLDPShell:
                 for data_type_id in data_type_ids:
                     for amplitude_method_id in amplitude_methods:
                         for exp_feature_set_id in experiment_feature_sets:
-                            for feature_set_feature_id in feature_set_features:
 
-                                print(f"\nProcessing: dec={decimation_factor}, dtype={data_type_id}, "
-                                      f"amp={amplitude_method_id}, efs={exp_feature_set_id}, "
-                                      f"fsf={feature_set_feature_id}")
+                            # Query all features that belong to this experiment_feature_set
+                            cursor.execute("""
+                                SELECT f.feature_id, f.feature_name, fsf.feature_order
+                                FROM ml_experiments_feature_sets efs
+                                JOIN ml_feature_set_features fsf ON efs.feature_set_id = fsf.feature_set_id
+                                JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                                WHERE efs.experiment_feature_set_id = %s
+                                ORDER BY fsf.feature_order
+                            """, (exp_feature_set_id,))
+                            features_in_set = cursor.fetchall()  # [(feature_id, feature_name, order), ...]
 
-                                # For each class (segment label)
-                                for label_id in segment_labels:
+                            feature_ids = [row[0] for row in features_in_set]
+                            feature_names = [row[1] for row in features_in_set]
 
-                                    # Query all segments in this class with this hyperparameter combo
+                            print(f"\nProcessing: dec={decimation_factor}, dtype={data_type_id}, "
+                                  f"amp={amplitude_method_id}, efs={exp_feature_set_id}, "
+                                  f"features={feature_names}")
+
+                            # For each class (segment label)
+                            for label_id in segment_labels:
+
+                                # Query all segments in this class
+                                # We'll load feature files for each feature_id separately and concatenate
+                                cursor.execute(f"""
+                                    SELECT DISTINCT s.segment_id
+                                    FROM experiment_{exp_id:03d}_segment_training_data s
+                                    WHERE s.segment_label_id = %s
+                                    ORDER BY s.segment_id
+                                """, (label_id,))
+                                segment_ids_query = [row[0] for row in cursor.fetchall()]
+
+                                if len(segment_ids_query) < min_segments:
+                                    print(f"  [SKIP] Class {label_id}: Only {len(segment_ids_query)} segments "
+                                          f"(min {min_segments} required)")
+                                    skipped_count += 1
+                                    continue
+
+                                # Load and concatenate features for all segments
+                                segment_feature_vectors = {}  # {segment_id: [features]}
+
+                                # For each feature_id in this feature_set
+                                for feature_id in feature_ids:
+                                    # Query feature files for this specific feature
                                     cursor.execute(f"""
-                                        SELECT DISTINCT
-                                            f.segment_id,
-                                            f.feature_file_path
+                                        SELECT f.segment_id, f.feature_file_path
                                         FROM experiment_{exp_id:03d}_feature_fileset f
-                                        INNER JOIN experiment_{exp_id:03d}_segment_training_data s
-                                            ON f.segment_id = s.segment_id
-                                        WHERE s.segment_label_id = %s
+                                        WHERE f.segment_id = ANY(%s)
                                           AND f.decimation_factor = %s
                                           AND f.data_type_id = %s
                                           AND f.amplitude_processing_method_id = %s
                                           AND f.experiment_feature_set_id = %s
                                           AND f.feature_set_feature_id = %s
                                         ORDER BY f.segment_id
-                                    """, (label_id, decimation_factor, data_type_id,
-                                          amplitude_method_id, exp_feature_set_id,
-                                          feature_set_feature_id))
+                                    """, (segment_ids_query, decimation_factor, data_type_id,
+                                          amplitude_method_id, exp_feature_set_id, feature_id))
 
-                                    segments = cursor.fetchall()
+                                    feature_files = cursor.fetchall()
 
-                                    if len(segments) < min_segments:
-                                        print(f"  [SKIP] Class {label_id}: Only {len(segments)} segments "
-                                              f"(min {min_segments} required)")
-                                        skipped_count += 1
-                                        continue
-
-                                    # Load feature vectors for all segments in this class
-                                    feature_vectors = []
-                                    segment_ids = []
-
-                                    for segment_id, feature_file_path in segments:
+                                    # Load each feature file
+                                    for segment_id, feature_file_path in feature_files:
                                         try:
                                             features = np.load(feature_file_path)
-                                            # Feature files have shape (n_samples, 2) where:
-                                            # column 0 = amplitude_method_id 1 (minmax)
-                                            # column 1 = amplitude_method_id 2 (zscore)
-                                            # Select the correct column based on amplitude_method_id
+                                            # Select correct amplitude column
                                             column_idx = amplitude_method_id - 1
-                                            features_1d = features[:, column_idx]  # Shape: (n_samples,)
-                                            feature_vectors.append(features_1d)
-                                            segment_ids.append(segment_id)
+                                            features_1d = features[:, column_idx]  # Shape: (8192,)
+
+                                            # Initialize or append to this segment's feature list
+                                            if segment_id not in segment_feature_vectors:
+                                                segment_feature_vectors[segment_id] = []
+                                            segment_feature_vectors[segment_id].append(features_1d)
                                         except Exception as e:
                                             print(f"  [WARNING] Failed to load {feature_file_path}: {e}")
                                             continue
 
-                                    if len(feature_vectors) < min_segments:
-                                        print(f"  [SKIP] Class {label_id}: Only {len(feature_vectors)} "
-                                              f"valid feature files")
-                                        skipped_count += 1
-                                        continue
+                                # Now concatenate features for each segment
+                                feature_vectors = []
+                                segment_ids = []
 
-                                    # Convert to numpy array
-                                    X = np.array(feature_vectors)  # Shape: (n_segments, n_features)
+                                for segment_id in segment_ids_query:
+                                    if segment_id in segment_feature_vectors:
+                                        # Check if all features were loaded for this segment
+                                        if len(segment_feature_vectors[segment_id]) == len(feature_ids):
+                                            # Concatenate all features in order
+                                            concatenated = np.concatenate(segment_feature_vectors[segment_id])
+                                            feature_vectors.append(concatenated)
+                                            segment_ids.append(segment_id)
 
-                                    # Apply PCA to reduce to 2D
-                                    pca = PCA(n_components=pca_components)
-                                    X_pca = pca.fit_transform(X)  # Shape: (n_segments, 2)
+                                if len(feature_vectors) < min_segments:
+                                    print(f"  [SKIP] Class {label_id}: Only {len(feature_vectors)} "
+                                          f"valid complete feature vectors (min {min_segments} required)")
+                                    skipped_count += 1
+                                    continue
 
-                                    # Calculate centroid in PCA space
-                                    centroid = np.mean(X_pca, axis=0)  # Shape: (2,)
+                                # Convert to numpy array
+                                X = np.array(feature_vectors)  # Shape: (n_segments, concatenated_feature_length)
 
-                                    # Find segment nearest to centroid (L2 distance)
-                                    distances_to_centroid = np.linalg.norm(X_pca - centroid, axis=1)
-                                    nearest_idx = np.argmin(distances_to_centroid)
+                                # Apply PCA to reduce to 2D
+                                pca = PCA(n_components=pca_components)
+                                X_pca = pca.fit_transform(X)  # Shape: (n_segments, 2)
 
-                                    reference_segment_id = segment_ids[nearest_idx]
-                                    distance_to_centroid = distances_to_centroid[nearest_idx]
+                                # Calculate centroid in PCA space
+                                centroid = np.mean(X_pca, axis=0)  # Shape: (2,)
 
-                                    # Store reference selection
-                                    ref_data = {
-                                        'global_classifier_id': global_classifier_id,
-                                        'classifier_id': cls_id,
-                                        'segment_label_id': label_id,
-                                        'decimation_factor': decimation_factor,
-                                        'data_type_id': data_type_id,
-                                        'amplitude_processing_method_id': amplitude_method_id,
-                                        'experiment_feature_set_id': exp_feature_set_id,
-                                        'feature_set_feature_id': feature_set_feature_id,
-                                        'reference_segment_id': reference_segment_id,
-                                        'centroid_x': float(centroid[0]),
-                                        'centroid_y': float(centroid[1]),
-                                        'distance_to_centroid': float(distance_to_centroid),
-                                        'total_segments_in_class': len(segment_ids),
-                                        'pca_explained_variance_ratio_1': float(pca.explained_variance_ratio_[0]),
-                                        'pca_explained_variance_ratio_2': float(pca.explained_variance_ratio_[1]),
-                                        'X_pca': X_pca,  # For plotting
-                                        'nearest_idx': nearest_idx
-                                    }
-                                    reference_selections.append(ref_data)
+                                # Find segment nearest to centroid (L2 distance)
+                                distances_to_centroid = np.linalg.norm(X_pca - centroid, axis=1)
+                                nearest_idx = np.argmin(distances_to_centroid)
 
-                                    print(f"  [OK] Class {label_id}: Selected segment {reference_segment_id} "
-                                          f"({len(segment_ids)} total segments, "
-                                          f"dist={distance_to_centroid:.4f})")
+                                reference_segment_id = segment_ids[nearest_idx]
+                                distance_to_centroid = distances_to_centroid[nearest_idx]
 
-                                    total_references += 1
+                                # Store reference selection
+                                ref_data = {
+                                    'global_classifier_id': global_classifier_id,
+                                    'classifier_id': cls_id,
+                                    'segment_label_id': label_id,
+                                    'decimation_factor': decimation_factor,
+                                    'data_type_id': data_type_id,
+                                    'amplitude_processing_method_id': amplitude_method_id,
+                                    'experiment_feature_set_id': exp_feature_set_id,
+                                    'feature_set_feature_id': feature_ids[0] if len(feature_ids) == 1 else None,
+                                    'reference_segment_id': reference_segment_id,
+                                    'centroid_x': float(centroid[0]),
+                                    'centroid_y': float(centroid[1]),
+                                    'distance_to_centroid': float(distance_to_centroid),
+                                    'total_segments_in_class': len(segment_ids),
+                                    'pca_explained_variance_ratio_1': float(pca.explained_variance_ratio_[0]),
+                                    'pca_explained_variance_ratio_2': float(pca.explained_variance_ratio_[1]),
+                                    'X_pca': X_pca,  # For plotting
+                                    'nearest_idx': nearest_idx
+                                }
+                                reference_selections.append(ref_data)
+
+                                print(f"  [OK] Class {label_id}: Selected segment {reference_segment_id} "
+                                      f"({len(segment_ids)} total segments, "
+                                      f"dist={distance_to_centroid:.4f})")
+
+                                total_references += 1
 
             # Insert reference segments into database
             if reference_selections:
@@ -12617,13 +12655,12 @@ class MLDPShell:
                 for ref in reference_selections:
                     key = (ref['decimation_factor'], ref['data_type_id'],
                            ref['amplitude_processing_method_id'],
-                           ref['experiment_feature_set_id'],
-                           ref['feature_set_feature_id'])
+                           ref['experiment_feature_set_id'])
                     plots_by_config[key].append(ref)
 
                 # Generate one plot per hyperparameter combination
                 plot_count = 0
-                for (dec, dtype, amp, efs, fsf), refs in plots_by_config.items():
+                for (dec, dtype, amp, efs), refs in plots_by_config.items():
 
                     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -12649,12 +12686,12 @@ class MLDPShell:
                     ax.set_ylabel(f'PC2 ({refs[0]["pca_explained_variance_ratio_2"]*100:.1f}% variance)')
                     ax.set_title(f'PCA Reference Selection\n'
                                 f'Exp {exp_id}, Classifier {cls_id}\n'
-                                f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}, FSF={fsf}')
+                                f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}')
                     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
                     ax.grid(True, alpha=0.3)
 
                     plot_filename = (f'exp{exp_id:03d}_cls{cls_id:03d}_'
-                                    f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_fsf{fsf}_pca_references.png')
+                                    f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_pca_references.png')
                     plot_path = os.path.join(plot_dir, plot_filename)
 
                     plt.tight_layout()
