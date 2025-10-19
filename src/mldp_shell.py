@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_071500
-File version: 2.0.8.1
+Date Revised: 20251019_073000
+File version: 2.0.8.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,16 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 8)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (8.1):
+Changes in this version (8.2):
+1. ENHANCEMENT - Use sklearn pairwise distances from ml_distance_functions_lut
+   - v2.0.8.2: Replaced manual distance calculations with sklearn.metrics.pairwise.pairwise_distances
+   - Queries distance functions from ml_distance_functions_lut (builtin, sklearn.metrics.pairwise)
+   - Uses configured pairwise_metric_name (manhattan, euclidean, cosine, correlation)
+   - Converts NaN values to 0 (handles zero-variance/zero-length vectors)
+   - Removed manual L1/L2/Cosine/Pearson functions
+   - Removed NaN check (now handled in compute_distance)
+
+Changes in previous version (8.1):
 1. BUGFIX - classifier-build-features junction table name
    - v2.0.8.1: Fixed query to use ml_classifier_config_experiment_feature_sets
    - Was using incorrect table name ml_classifier_config_feature_sets
@@ -317,7 +326,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.8.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.8.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -13580,7 +13589,7 @@ class MLDPShell:
 
         try:
             import numpy as np
-            from scipy.spatial.distance import cosine, correlation
+            from sklearn.metrics.pairwise import pairwise_distances
             import time
 
             cursor = self.db_conn.cursor()
@@ -13766,6 +13775,27 @@ class MLDPShell:
             """, (config_id,))
             experiment_feature_sets = [row[0] for row in cursor.fetchall()]
 
+            # Query distance functions from configuration
+            cursor.execute("""
+                SELECT DISTINCT df.distance_function_id, df.function_name,
+                       df.pairwise_metric_name, df.display_name
+                FROM ml_classifier_config_distance_functions cdf
+                JOIN ml_distance_functions_lut df ON cdf.distance_function_id = df.distance_function_id
+                WHERE cdf.config_id = %s
+                  AND df.function_type = 'builtin'
+                  AND df.library_name = 'sklearn.metrics.pairwise'
+                ORDER BY df.distance_function_id
+            """, (config_id,))
+            distance_functions = cursor.fetchall()
+
+            if len(distance_functions) != 4:
+                print(f"[ERROR] Expected 4 distance functions (L1, L2, Cosine, Pearson), found {len(distance_functions)}")
+                return
+
+            # Extract metric names for pairwise_distances
+            metric_names = [df[2] for df in distance_functions]  # pairwise_metric_name
+            print(f"[INFO] Distance metrics: {[df[3] for df in distance_functions]}")  # display_name
+
             # Apply filters if specified
             if filter_dec is not None:
                 decimation_factors = [d for d in decimation_factors if d == filter_dec]
@@ -13805,28 +13835,35 @@ class MLDPShell:
 
             print(f"\n[INFO] Total segments to process: {total_segments}")
 
-            # Distance metric functions
-            def compute_l1_distance(x, y):
-                """Manhattan distance"""
-                return np.sum(np.abs(x - y))
+            # Distance computation function using sklearn pairwise_distances
+            def compute_distance(x, y, metric):
+                """
+                Compute pairwise distance using sklearn.metrics.pairwise.pairwise_distances
 
-            def compute_l2_distance(x, y):
-                """Euclidean distance"""
-                return np.sqrt(np.sum((x - y) ** 2))
+                Args:
+                    x: 1D numpy array (segment features)
+                    y: 1D numpy array (reference features)
+                    metric: metric name for pairwise_distances (e.g., 'manhattan', 'euclidean', 'cosine', 'correlation')
 
-            def compute_cosine_distance(x, y):
-                """Cosine distance"""
+                Returns:
+                    float: distance value (NaN converted to 0)
+                """
                 try:
-                    return cosine(x, y)
-                except:
-                    return np.nan
+                    # Reshape to 2D for pairwise_distances (expects shape (n_samples, n_features))
+                    X = x.reshape(1, -1)
+                    Y = y.reshape(1, -1)
 
-            def compute_pearson_distance(x, y):
-                """Pearson correlation distance"""
-                try:
-                    return correlation(x, y)
-                except:
-                    return np.nan
+                    # Compute pairwise distance
+                    dist = pairwise_distances(X, Y, metric=metric)[0, 0]
+
+                    # Convert NaN to 0 (handles zero-variance vectors)
+                    if np.isnan(dist):
+                        return 0.0
+
+                    return dist
+                except Exception as e:
+                    # Any error returns 0
+                    return 0.0
 
             # Process each hyperparameter combination
             total_vectors_created = 0
@@ -13982,16 +14019,12 @@ class MLDPShell:
 
                                         ref_features = reference_features[label_id]
 
-                                        # Compute 4 distances
+                                        # Compute distances using configured metrics
                                         base_idx = class_idx * 4
-                                        feature_vector[base_idx + 0] = compute_l1_distance(segment_features, ref_features)
-                                        feature_vector[base_idx + 1] = compute_l2_distance(segment_features, ref_features)
-                                        feature_vector[base_idx + 2] = compute_cosine_distance(segment_features, ref_features)
-                                        feature_vector[base_idx + 3] = compute_pearson_distance(segment_features, ref_features)
-
-                                    # Check for NaN values
-                                    if np.any(np.isnan(feature_vector)):
-                                        raise ValueError(f"NaN values in feature vector")
+                                        for metric_idx, metric_name in enumerate(metric_names):
+                                            feature_vector[base_idx + metric_idx] = compute_distance(
+                                                segment_features, ref_features, metric_name
+                                            )
 
                                     # Construct file path
                                     base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_features"
