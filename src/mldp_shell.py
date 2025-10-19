@@ -3,18 +3,20 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_150000
-File version: 2.0.9.13
+Date Revised: 20251019_160000
+File version: 2.0.9.14
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 13)
+- CHANGE: Tracks changes within current commit cycle (currently 14)
 
-Changes in this version (9.13):
-1. PHASE 0b NEW COMMAND - Added hyperparameter removal command
+Changes in this version (9.14):
+1. PHASE 4 ENHANCEMENT - Added amplitude method filtering to SVM training
+   - v2.0.9.14: Added --amplitude-method option to classifier-train-svm command
+                Allows training only specific amplitude methods (e.g., --amplitude-method 2)
    - v2.0.9.13: Added classifier-config-remove-hyperparameters command (~230 lines)
                 Allows removing amplitude methods, decimation factors, data types,
                 distance functions, and experiment feature sets from existing configs
@@ -362,7 +364,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.13"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.14"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -563,8 +565,8 @@ class MLDPCompleter(Completer):
 
             # Classifier SVM Training (Phase 4)
             'classifier-train-svm-init': ['--help'],
-            'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--feature-set',
-                                    '--kernel', '--C', '--gamma', '--force', '--help'],
+            'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--amplitude-method',
+                                    '--feature-set', '--kernel', '--C', '--gamma', '--force', '--help'],
             'classifier-clean-svm-results': ['--amplitude-method', '--decimation-factor', '--data-type',
                                             '--feature-set', '--force', '--help'],
             'classifier-clean-features': ['--amplitude-method', '--decimation-factor', '--data-type',
@@ -2772,6 +2774,7 @@ class MLDPShell:
     [--workers <n>]              Parallel workers (default: 7, max: 28)
     [--decimation-factor <n>]    Train only for specific decimation factor
     [--data-type <id>]           Train only for specific data type
+    [--amplitude-method <id>]    Train only for specific amplitude method
     [--feature-set <id>]         Train only for specific feature set
     [--kernel <type>]            SVM kernel: linear, rbf, poly (default: all)
     [--C <value>]                SVM C parameter (default: grid search)
@@ -15477,6 +15480,7 @@ class MLDPShell:
             --workers <n>             Parallel workers (default: 7, max: 28)
             --decimation-factor <n>   Train only this decimation factor
             --data-type <id>          Train only this data type
+            --amplitude-method <id>   Train only this amplitude method
             --feature-set <id>        Train only this feature set
             --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
             --C <value>               SVM C parameter (default: grid search)
@@ -15487,6 +15491,7 @@ class MLDPShell:
             classifier-train-svm
             classifier-train-svm --workers 21
             classifier-train-svm --decimation-factor 0 --data-type 4
+            classifier-train-svm --amplitude-method 2 --workers 20
             classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
         """
         # Check session context
@@ -15502,6 +15507,7 @@ class MLDPShell:
         num_workers = 7
         filter_dec = None
         filter_dtype = None
+        filter_amp = None
         filter_efs = None
         svm_kernel = None
         svm_C = None
@@ -15533,6 +15539,13 @@ class MLDPShell:
                     i += 2
                 else:
                     print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires a value")
                     return
             elif args[i] == '--feature-set':
                 if i + 1 < len(args):
@@ -15712,10 +15725,12 @@ class MLDPShell:
                 decimation_factors = [filter_dec] if filter_dec in decimation_factors else []
             if filter_dtype is not None:
                 data_type_ids = [filter_dtype] if filter_dtype in data_type_ids else []
+            if filter_amp is not None:
+                amplitude_methods = [filter_amp] if filter_amp in amplitude_methods else []
             if filter_efs is not None:
                 experiment_feature_sets = [filter_efs] if filter_efs in experiment_feature_sets else []
 
-            if not decimation_factors or not data_type_ids or not experiment_feature_sets:
+            if not decimation_factors or not data_type_ids or not amplitude_methods or not experiment_feature_sets:
                 print("[ERROR] No matching hyperparameter combinations found with specified filters")
                 return
 
