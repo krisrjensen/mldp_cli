@@ -3,17 +3,23 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_050000
-File version: 2.0.7.4
+Date Revised: 20251019_053000
+File version: 2.0.7.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
-Changes in this version (7.4):
+Changes in this version (7.5):
+1. REGISTRATION FIX - Registered classifier-drop-references-table command
+   - v2.0.7.5: Added command to self.commands dictionary
+   - Added tab completion support with --confirm and --help flags
+   - Command was implemented but not registered (lazy mistake!)
+
+Changes in previous version (7.4):
 1. SCHEMA FIX - Updated reference_segments table schema
    - v2.0.7.4: Made feature_set_feature_id NULLABLE (was NOT NULL)
    - Removed feature_set_feature_id from UNIQUE constraint
@@ -255,7 +261,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -437,6 +443,7 @@ class MLDPCompleter(Completer):
             'classifier-show-splits': ['--decimation-factor', '--data-type', '--detail', '--help'],
 
             # Classifier Reference Selection (Phase 2)
+            'classifier-drop-references-table': ['--confirm', '--help'],
             'classifier-select-references': ['--force', '--plot', '--plot-dir', '--min-segments',
                                             '--pca-components', '--help'],
 
@@ -644,6 +651,7 @@ class MLDPShell:
             'classifier-assign-splits': self.cmd_classifier_assign_splits,
             'classifier-show-splits': self.cmd_classifier_show_splits,
             # Classifier reference selection commands (Phase 2)
+            'classifier-drop-references-table': self.cmd_classifier_drop_references_table,
             'classifier-select-references': self.cmd_classifier_select_references,
         }
     
