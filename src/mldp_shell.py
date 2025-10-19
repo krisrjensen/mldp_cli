@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.4
+File version: 2.0.9.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
-Changes in this version (9.4):
-1. PHASE 4 START - SVM Training & Evaluation (Step 3)
+Changes in this version (9.5):
+1. PHASE 4 START - SVM Training & Evaluation (Step 4)
+   - v2.0.9.5: Implemented classifier-train-svm main training loop (~370 lines)
    - v2.0.9.4: Implemented SVM worker function and helpers (~470 lines)
    - v2.0.9.3: Implemented SVM training helper functions (~427 lines)
    - v2.0.9.2: Fixed NameError for 'force' variable in classifier-train-svm-init
@@ -347,7 +348,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -542,6 +543,8 @@ class MLDPCompleter(Completer):
 
             # Classifier SVM Training (Phase 4)
             'classifier-train-svm-init': ['--help'],
+            'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--feature-set',
+                                    '--kernel', '--C', '--gamma', '--force', '--help'],
 
             # Utilities
             'verify': [],
@@ -1228,6 +1231,7 @@ class MLDPShell:
             'classifier-build-features': self.cmd_classifier_build_features,
             # Classifier SVM training commands (Phase 4)
             'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
+            'classifier-train-svm': self.cmd_classifier_train_svm,
         }
     
     def get_prompt(self):
@@ -14884,6 +14888,378 @@ class MLDPShell:
             print(f"\n[ERROR] Failed to initialize SVM training: {e}")
             import traceback
             traceback.print_exc()
+
+    def cmd_classifier_train_svm(self, args):
+        """
+        Train SVM classifier using distance-based feature vectors
+
+        Usage: classifier-train-svm [OPTIONS]
+
+        Trains SVM on feature vectors from Phase 3 using data splits from Phase 1.
+        Evaluates on train/test/verification splits with both 13-class and binary
+        arc detection metrics.
+
+        Options:
+            --workers <n>             Parallel workers (default: 7, max: 28)
+            --decimation-factor <n>   Train only this decimation factor
+            --data-type <id>          Train only this data type
+            --feature-set <id>        Train only this feature set
+            --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
+            --C <value>               SVM C parameter (default: grid search)
+            --gamma <value>           SVM gamma parameter (default: grid search)
+            --force                   Overwrite existing results
+
+        Examples:
+            classifier-train-svm
+            classifier-train-svm --workers 21
+            classifier-train-svm --decimation-factor 0 --data-type 4
+            classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        num_workers = 7
+        filter_dec = None
+        filter_dtype = None
+        filter_efs = None
+        svm_kernel = None
+        svm_C = None
+        svm_gamma = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--workers':
+                if i + 1 < len(args):
+                    num_workers = int(args[i + 1])
+                    if num_workers < 1 or num_workers > 28:
+                        print("[ERROR] --workers must be between 1 and 28")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --workers requires a value")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--kernel':
+                if i + 1 < len(args):
+                    svm_kernel = args[i + 1]
+                    if svm_kernel not in ['linear', 'rbf', 'poly']:
+                        print("[ERROR] --kernel must be linear, rbf, or poly")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --kernel requires a value")
+                    return
+            elif args[i] == '--C':
+                if i + 1 < len(args):
+                    svm_C = float(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --C requires a value")
+                    return
+            elif args[i] == '--gamma':
+                if i + 1 < len(args):
+                    svm_gamma = args[i + 1]
+                    # Can be 'scale', 'auto', or numeric
+                    if svm_gamma not in ['scale', 'auto']:
+                        try:
+                            svm_gamma = float(svm_gamma)
+                        except ValueError:
+                            print("[ERROR] --gamma must be 'scale', 'auto', or numeric")
+                            return
+                    i += 2
+                else:
+                    print("[ERROR] --gamma requires a value")
+                    return
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            print(f"\n[INFO] Training SVM for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Using {num_workers} parallel workers")
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id, classifier_name
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+
+            global_classifier_id, classifier_name = result
+            print(f"[INFO] Using classifier: {classifier_name}")
+
+            # Check if active configuration exists
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] No active configuration found for classifier {cls_id}")
+                print("Use 'classifier-config-activate <config_id>' to activate a configuration")
+                return
+
+            config_id, config_name = result
+            print(f"[INFO] Using configuration: {config_name}")
+
+            # Check if results tables exist
+            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (results_table_name,))
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"[ERROR] Results table {results_table_name} does not exist")
+                print("Run 'classifier-train-svm-init' first to create tables")
+                return
+
+            # Check for existing results
+            if not force:
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"\n[WARNING] {existing_count} existing results found")
+                    print("Use --force to overwrite and retrain all models")
+                    return
+
+            if force:
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"[INFO] Deleting {existing_count} existing results...")
+                    cursor.execute(f"DELETE FROM {results_table_name}")
+                    self.db_conn.commit()
+
+            # Check if data splits exist
+            splits_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits"
+            cursor.execute(f"SELECT COUNT(*) FROM {splits_table_name}")
+            split_count = cursor.fetchone()[0]
+            if split_count == 0:
+                print(f"[ERROR] No data splits found in {splits_table_name}")
+                print("Run 'classifier-assign-splits' first")
+                return
+
+            print(f"[INFO] Found {split_count} split assignments")
+
+            # Check if feature vectors exist
+            features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {features_table_name}
+                WHERE extraction_status_id = 2
+            """)
+            feature_count = cursor.fetchone()[0]
+            if feature_count == 0:
+                print(f"[ERROR] No feature vectors found in {features_table_name}")
+                print("Run 'classifier-build-features' first")
+                return
+
+            print(f"[INFO] Found {feature_count} feature vectors")
+
+            # Query hyperparameter combinations from active configuration
+            cursor.execute("""
+                SELECT DISTINCT decimation_factor
+                FROM ml_classifier_config_hyperparameters
+                WHERE config_id = %s
+                ORDER BY decimation_factor
+            """, (config_id,))
+            decimation_factors = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT data_type_id
+                FROM ml_classifier_config_hyperparameters
+                WHERE config_id = %s
+                ORDER BY data_type_id
+            """, (config_id,))
+            data_type_ids = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT amplitude_processing_method_id
+                FROM ml_classifier_config_hyperparameters
+                WHERE config_id = %s
+                ORDER BY amplitude_processing_method_id
+            """, (config_id,))
+            amplitude_methods = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT experiment_feature_set_id
+                FROM ml_classifier_config_hyperparameters
+                WHERE config_id = %s
+                ORDER BY experiment_feature_set_id
+            """, (config_id,))
+            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+
+            # Apply filters if specified
+            if filter_dec is not None:
+                decimation_factors = [filter_dec] if filter_dec in decimation_factors else []
+            if filter_dtype is not None:
+                data_type_ids = [filter_dtype] if filter_dtype in data_type_ids else []
+            if filter_efs is not None:
+                experiment_feature_sets = [filter_efs] if filter_efs in experiment_feature_sets else []
+
+            if not decimation_factors or not data_type_ids or not experiment_feature_sets:
+                print("[ERROR] No matching hyperparameter combinations found with specified filters")
+                return
+
+            print(f"[INFO] Hyperparameters: {len(decimation_factors)} decimations, {len(data_type_ids)} data types, "
+                  f"{len(amplitude_methods)} amp methods, {len(experiment_feature_sets)} feature sets")
+
+            # Build SVM parameter grid
+            if svm_kernel is None:
+                kernels = ['linear', 'rbf', 'poly']
+            else:
+                kernels = [svm_kernel]
+
+            if svm_C is None:
+                C_values = [0.1, 1.0, 10.0, 100.0]
+            else:
+                C_values = [svm_C]
+
+            if svm_gamma is None:
+                gamma_values = ['scale', 'auto', 0.001, 0.01, 0.1]
+            else:
+                gamma_values = [svm_gamma]
+
+            # Build grid
+            svm_grid = []
+            for k in kernels:
+                for c in C_values:
+                    if k in ['rbf', 'poly']:
+                        for g in gamma_values:
+                            svm_grid.append({'kernel': k, 'C': c, 'gamma': g})
+                    else:
+                        svm_grid.append({'kernel': k, 'C': c, 'gamma': None})
+
+            print(f"[INFO] SVM parameter grid: {len(svm_grid)} combinations")
+
+            # Query category mapping for binary classification
+            cursor.execute("""
+                SELECT label_id, category
+                FROM segment_labels
+                WHERE active = TRUE
+                ORDER BY label_id
+            """)
+            label_categories = {row[0]: row[1] for row in cursor.fetchall()}
+            print(f"[INFO] Loaded {len(label_categories)} label categories for binary arc detection")
+
+            # Build work queue
+            work_queue = []
+            for dec in decimation_factors:
+                for dtype in data_type_ids:
+                    for amp in amplitude_methods:
+                        for efs in experiment_feature_sets:
+                            for svm_params in svm_grid:
+                                work_queue.append((dec, dtype, amp, efs, svm_params))
+
+            total_tasks = len(work_queue)
+            print(f"\n[INFO] Total SVM training tasks: {total_tasks}")
+            print(f"[INFO] Estimated time: {total_tasks * 1.5 / num_workers / 60:.1f} - {total_tasks * 3.0 / num_workers / 60:.1f} minutes")
+
+            # Prepare database config for workers
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            # Add db_config, label_categories, exp_id, cls_id, global_classifier_id to work items
+            work_items = [
+                (dec, dtype, amp, efs, svm_params, db_config, label_categories, exp_id, cls_id, global_classifier_id)
+                for dec, dtype, amp, efs, svm_params in work_queue
+            ]
+
+            # Train SVMs in parallel
+            print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
+            print("[INFO] This may take 30-90 minutes depending on dataset size and workers...\n")
+
+            from multiprocessing import Pool
+            import time
+
+            start_time = time.time()
+            results = []
+            failed_count = 0
+
+            with Pool(processes=num_workers) as pool:
+                for i, result in enumerate(pool.imap_unordered(train_svm_worker, work_items), 1):
+                    if result['success']:
+                        results.append(result)
+                    else:
+                        failed_count += 1
+                        dec, dtype, amp, efs = result['config']
+                        print(f"[ERROR] Task {i}/{total_tasks} FAILED: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
+                        print(f"        Error: {result['error']}")
+
+                    # Progress update every 10 tasks or on completion
+                    if i % 10 == 0 or i == total_tasks:
+                        elapsed = time.time() - start_time
+                        rate = i / elapsed if elapsed > 0 else 0
+                        remaining = (total_tasks - i) / rate if rate > 0 else 0
+                        print(f"[PROGRESS] {i}/{total_tasks} ({i/total_tasks*100:.1f}%) | "
+                              f"Success: {len(results)} | Failed: {failed_count} | "
+                              f"Elapsed: {elapsed/60:.1f}m | Remaining: ~{remaining/60:.1f}m")
+
+            total_time = time.time() - start_time
+
+            print(f"\n[SUCCESS] Training complete!")
+            print(f"[INFO] Total time: {total_time/60:.1f} minutes")
+            print(f"[INFO] Successful: {len(results)}/{total_tasks}")
+            print(f"[INFO] Failed: {failed_count}/{total_tasks}")
+
+            # Store results for database insertion (Step 5)
+            self._svm_training_results = results
+            print(f"\n[INFO] Results ready for database insertion")
+            print(f"[INFO] Next step: Implement database insertion (Step 5)")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to train SVM: {e}")
+            import traceback
+            traceback.print_exc()
+
 
     # ========== SVM Training Helper Functions (Phase 4) ==========
 
