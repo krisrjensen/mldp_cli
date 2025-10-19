@@ -4,17 +4,19 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_140000
-File version: 2.0.9.11
+File version: 2.0.9.12
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 11)
+- CHANGE: Tracks changes within current commit cycle (currently 12)
 
-Changes in this version (9.11):
-1. PHASE 0b NEW COMMAND - Added hyperparameter addition command
+Changes in this version (9.12):
+1. PHASE 0b BUGFIX - Fixed junction table INSERT statements
+   - v2.0.9.12: Fixed classifier-config-add-hyperparameters to include global_classifier_id
+                and experiment_id in all 5 junction table INSERT statements
    - v2.0.9.11: Added classifier-config-add-hyperparameters command (~250 lines)
                 Allows adding amplitude methods, decimation factors, data types,
                 distance functions, and experiment feature sets to existing configs
@@ -357,7 +359,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.11"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.12"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -11340,9 +11342,9 @@ class MLDPShell:
 
                     cursor.execute("""
                         INSERT INTO ml_classifier_config_amplitude_methods
-                            (config_id, amplitude_processing_method_id)
-                        VALUES (%s, %s)
-                    """, (config_id, amp_id))
+                            (global_classifier_id, experiment_id, config_id, amplitude_processing_method_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, amp_id))
                     added_count += 1
                     print(f"[SUCCESS] Added amplitude method {amp_id} to configuration")
 
@@ -11361,9 +11363,9 @@ class MLDPShell:
 
                     cursor.execute("""
                         INSERT INTO ml_classifier_config_decimation_factors
-                            (config_id, decimation_factor)
-                        VALUES (%s, %s)
-                    """, (config_id, dec))
+                            (global_classifier_id, experiment_id, config_id, decimation_factor)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, dec))
                     added_count += 1
                     print(f"[SUCCESS] Added decimation factor {dec} to configuration")
 
@@ -11397,9 +11399,9 @@ class MLDPShell:
 
                     cursor.execute("""
                         INSERT INTO ml_classifier_config_data_types
-                            (config_id, data_type_id)
-                        VALUES (%s, %s)
-                    """, (config_id, dt_id))
+                            (global_classifier_id, experiment_id, config_id, data_type_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, dt_id))
                     added_count += 1
                     print(f"[SUCCESS] Added data type {dt_id} to configuration")
 
@@ -11429,9 +11431,9 @@ class MLDPShell:
 
                     cursor.execute("""
                         INSERT INTO ml_classifier_config_distance_functions
-                            (config_id, distance_function_id)
-                        VALUES (%s, %s)
-                    """, (config_id, df_id))
+                            (global_classifier_id, experiment_id, config_id, distance_function_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, df_id))
                     added_count += 1
                     print(f"[SUCCESS] Added distance function '{df_name}' to configuration")
 
@@ -11450,9 +11452,9 @@ class MLDPShell:
 
                     cursor.execute("""
                         INSERT INTO ml_classifier_config_experiment_feature_sets
-                            (config_id, experiment_feature_set_id)
-                        VALUES (%s, %s)
-                    """, (config_id, efs_id))
+                            (global_classifier_id, experiment_id, config_id, experiment_feature_set_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (global_classifier_id, self.current_experiment, config_id, efs_id))
                     added_count += 1
                     print(f"[SUCCESS] Added experiment feature set {efs_id} to configuration")
 
