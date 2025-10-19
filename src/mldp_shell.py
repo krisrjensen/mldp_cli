@@ -3,18 +3,21 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_130000
-File version: 2.0.9.10
+Date Revised: 20251019_140000
+File version: 2.0.9.11
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 10)
+- CHANGE: Tracks changes within current commit cycle (currently 11)
 
-Changes in this version (9.10):
-1. PHASE 4 NEW COMMANDS - Added data cleaning commands for Phase 4
+Changes in this version (9.11):
+1. PHASE 0b NEW COMMAND - Added hyperparameter addition command
+   - v2.0.9.11: Added classifier-config-add-hyperparameters command (~250 lines)
+                Allows adding amplitude methods, decimation factors, data types,
+                distance functions, and experiment feature sets to existing configs
    - v2.0.9.10: Added classifier-clean-svm-results and classifier-clean-features commands
                 (~350 lines total for both commands with full filtering support)
    - v2.0.9.9: Added missing per_class_table_name definition in classifier-train-svm
@@ -354,7 +357,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.8"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.11"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -518,6 +521,9 @@ class MLDPCompleter(Completer):
             'classifier-config-show': ['--config-name', '--config-id', '--active', '--help'],
             'classifier-config-delete': ['--config-name', '--config-id', '--confirm', '--help'],
             'classifier-config-add-feature-sets': ['--config-id', '--feature-sets', '--experiment-id', '--help'],
+            'classifier-config-add-hyperparameters': ['--config', '--amplitude-methods', '--decimation-factors',
+                                                     '--data-types', '--distance-functions',
+                                                     '--experiment-feature-sets', '--help'],
             'classifier-create-global-config-table': ['--force', '--help'],
             'classifier-add-config-foreign-keys': ['--help'],
             'classifier-migrate-configs-to-global': ['--experiment-id', '--classifier-id', '--help'],
@@ -1222,6 +1228,7 @@ class MLDPShell:
             # Classifier configuration commands (Phase 0b)
             'classifier-config-create': self.cmd_classifier_config_create,
             'classifier-config-add-feature-sets': self.cmd_classifier_config_add_feature_sets,
+            'classifier-config-add-hyperparameters': self.cmd_classifier_config_add_hyperparameters,
             'classifier-config-delete': self.cmd_classifier_config_delete,
             'classifier-config-list': self.cmd_classifier_config_list,
             'classifier-config-activate': self.cmd_classifier_config_activate,
@@ -2651,6 +2658,14 @@ class MLDPShell:
     --config-id <id>                  Configuration ID
     --feature-sets <list>             Comma-separated feature_set_ids from ml_feature_sets_lut
 
+  classifier-config-add-hyperparameters  Add hyperparameters to existing config
+    --config <name|id>                Config name or ID (required)
+    --amplitude-methods <list>        Comma-separated amplitude method IDs
+    --decimation-factors <list>       Comma-separated decimation factors
+    --data-types <list>               Comma-separated data type names or IDs
+    --distance-functions <list>       Comma-separated distance function names
+    --experiment-feature-sets <list>  Comma-separated experiment feature set IDs
+
   classifier-create-global-config-table       Create global ml_classifier_configs table (one-time)
   classifier-create-feature-builder-table     Create ml_classifier_feature_builder table (one-time)
 
@@ -2676,6 +2691,8 @@ class MLDPShell:
     classifier-config-show
     classifier-config-activate --config-name "baseline"
     classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
+    classifier-config-add-hyperparameters --config baseline --amplitude-methods 2
+    classifier-config-add-hyperparameters --config baseline --decimation-factors 31,63
     classifier-config-set-feature-builder --config-id 1 --include-original --compute-distances-inter
     classifier-config-show    # Shows hyperparameters AND feature builder settings
     classifier-config-delete --config-name "test_config" --confirm
@@ -11194,6 +11211,257 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to add feature sets: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_add_hyperparameters(self, args):
+        """
+        Add hyperparameters to an existing configuration
+
+        Usage: classifier-config-add-hyperparameters --config <name|id> [OPTIONS]
+
+        Adds hyperparameters to an existing configuration by inserting into
+        the appropriate junction tables. Can add multiple types at once.
+
+        Options:
+            --config <name|id>            Config name or ID (required)
+            --amplitude-methods <list>    Comma-separated amplitude method IDs
+            --decimation-factors <list>   Comma-separated decimation factors
+            --data-types <list>           Comma-separated data type names or IDs
+            --distance-functions <list>   Comma-separated distance function names
+            --experiment-feature-sets <list>  Comma-separated experiment feature set IDs
+
+        Examples:
+            classifier-config-add-hyperparameters --config baseline --amplitude-methods 2
+            classifier-config-add-hyperparameters --config 1 --amplitude-methods 2,3
+            classifier-config-add-hyperparameters --config baseline --decimation-factors 31,63
+            classifier-config-add-hyperparameters --config baseline --data-types adc2,adc3
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name_or_id = None
+        amplitude_methods = None
+        decimation_factors = None
+        data_types = None
+        distance_functions = None
+        experiment_feature_sets = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config' and i + 1 < len(args):
+                config_name_or_id = args[i + 1]
+                i += 2
+            elif args[i] == '--amplitude-methods' and i + 1 < len(args):
+                amplitude_methods = args[i + 1]
+                i += 2
+            elif args[i] == '--decimation-factors' and i + 1 < len(args):
+                decimation_factors = args[i + 1]
+                i += 2
+            elif args[i] == '--data-types' and i + 1 < len(args):
+                data_types = args[i + 1]
+                i += 2
+            elif args[i] == '--distance-functions' and i + 1 < len(args):
+                distance_functions = args[i + 1]
+                i += 2
+            elif args[i] == '--experiment-feature-sets' and i + 1 < len(args):
+                experiment_feature_sets = args[i + 1]
+                i += 2
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_add_hyperparameters.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_name_or_id:
+            print("[ERROR] --config is required")
+            return
+
+        if not any([amplitude_methods, decimation_factors, data_types, distance_functions, experiment_feature_sets]):
+            print("[ERROR] At least one hyperparameter type must be specified")
+            print("Options: --amplitude-methods, --decimation-factors, --data-types,")
+            print("         --distance-functions, --experiment-feature-sets")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
+                return
+            global_classifier_id = result[0]
+
+            # Resolve config_id from name or ID
+            if config_name_or_id.isdigit():
+                config_id = int(config_name_or_id)
+            else:
+                cursor.execute("""
+                    SELECT config_id FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND config_name = %s
+                """, (global_classifier_id, config_name_or_id))
+                result = cursor.fetchone()
+                if not result:
+                    print(f"[ERROR] Configuration '{config_name_or_id}' not found")
+                    return
+                config_id = result[0]
+
+            added_count = 0
+
+            # Add amplitude methods
+            if amplitude_methods:
+                amp_ids = [int(x.strip()) for x in amplitude_methods.split(',')]
+                for amp_id in amp_ids:
+                    # Check if already exists
+                    cursor.execute("""
+                        SELECT 1 FROM ml_classifier_config_amplitude_methods
+                        WHERE config_id = %s AND amplitude_processing_method_id = %s
+                    """, (config_id, amp_id))
+                    if cursor.fetchone():
+                        print(f"[INFO] Amplitude method {amp_id} already exists in config, skipping")
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_amplitude_methods
+                            (config_id, amplitude_processing_method_id)
+                        VALUES (%s, %s)
+                    """, (config_id, amp_id))
+                    added_count += 1
+                    print(f"[SUCCESS] Added amplitude method {amp_id} to configuration")
+
+            # Add decimation factors
+            if decimation_factors:
+                dec_values = [int(x.strip()) for x in decimation_factors.split(',')]
+                for dec in dec_values:
+                    # Check if already exists
+                    cursor.execute("""
+                        SELECT 1 FROM ml_classifier_config_decimation_factors
+                        WHERE config_id = %s AND decimation_factor = %s
+                    """, (config_id, dec))
+                    if cursor.fetchone():
+                        print(f"[INFO] Decimation factor {dec} already exists in config, skipping")
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_decimation_factors
+                            (config_id, decimation_factor)
+                        VALUES (%s, %s)
+                    """, (config_id, dec))
+                    added_count += 1
+                    print(f"[SUCCESS] Added decimation factor {dec} to configuration")
+
+            # Add data types
+            if data_types:
+                dt_list = [x.strip() for x in data_types.split(',')]
+                for dt in dt_list:
+                    # Try to parse as ID or name
+                    if dt.isdigit():
+                        dt_id = int(dt)
+                    else:
+                        # Look up data type ID by name
+                        cursor.execute("""
+                            SELECT data_type_id FROM experiment_data_types
+                            WHERE experiment_id = %s AND data_type_name = %s
+                        """, (self.current_experiment, dt))
+                        result = cursor.fetchone()
+                        if not result:
+                            print(f"[WARNING] Data type '{dt}' not found for experiment {self.current_experiment}, skipping")
+                            continue
+                        dt_id = result[0]
+
+                    # Check if already exists
+                    cursor.execute("""
+                        SELECT 1 FROM ml_classifier_config_data_types
+                        WHERE config_id = %s AND data_type_id = %s
+                    """, (config_id, dt_id))
+                    if cursor.fetchone():
+                        print(f"[INFO] Data type {dt_id} already exists in config, skipping")
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_data_types
+                            (config_id, data_type_id)
+                        VALUES (%s, %s)
+                    """, (config_id, dt_id))
+                    added_count += 1
+                    print(f"[SUCCESS] Added data type {dt_id} to configuration")
+
+            # Add distance functions
+            if distance_functions:
+                df_names = [x.strip() for x in distance_functions.split(',')]
+                for df_name in df_names:
+                    # Look up distance function ID
+                    cursor.execute("""
+                        SELECT function_id FROM distance_functions
+                        WHERE function_name = %s
+                    """, (df_name,))
+                    result = cursor.fetchone()
+                    if not result:
+                        print(f"[WARNING] Distance function '{df_name}' not found, skipping")
+                        continue
+                    df_id = result[0]
+
+                    # Check if already exists
+                    cursor.execute("""
+                        SELECT 1 FROM ml_classifier_config_distance_functions
+                        WHERE config_id = %s AND distance_function_id = %s
+                    """, (config_id, df_id))
+                    if cursor.fetchone():
+                        print(f"[INFO] Distance function '{df_name}' already exists in config, skipping")
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_distance_functions
+                            (config_id, distance_function_id)
+                        VALUES (%s, %s)
+                    """, (config_id, df_id))
+                    added_count += 1
+                    print(f"[SUCCESS] Added distance function '{df_name}' to configuration")
+
+            # Add experiment feature sets
+            if experiment_feature_sets:
+                efs_ids = [int(x.strip()) for x in experiment_feature_sets.split(',')]
+                for efs_id in efs_ids:
+                    # Check if already exists
+                    cursor.execute("""
+                        SELECT 1 FROM ml_classifier_config_experiment_feature_sets
+                        WHERE config_id = %s AND experiment_feature_set_id = %s
+                    """, (config_id, efs_id))
+                    if cursor.fetchone():
+                        print(f"[INFO] Experiment feature set {efs_id} already exists in config, skipping")
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO ml_classifier_config_experiment_feature_sets
+                            (config_id, experiment_feature_set_id)
+                        VALUES (%s, %s)
+                    """, (config_id, efs_id))
+                    added_count += 1
+                    print(f"[SUCCESS] Added experiment feature set {efs_id} to configuration")
+
+            self.db_conn.commit()
+            print(f"\n[SUCCESS] Added {added_count} hyperparameter(s) to configuration '{config_name_or_id}'")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to add hyperparameters: {e}")
             import traceback
             traceback.print_exc()
 
