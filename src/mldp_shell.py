@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_184000
-File version: 2.0.9.20
+Date Revised: 20251019_185000
+File version: 2.0.9.21
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,13 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.20):
-1. PHASE 4 DIAGNOSTICS - Added verbose debug output
+Changes in this version (9.21):
+1. PHASE 4 CRITICAL FIX - Disabled cross-validation to fix 46-hour training time
+   - v2.0.9.21: DISABLED 5-fold cross-validation in train_svm_worker
+                CV was taking 20-30 minutes per task (5x training time!)
+                With 84 tasks, CV alone would take 28-42 hours
+                We have separate test/verify sets, so CV is unnecessary
+                Expected speedup: 46 hours → 14 hours (3.3x faster)
    - v2.0.9.20: Added real-time debug output to train_svm_worker
                 Shows progress during feature loading (train/test/verify)
                 Shows progress during SVM training and cross-validation
@@ -387,7 +392,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.20"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.21"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -756,16 +761,15 @@ def train_svm_worker(config_tuple):
         print(f"[WORKER] SVM training complete in {training_time:.2f}s")
         sys.stdout.flush()
 
-        # CHECKPOINT 4: Cross-validation
-        print(f"[WORKER] Running 5-fold cross-validation...")
+        # CHECKPOINT 4: Cross-validation (SKIPPED - too slow with large datasets)
+        # Cross-validation was taking 20-30 minutes per task (5x the training time)
+        # With 84 tasks, this would add 28-42 hours to total training time
+        # We have a separate test set, so CV is not necessary
+        print(f"[WORKER] Skipping cross-validation (use test set for evaluation)")
         sys.stdout.flush()
-        t_cv_start = time.time()
-        cv_scores = cross_val_score(svm, X_train, y_train, cv=5, scoring='accuracy')
-        cv_mean = np.mean(cv_scores)
-        cv_std = np.std(cv_scores)
-        timings['cross_validation'] = time.time() - t_cv_start
-        print(f"[WORKER] Cross-validation complete in {timings['cross_validation']:.2f}s")
-        sys.stdout.flush()
+        cv_mean = 0.0
+        cv_std = 0.0
+        timings['cross_validation'] = 0.0
 
         # CHECKPOINT 5: Predictions
         t_pred_start = time.time()
