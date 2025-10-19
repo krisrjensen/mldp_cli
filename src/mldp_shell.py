@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_183000
-File version: 2.0.9.19
+Date Revised: 20251019_184000
+File version: 2.0.9.20
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,13 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.19):
-1. PHASE 4 DIAGNOSTICS - Bug fixes
+Changes in this version (9.20):
+1. PHASE 4 DIAGNOSTICS - Added verbose debug output
+   - v2.0.9.20: Added real-time debug output to train_svm_worker
+                Shows progress during feature loading (train/test/verify)
+                Shows progress during SVM training and cross-validation
+                Helps identify exactly where the process hangs
+                Added sys.stdout.flush() to force immediate output
    - v2.0.9.19: Fixed segment_labels table reference in classifier-test-svm-single
                 Changed FROM experiment_041_segment_labels to FROM segment_labels
                 Added WHERE active = TRUE filter
@@ -382,7 +387,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.19"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.20"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -681,34 +686,54 @@ def train_svm_worker(config_tuple):
 
     try:
         # CHECKPOINT 1: Database connection
+        print(f"[WORKER] Starting: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
         t_db_start = time.time()
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
         timings['db_connection'] = time.time() - t_db_start
+        print(f"[WORKER] DB connected in {timings['db_connection']:.2f}s")
 
         # CHECKPOINT 2: Feature loading (split by train/test/verify)
+        print(f"[WORKER] Loading training features...")
+        import sys
+        sys.stdout.flush()
         t_load_train_start = time.time()
         X_train, y_train = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'training'
         )
         timings['feature_load_train'] = time.time() - t_load_train_start
+        print(f"[WORKER] Loaded {len(X_train)} training samples in {timings['feature_load_train']:.2f}s")
+        sys.stdout.flush()
 
+        print(f"[WORKER] Loading test features...")
+        sys.stdout.flush()
         t_load_test_start = time.time()
         X_test, y_test = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'test'
         )
         timings['feature_load_test'] = time.time() - t_load_test_start
+        print(f"[WORKER] Loaded {len(X_test)} test samples in {timings['feature_load_test']:.2f}s")
+        sys.stdout.flush()
 
+        print(f"[WORKER] Loading verification features...")
+        sys.stdout.flush()
         t_load_verify_start = time.time()
         X_verify, y_verify = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'verification'
         )
         timings['feature_load_verify'] = time.time() - t_load_verify_start
+        print(f"[WORKER] Loaded {len(X_verify)} verification samples in {timings['feature_load_verify']:.2f}s")
+        sys.stdout.flush()
+
         timings['feature_load_total'] = (timings['feature_load_train'] +
                                           timings['feature_load_test'] +
                                           timings['feature_load_verify'])
+        print(f"[WORKER] Total feature loading: {timings['feature_load_total']:.2f}s")
+        sys.stdout.flush()
 
         # CHECKPOINT 3: SVM training
+        print(f"[WORKER] Training SVM (kernel={svm_params['kernel']}, C={svm_params['C']})...")
+        sys.stdout.flush()
         t_svm_start = time.time()
 
         # Build SVM parameters
@@ -728,13 +753,19 @@ def train_svm_worker(config_tuple):
         svm.fit(X_train, y_train)
         training_time = time.time() - t_svm_start
         timings['svm_training'] = training_time
+        print(f"[WORKER] SVM training complete in {training_time:.2f}s")
+        sys.stdout.flush()
 
         # CHECKPOINT 4: Cross-validation
+        print(f"[WORKER] Running 5-fold cross-validation...")
+        sys.stdout.flush()
         t_cv_start = time.time()
         cv_scores = cross_val_score(svm, X_train, y_train, cv=5, scoring='accuracy')
         cv_mean = np.mean(cv_scores)
         cv_std = np.std(cv_scores)
         timings['cross_validation'] = time.time() - t_cv_start
+        print(f"[WORKER] Cross-validation complete in {timings['cross_validation']:.2f}s")
+        sys.stdout.flush()
 
         # CHECKPOINT 5: Predictions
         t_pred_start = time.time()
@@ -15705,10 +15736,17 @@ class MLDPShell:
         else:
             print()
         print(f"\n[INFO] This is a diagnostic test. Results will NOT be inserted into database.")
-        print(f"[INFO] Starting single SVM training task...\n")
+        print(f"[INFO] Starting single SVM training task...")
+        print(f"[DEBUG] Step 1: Calling worker function...")
+        print(f"[DEBUG] If this hangs, the problem is in the worker function itself\n")
+
+        import sys
+        sys.stdout.flush()  # Force output to display
 
         # Call worker function directly (no multiprocessing)
         result = train_svm_worker(config_tuple)
+
+        print(f"\n[DEBUG] Step 2: Worker function returned")
 
         # Display results
         if result['success']:
