@@ -3,18 +3,20 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_120000
-File version: 2.0.9.9
+Date Revised: 20251019_130000
+File version: 2.0.9.10
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 9)
+- CHANGE: Tracks changes within current commit cycle (currently 10)
 
-Changes in this version (9.9):
-1. PHASE 4 BUGFIX - Fixed undefined per_class_table_name variable
+Changes in this version (9.10):
+1. PHASE 4 NEW COMMANDS - Added data cleaning commands for Phase 4
+   - v2.0.9.10: Added classifier-clean-svm-results and classifier-clean-features commands
+                (~350 lines total for both commands with full filtering support)
    - v2.0.9.9: Added missing per_class_table_name definition in classifier-train-svm
    - v2.0.9.8: Convert numpy types to Python types before DB insertion
    - v2.0.9.7: Fixed queries to use correct Phase 0b table names
@@ -549,6 +551,10 @@ class MLDPCompleter(Completer):
             'classifier-train-svm-init': ['--help'],
             'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--feature-set',
                                     '--kernel', '--C', '--gamma', '--force', '--help'],
+            'classifier-clean-svm-results': ['--amplitude-method', '--decimation-factor', '--data-type',
+                                            '--feature-set', '--force', '--help'],
+            'classifier-clean-features': ['--amplitude-method', '--decimation-factor', '--data-type',
+                                         '--feature-set', '--force', '--help'],
 
             # Utilities
             'verify': [],
@@ -1236,6 +1242,8 @@ class MLDPShell:
             # Classifier SVM training commands (Phase 4)
             'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
             'classifier-train-svm': self.cmd_classifier_train_svm,
+            'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
+            'classifier-clean-features': self.cmd_classifier_clean_features,
         }
     
     def get_prompt(self):
@@ -2704,6 +2712,55 @@ class MLDPShell:
   Examples:
     classifier-select-references --plot
     classifier-select-references --plot --plot-dir ~/plots/exp041_cls001_refs
+
+🔧 FEATURE CONSTRUCTION (Phase 3):
+  classifier-build-features      Build distance-based feature vectors for SVM
+    [--force]                    Overwrite existing features
+    [--batch-size <n>]           Batch size for processing (default: 1000)
+    [--decimation-factor <n>]    Build only for specific decimation factor
+    [--data-type <id>]           Build only for specific data type
+    [--amplitude-method <id>]    Build only for specific amplitude method
+    [--feature-set <id>]         Build only for specific feature set
+    [--workers <n>]              Parallel workers (default: 7, max: 28)
+
+  Examples:
+    classifier-build-features
+    classifier-build-features --amplitude-method 2 --workers 21
+    classifier-build-features --decimation-factor 255 --data-type 6
+
+🤖 SVM TRAINING (Phase 4):
+  classifier-train-svm-init      Create SVM results tables (one-time setup)
+
+  classifier-train-svm           Train SVM models on distance-based features
+    [--workers <n>]              Parallel workers (default: 7, max: 28)
+    [--decimation-factor <n>]    Train only for specific decimation factor
+    [--data-type <id>]           Train only for specific data type
+    [--feature-set <id>]         Train only for specific feature set
+    [--kernel <type>]            SVM kernel: linear, rbf, poly (default: all)
+    [--C <value>]                SVM C parameter (default: grid search)
+    [--gamma <value>]            SVM gamma parameter (default: grid search)
+    [--force]                    Overwrite existing results
+
+  classifier-clean-svm-results   Clear SVM training results from database
+    [--amplitude-method <id>]    Delete only this amplitude method
+    [--decimation-factor <n>]    Delete only this decimation factor
+    [--data-type <id>]           Delete only this data type
+    [--feature-set <id>]         Delete only this feature set
+    [--force]                    Required to confirm deletion (REQUIRED)
+
+  classifier-clean-features      Clear feature vectors from database
+    [--amplitude-method <id>]    Delete only this amplitude method
+    [--decimation-factor <n>]    Delete only this decimation factor
+    [--data-type <id>]           Delete only this data type
+    [--feature-set <id>]         Delete only this feature set
+    [--force]                    Required to confirm deletion (REQUIRED)
+
+  Examples:
+    classifier-train-svm-init
+    classifier-train-svm --workers 21
+    classifier-train-svm --amplitude-method 2 --kernel rbf
+    classifier-clean-svm-results --amplitude-method 1 --force
+    classifier-clean-features --amplitude-method 2 --force
 
 📂 DATA MANAGEMENT:
   get-experiment-data-path            Show paths and file counts for experiment data
@@ -15523,6 +15580,353 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to train SVM: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_clean_svm_results(self, args):
+        """
+        Clear SVM training results from database
+
+        Usage: classifier-clean-svm-results [OPTIONS]
+
+        Deletes SVM results and per-class metrics from database.
+        Use filters to delete specific subsets or delete all results.
+
+        Options:
+            --amplitude-method <id>   Delete only this amplitude method
+            --decimation-factor <n>   Delete only this decimation factor
+            --data-type <id>          Delete only this data type
+            --feature-set <id>        Delete only this feature set
+            --force                   Required to confirm deletion
+
+        Examples:
+            classifier-clean-svm-results --amplitude-method 2 --force
+            classifier-clean-svm-results --decimation-factor 255 --force
+            classifier-clean-svm-results --force
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        filter_amp = None
+        filter_dec = None
+        filter_dtype = None
+        filter_efs = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires a value")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+            per_class_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_per_class_results"
+
+            # Check if tables exist
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (results_table_name,))
+            if not cursor.fetchone()[0]:
+                print(f"[ERROR] Results table {results_table_name} does not exist")
+                return
+
+            # Build WHERE clause based on filters
+            where_conditions = []
+            where_params = []
+
+            if filter_amp is not None:
+                where_conditions.append("amplitude_processing_method_id = %s")
+                where_params.append(filter_amp)
+            if filter_dec is not None:
+                where_conditions.append("decimation_factor = %s")
+                where_params.append(filter_dec)
+            if filter_dtype is not None:
+                where_conditions.append("data_type_id = %s")
+                where_params.append(filter_dtype)
+            if filter_efs is not None:
+                where_conditions.append("experiment_feature_set_id = %s")
+                where_params.append(filter_efs)
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = "WHERE " + " AND ".join(where_conditions)
+
+            # Count what will be deleted
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {results_table_name}
+                {where_clause}
+            """, tuple(where_params))
+            result_count = cursor.fetchone()[0]
+
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {per_class_table_name} pc
+                JOIN {results_table_name} r ON pc.result_id = r.result_id
+                {where_clause}
+            """, tuple(where_params))
+            per_class_count = cursor.fetchone()[0]
+
+            # Show what will be deleted
+            print(f"\n[INFO] Cleaning SVM results for Experiment {exp_id}, Classifier {cls_id}")
+            if filter_amp:
+                print(f"[INFO] Filter: amplitude_method_id = {filter_amp}")
+            if filter_dec:
+                print(f"[INFO] Filter: decimation_factor = {filter_dec}")
+            if filter_dtype:
+                print(f"[INFO] Filter: data_type_id = {filter_dtype}")
+            if filter_efs:
+                print(f"[INFO] Filter: experiment_feature_set_id = {filter_efs}")
+
+            print(f"\n[WARNING] This will delete:")
+            print(f"  - {result_count} SVM result records")
+            print(f"  - {per_class_count} per-class metric records")
+
+            if result_count == 0:
+                print("\n[INFO] No results found matching criteria. Nothing to delete.")
+                return
+
+            if not force:
+                print("\n[ERROR] --force flag required to proceed with deletion")
+                print("Re-run with --force to confirm deletion")
+                return
+
+            # Delete per-class results first (FK dependency)
+            if per_class_count > 0:
+                cursor.execute(f"""
+                    DELETE FROM {per_class_table_name}
+                    WHERE result_id IN (
+                        SELECT result_id FROM {results_table_name}
+                        {where_clause}
+                    )
+                """, tuple(where_params))
+                print(f"[INFO] Deleted {per_class_count} per-class metric records")
+
+            # Delete main results
+            cursor.execute(f"""
+                DELETE FROM {results_table_name}
+                {where_clause}
+            """, tuple(where_params))
+            print(f"[INFO] Deleted {result_count} SVM result records")
+
+            self.db_conn.commit()
+            print(f"\n[SUCCESS] SVM results cleaned successfully")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to clean SVM results: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_clean_features(self, args):
+        """
+        Clear feature vectors from database
+
+        Usage: classifier-clean-features [OPTIONS]
+
+        Deletes feature vector records from database.
+        Use filters to delete specific subsets or delete all features.
+        WARNING: This does not delete feature files from disk.
+
+        Options:
+            --amplitude-method <id>   Delete only this amplitude method
+            --decimation-factor <n>   Delete only this decimation factor
+            --data-type <id>          Delete only this data type
+            --feature-set <id>        Delete only this feature set
+            --force                   Required to confirm deletion
+
+        Examples:
+            classifier-clean-features --amplitude-method 2 --force
+            classifier-clean-features --decimation-factor 255 --force
+            classifier-clean-features --force
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        filter_amp = None
+        filter_dec = None
+        filter_dtype = None
+        filter_efs = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires a value")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (features_table_name,))
+            if not cursor.fetchone()[0]:
+                print(f"[ERROR] Features table {features_table_name} does not exist")
+                return
+
+            # Build WHERE clause based on filters
+            where_conditions = []
+            where_params = []
+
+            if filter_amp is not None:
+                where_conditions.append("amplitude_processing_method_id = %s")
+                where_params.append(filter_amp)
+            if filter_dec is not None:
+                where_conditions.append("decimation_factor = %s")
+                where_params.append(filter_dec)
+            if filter_dtype is not None:
+                where_conditions.append("data_type_id = %s")
+                where_params.append(filter_dtype)
+            if filter_efs is not None:
+                where_conditions.append("experiment_feature_set_id = %s")
+                where_params.append(filter_efs)
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = "WHERE " + " AND ".join(where_conditions)
+
+            # Count what will be deleted
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN extraction_status_id = 2 THEN 1 END) as extracted,
+                    COUNT(CASE WHEN extraction_status_id = 3 THEN 1 END) as failed
+                FROM {features_table_name}
+                {where_clause}
+            """, tuple(where_params))
+            counts = cursor.fetchone()
+            total_count, extracted_count, failed_count = counts
+
+            # Show what will be deleted
+            print(f"\n[INFO] Cleaning feature vectors for Experiment {exp_id}, Classifier {cls_id}")
+            if filter_amp:
+                print(f"[INFO] Filter: amplitude_method_id = {filter_amp}")
+            if filter_dec:
+                print(f"[INFO] Filter: decimation_factor = {filter_dec}")
+            if filter_dtype:
+                print(f"[INFO] Filter: data_type_id = {filter_dtype}")
+            if filter_efs:
+                print(f"[INFO] Filter: experiment_feature_set_id = {filter_efs}")
+
+            print(f"\n[WARNING] This will delete:")
+            print(f"  - {total_count} feature vector records")
+            print(f"    - {extracted_count} extracted")
+            print(f"    - {failed_count} failed")
+            print(f"\n[NOTE] Feature files on disk will NOT be deleted")
+
+            if total_count == 0:
+                print("\n[INFO] No features found matching criteria. Nothing to delete.")
+                return
+
+            if not force:
+                print("\n[ERROR] --force flag required to proceed with deletion")
+                print("Re-run with --force to confirm deletion")
+                return
+
+            # Delete feature records
+            cursor.execute(f"""
+                DELETE FROM {features_table_name}
+                {where_clause}
+            """, tuple(where_params))
+
+            self.db_conn.commit()
+            print(f"\n[INFO] Deleted {total_count} feature vector records")
+            print(f"[SUCCESS] Feature vectors cleaned successfully")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to clean features: {e}")
             import traceback
             traceback.print_exc()
 
