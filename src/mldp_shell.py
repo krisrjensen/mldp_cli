@@ -3,17 +3,25 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_061500
-File version: 2.0.7.8
+Date Revised: 20251019_062000
+File version: 2.0.7.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 8)
+- CHANGE: Tracks changes within current commit cycle (currently 9)
 
-Changes in this version (7.8):
+Changes in this version (7.9):
+1. ENHANCEMENT - Added label names to feature plots
+   - v2.0.7.9: Query segment_labels table to get actual label name
+   - Display in plot title: "Class: arc_discharge (ID=1)"
+   - Include in filename: exp041_cls001_arc_discharge_id1_seg12345_...
+   - Sanitize label names for filesystem (spaces -> underscores)
+   - Shows meaningful class names instead of just numeric IDs
+
+Changes in previous version (7.8):
 1. NEW COMMAND - classifier-plot-reference-features
    - v2.0.7.8: Added command to plot ACTUAL FEATURE DATA of selected segments
    - Shows the actual waveforms/time series of selected reference segments
@@ -287,7 +295,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.8"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.9"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -13357,7 +13365,16 @@ class MLDPShell:
                 ref_segment_id = row[5]
                 total_segments = row[6]
 
-                print(f"\nProcessing: Class {label_id}, dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, segment={ref_segment_id}")
+                # Get label name from segment_labels table
+                cursor.execute("""
+                    SELECT label_name
+                    FROM segment_labels
+                    WHERE label_id = %s
+                """, (label_id,))
+                label_name_row = cursor.fetchone()
+                label_name = label_name_row[0] if label_name_row else f"Label_{label_id}"
+
+                print(f"\nProcessing: Class {label_id} ({label_name}), dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, segment={ref_segment_id}")
 
                 # Query all features in this feature_set
                 cursor.execute("""
@@ -13418,13 +13435,16 @@ class MLDPShell:
                 axes[-1].set_xlabel('Sample Index')
 
                 fig.suptitle(f'Reference Segment Features\n'
-                            f'Exp {exp_id}, Classifier {cls_id}, Class {label_id}\n'
+                            f'Exp {exp_id}, Classifier {cls_id}\n'
+                            f'Class: {label_name} (ID={label_id})\n'
                             f'Segment {ref_segment_id} (1 of {total_segments} in class)\n'
                             f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}',
                             fontsize=12)
 
+                # Sanitize label name for filename
+                safe_label_name = label_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                 plot_filename = (f'exp{exp_id:03d}_cls{cls_id:03d}_'
-                                f'class{label_id}_seg{ref_segment_id}_'
+                                f'{safe_label_name}_id{label_id}_seg{ref_segment_id}_'
                                 f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_features.png')
                 plot_path = os.path.join(plot_dir, plot_filename)
 
