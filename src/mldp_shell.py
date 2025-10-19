@@ -3,21 +3,32 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_020000
-File version: 2.0.6.35
+Date Revised: 20251019_021000
+File version: 2.0.6.36
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 35)
+- CHANGE: Tracks changes within current commit cycle (currently 36)
 
-Changes in this version (6.35):
+Changes in this version (6.36):
+1. REFACTOR - Integrated feature builder into classifier-config-show
+   - v2.0.6.36: Removed standalone classifier-config-show-feature-builder command
+   - Integrated feature builder settings into classifier-config-show output
+   - classifier-config-show now displays:
+     * All hyperparameters (decimation factors, data types, etc.)
+     * Feature builder settings section
+     * Shows if no feature builder is configured
+   - Removed redundant command from registration, tab completion, and help
+   - Updated help text to indicate classifier-config-show includes feature builder
+   - Cleaner, more unified interface
+
+Changes in previous version (6.35):
 1. FEATURE BUILDER MANAGEMENT - Phase 0b Enhancement
    - v2.0.6.35: Implemented feature builder management commands
    - classifier-config-set-feature-builder: Create/update feature builder flags
-   - classifier-config-show-feature-builder: Display feature builder settings
    - Updated classifier-config-list: Added "FeatBuilder" column (Yes/No)
    - Feature builder controls which feature types are included in X matrix:
      * include_original_feature: Raw feature values
@@ -189,7 +200,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.6.35"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.36"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -363,7 +374,6 @@ class MLDPCompleter(Completer):
                                                      '--statistical-features', '--no-statistical-features',
                                                      '--external-function', '--no-external-function',
                                                      '--notes', '--help'],
-            'classifier-config-show-feature-builder': ['--config-id', '--config-name', '--active', '--help'],
 
             # Classifier Data Split Assignment (Phase 1)
             'classifier-create-splits-table': ['--force', '--help'],
@@ -570,7 +580,6 @@ class MLDPShell:
             'classifier-config-show': self.cmd_classifier_config_show,
             'classifier-create-feature-builder-table': self.cmd_classifier_create_feature_builder_table,
             'classifier-config-set-feature-builder': self.cmd_classifier_config_set_feature_builder,
-            'classifier-config-show-feature-builder': self.cmd_classifier_config_show_feature_builder,
             # Classifier data split assignment commands (Phase 1)
             'classifier-create-splits-table': self.cmd_classifier_create_splits_table,
             'classifier-assign-splits': self.cmd_classifier_assign_splits,
@@ -1968,6 +1977,7 @@ class MLDPShell:
       or --config-id <id>             Configuration ID
 
   classifier-config-show              Show detailed configuration information
+                                      (includes feature builder settings)
     [--config-name <name>]            Show specific config by name
     [--config-id <id>]                Show specific config by ID
     [--active]                        Show active config (default)
@@ -1996,10 +2006,7 @@ class MLDPShell:
     [--external-function]                     Enable external function (reserved)
     [--notes <text>]                          Optional notes
 
-  classifier-config-show-feature-builder      Show feature builder settings
-    [--config-id <id>]                        Show for specific config ID
-    [--config-name <name>]                    Show for specific config name
-    [--active]                                Show for active config (default)
+  Note: Feature builder settings are displayed in classifier-config-show
 
   Examples:
     classifier-config-create --config-name "baseline" --decimation-factors all \\
@@ -2010,7 +2017,7 @@ class MLDPShell:
     classifier-config-activate --config-name "baseline"
     classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
     classifier-config-set-feature-builder --config-id 1 --include-original --compute-distances-inter
-    classifier-config-show-feature-builder
+    classifier-config-show    # Shows hyperparameters AND feature builder settings
     classifier-config-delete --config-name "test_config" --confirm
 
 ⚙️  DATA SPLIT ASSIGNMENT (Phase 1):
@@ -11157,6 +11164,34 @@ class MLDPShell:
                 for dfunc_id, dfunc_name in dfunc_rows:
                     print(f"  [{dfunc_id}] {dfunc_name}")
 
+            # Query feature builder settings
+            cursor.execute("""
+                SELECT include_original_feature, compute_baseline_distances_inter,
+                       compute_baseline_distances_intra, statistical_features,
+                       external_function, notes, created_at, updated_at
+                FROM ml_classifier_feature_builder
+                WHERE config_id = %s
+            """, (config_id,))
+
+            fb_row = cursor.fetchone()
+
+            if fb_row:
+                inc_orig, comp_inter, comp_intra, stat_feat, ext_func, fb_notes, fb_created, fb_updated = fb_row
+
+                print(f"\n{'Feature Builder Settings':-^60}")
+                print(f"\nInclude original features:             {inc_orig}")
+                print(f"Compute inter-class baseline distances: {comp_inter}")
+                print(f"Compute intra-class baseline distances: {comp_intra}")
+                print(f"Statistical features (reserved):        {stat_feat}")
+                print(f"External function (reserved):           {ext_func}")
+
+                if fb_notes:
+                    print(f"\nFeature Builder Notes: {fb_notes}")
+            else:
+                print(f"\n{'Feature Builder Settings':-^60}")
+                print("\n[INFO] No feature builder configured for this configuration")
+                print("  Use 'classifier-config-set-feature-builder' to configure")
+
             print(f"\n{'='*60}\n")
 
         except Exception as e:
@@ -11484,147 +11519,6 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to set feature builder: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def cmd_classifier_config_show_feature_builder(self, args):
-        """
-        Show feature builder settings for a configuration
-
-        Usage: classifier-config-show-feature-builder [OPTIONS]
-
-        Displays the feature builder settings for a configuration.
-
-        Options:
-            --config-id <id>        Show for specific config ID
-            --config-name <name>    Show for specific config name
-            --active                Show for active config (default)
-
-        Examples:
-            classifier-config-show-feature-builder
-            classifier-config-show-feature-builder --config-id 1
-            classifier-config-show-feature-builder --config-name "baseline"
-        """
-        if not self.db_conn:
-            print("[ERROR] Not connected to database. Use 'connect' first.")
-            return
-
-        if not self.current_classifier_id:
-            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
-            return
-
-        # Parse arguments
-        config_id = None
-        config_name = None
-        use_active = True
-
-        i = 0
-        while i < len(args):
-            if args[i] == '--config-id' and i + 1 < len(args):
-                config_id = int(args[i + 1])
-                use_active = False
-                i += 2
-            elif args[i] == '--config-name' and i + 1 < len(args):
-                config_name = args[i + 1]
-                use_active = False
-                i += 2
-            elif args[i] == '--active':
-                use_active = True
-                i += 1
-            elif args[i] == '--help':
-                print(self.cmd_classifier_config_show_feature_builder.__doc__)
-                return
-            else:
-                print(f"[WARNING] Unknown option: {args[i]}")
-                i += 1
-
-        try:
-            cursor = self.db_conn.cursor()
-
-            # Get global_classifier_id
-            cursor.execute("""
-                SELECT global_classifier_id
-                FROM ml_experiment_classifiers
-                WHERE experiment_id = %s AND classifier_id = %s
-            """, (self.current_experiment, self.current_classifier_id))
-
-            result = cursor.fetchone()
-            if not result:
-                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
-                return
-
-            global_classifier_id = result[0]
-
-            # Determine which config to show
-            if config_id:
-                # Use specified config_id
-                pass
-            elif config_name:
-                # Look up config by name
-                cursor.execute("""
-                    SELECT config_id
-                    FROM ml_classifier_configs
-                    WHERE global_classifier_id = %s AND config_name = %s
-                """, (global_classifier_id, config_name))
-                result = cursor.fetchone()
-                if not result:
-                    print(f"[ERROR] Config '{config_name}' not found")
-                    return
-                config_id = result[0]
-            elif use_active:
-                # Use active config
-                cursor.execute("""
-                    SELECT config_id
-                    FROM ml_classifier_configs
-                    WHERE global_classifier_id = %s AND is_active = TRUE
-                """, (global_classifier_id,))
-                result = cursor.fetchone()
-                if not result:
-                    print("[ERROR] No active configuration found")
-                    return
-                config_id = result[0]
-
-            # Get feature builder settings
-            cursor.execute("""
-                SELECT c.config_name, c.is_active,
-                       fb.include_original_feature, fb.compute_baseline_distances_inter,
-                       fb.compute_baseline_distances_intra, fb.statistical_features,
-                       fb.external_function, fb.notes, fb.created_at, fb.updated_at
-                FROM ml_classifier_configs c
-                LEFT JOIN ml_classifier_feature_builder fb ON c.config_id = fb.config_id
-                WHERE c.config_id = %s
-            """, (config_id,))
-
-            row = cursor.fetchone()
-            if not row:
-                print(f"[ERROR] Config ID {config_id} not found")
-                return
-
-            config_name, is_active, inc_orig, comp_inter, comp_intra, stat_feat, ext_func, notes, created, updated = row
-
-            print(f"\nConfiguration: {config_name} (ID: {config_id})")
-            print(f"Status: {'ACTIVE' if is_active else 'Inactive'}")
-
-            if inc_orig is None:
-                print("\n[INFO] No feature builder configured for this configuration")
-                print("  Use 'classifier-config-set-feature-builder' to configure")
-                return
-
-            print("\nFeature Builder Settings:")
-            print(f"  Include original features: {inc_orig}")
-            print(f"  Compute inter-class baseline distances: {comp_inter}")
-            print(f"  Compute intra-class baseline distances: {comp_intra}")
-            print(f"  Statistical features: {stat_feat} (reserved)")
-            print(f"  External function: {ext_func} (reserved)")
-
-            if notes:
-                print(f"\nNotes: {notes}")
-
-            print(f"\nCreated: {created}")
-            print(f"Updated: {updated}")
-
-        except Exception as e:
-            print(f"\n[ERROR] Failed to show feature builder: {e}")
             import traceback
             traceback.print_exc()
 
