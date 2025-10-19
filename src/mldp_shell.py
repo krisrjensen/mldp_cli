@@ -3,17 +3,25 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_053000
-File version: 2.0.7.5
+Date Revised: 20251019_054000
+File version: 2.0.7.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
-Changes in this version (7.5):
+Changes in this version (7.6):
+1. BUG FIX - Fixed self.current_experiment access
+   - v2.0.7.6: Fixed classifier-drop-references-table command
+   - Changed: exp_id = self.current_experiment['experiment_id']
+   - To: exp_id = self.current_experiment
+   - self.current_experiment is an integer, not a dictionary
+   - Error: "'int' object is not subscriptable"
+
+Changes in previous version (7.5):
 1. REGISTRATION FIX - Registered classifier-drop-references-table command
    - v2.0.7.5: Added command to self.commands dictionary
    - Added tab completion support with --confirm and --help flags
@@ -261,7 +269,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.6"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -12273,7 +12281,7 @@ class MLDPShell:
             print("WARNING: This will DELETE all existing reference segments!")
             return
 
-        exp_id = self.current_experiment['experiment_id']
+        exp_id = self.current_experiment
         cls_id = self.current_classifier_id
         table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
 
