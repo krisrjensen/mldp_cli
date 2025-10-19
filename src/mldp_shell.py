@@ -3,18 +3,19 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_100000
-File version: 2.0.9.8
+Date Revised: 20251019_120000
+File version: 2.0.9.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 8)
+- CHANGE: Tracks changes within current commit cycle (currently 9)
 
-Changes in this version (9.8):
-1. PHASE 4 BUGFIX - Fixed numpy type conversion in database insertion
+Changes in this version (9.9):
+1. PHASE 4 BUGFIX - Fixed undefined per_class_table_name variable
+   - v2.0.9.9: Added missing per_class_table_name definition in classifier-train-svm
    - v2.0.9.8: Convert numpy types to Python types before DB insertion
    - v2.0.9.7: Fixed queries to use correct Phase 0b table names
    - v2.0.9.6: Implemented database insertion and summary statistics (~250 lines)
@@ -15047,6 +15048,7 @@ class MLDPShell:
 
             # Check if results tables exist
             results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+            per_class_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_per_class_results"
             cursor.execute("""
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables
