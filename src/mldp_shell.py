@@ -3,17 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_054000
-File version: 2.0.7.6
+Date Revised: 20251019_060000
+File version: 2.0.7.7
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 6)
+- CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (7.6):
+Changes in this version (7.7):
+1. NEW COMMAND - classifier-plot-references
+   - v2.0.7.7: Added separate command to generate PCA plots from existing references
+   - Reads reference segments from database
+   - Regenerates PCA analysis and visualization
+   - Allows plot generation without re-running expensive reference selection
+   - Options: --plot-dir <path>, --pca-components <n>
+   - Useful for changing plot directory or regenerating after data issues
+
+Changes in previous version (7.6):
 1. BUG FIX - Fixed self.current_experiment access
    - v2.0.7.6: Fixed classifier-drop-references-table command
    - Changed: exp_id = self.current_experiment['experiment_id']
@@ -269,7 +278,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.6"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.7"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -454,6 +463,7 @@ class MLDPCompleter(Completer):
             'classifier-drop-references-table': ['--confirm', '--help'],
             'classifier-select-references': ['--force', '--plot', '--plot-dir', '--min-segments',
                                             '--pca-components', '--help'],
+            'classifier-plot-references': ['--plot-dir', '--pca-components', '--help'],
 
             # Utilities
             'verify': [],
@@ -661,6 +671,7 @@ class MLDPShell:
             # Classifier reference selection commands (Phase 2)
             'classifier-drop-references-table': self.cmd_classifier_drop_references_table,
             'classifier-select-references': self.cmd_classifier_select_references,
+            'classifier-plot-references': self.cmd_classifier_plot_references,
         }
     
     def get_prompt(self):
@@ -12881,6 +12892,292 @@ class MLDPShell:
             print("Install with: pip install numpy scikit-learn matplotlib")
         except Exception as e:
             print(f"\n[ERROR] Failed to select references: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_plot_references(self, args):
+        """
+        Generate PCA plots for existing reference segments
+
+        Usage: classifier-plot-references [OPTIONS]
+
+        Reads reference segments from the database and generates PCA visualization
+        plots showing all segments in each class, the centroid, and the selected
+        reference segment.
+
+        Options:
+            --plot-dir <path>      Directory for plots (default: ~/plots)
+            --pca-components <n>   PCA components (default: 2)
+
+        Examples:
+            classifier-plot-references
+            classifier-plot-references --plot-dir ~/plots/exp041_cls001_refs
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        plot_dir = os.path.expanduser('~/plots')
+        pca_components = 2
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--plot-dir':
+                if i + 1 < len(args):
+                    plot_dir = os.path.expanduser(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --plot-dir requires a path argument")
+                    return
+            elif args[i] == '--pca-components':
+                if i + 1 < len(args):
+                    pca_components = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --pca-components requires a number argument")
+                    return
+            else:
+                i += 1
+
+        try:
+            import numpy as np
+            from sklearn.decomposition import PCA
+            from collections import defaultdict
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import matplotlib.pyplot as plt
+
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+            table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (table_name,))
+
+            if not cursor.fetchone()[0]:
+                print(f"[ERROR] Reference segments table does not exist: {table_name}")
+                print("  Run 'classifier-select-references' first")
+                return
+
+            # Query all reference segments
+            cursor.execute(f"""
+                SELECT
+                    segment_label_id,
+                    decimation_factor,
+                    data_type_id,
+                    amplitude_processing_method_id,
+                    experiment_feature_set_id,
+                    reference_segment_id,
+                    centroid_x,
+                    centroid_y,
+                    total_segments_in_class
+                FROM {table_name}
+                ORDER BY decimation_factor, data_type_id, amplitude_processing_method_id,
+                         experiment_feature_set_id, segment_label_id
+            """)
+
+            reference_rows = cursor.fetchall()
+
+            if not reference_rows:
+                print("[ERROR] No reference segments found in database")
+                print("  Run 'classifier-select-references' first")
+                return
+
+            print(f"[INFO] Found {len(reference_rows)} reference segments")
+            print(f"[INFO] Generating PCA plots in {plot_dir}...")
+
+            os.makedirs(plot_dir, exist_ok=True)
+
+            # Group by hyperparameter combination
+            refs_by_config = defaultdict(list)
+            for row in reference_rows:
+                key = (row[1], row[2], row[3], row[4])  # dec, dtype, amp, efs
+                refs_by_config[key].append({
+                    'segment_label_id': row[0],
+                    'reference_segment_id': row[5],
+                    'centroid_x': row[6],
+                    'centroid_y': row[7],
+                    'total_segments': row[8]
+                })
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            global_classifier_id = cursor.fetchone()[0]
+
+            # Query active configuration for feature information
+            cursor.execute("""
+                SELECT config_id
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            config_row = cursor.fetchone()
+            if not config_row:
+                print("[ERROR] No active configuration found")
+                return
+            config_id = config_row[0]
+
+            plot_count = 0
+
+            # Generate one plot per hyperparameter combination
+            for (dec, dtype, amp, efs), refs in refs_by_config.items():
+                print(f"\nProcessing: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
+
+                # Query all features in this feature_set
+                cursor.execute("""
+                    SELECT f.feature_id, f.feature_name, fsf.feature_order
+                    FROM ml_experiments_feature_sets efs_tbl
+                    JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
+                    JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                    WHERE efs_tbl.experiment_feature_set_id = %s
+                    ORDER BY fsf.feature_order
+                """, (efs,))
+                features_in_set = cursor.fetchall()
+                feature_ids = [row[0] for row in features_in_set]
+
+                # For each class, load features and perform PCA
+                class_data = {}
+
+                for ref in refs:
+                    label_id = ref['segment_label_id']
+                    ref_segment_id = ref['reference_segment_id']
+
+                    # Query all segments in this class
+                    cursor.execute(f"""
+                        SELECT DISTINCT s.segment_id
+                        FROM experiment_{exp_id:03d}_segment_training_data s
+                        WHERE s.segment_label_id = %s
+                        ORDER BY s.segment_id
+                    """, (label_id,))
+                    segment_ids_query = [row[0] for row in cursor.fetchall()]
+
+                    # Load and concatenate features for all segments
+                    segment_feature_vectors = {}
+
+                    for feature_id in feature_ids:
+                        cursor.execute(f"""
+                            SELECT f.segment_id, f.feature_file_path
+                            FROM experiment_{exp_id:03d}_feature_fileset f
+                            WHERE f.segment_id = ANY(%s)
+                              AND f.decimation_factor = %s
+                              AND f.data_type_id = %s
+                              AND f.amplitude_processing_method_id = %s
+                              AND f.experiment_feature_set_id = %s
+                              AND f.feature_set_feature_id = %s
+                            ORDER BY f.segment_id
+                        """, (segment_ids_query, dec, dtype, amp, efs, feature_id))
+
+                        feature_files = cursor.fetchall()
+
+                        for segment_id, feature_file_path in feature_files:
+                            try:
+                                features = np.load(feature_file_path)
+                                column_idx = amp - 1
+                                features_1d = features[:, column_idx]
+
+                                if segment_id not in segment_feature_vectors:
+                                    segment_feature_vectors[segment_id] = []
+                                segment_feature_vectors[segment_id].append(features_1d)
+                            except Exception as e:
+                                continue
+
+                    # Concatenate features for each segment
+                    feature_vectors = []
+                    segment_ids = []
+
+                    for segment_id in segment_ids_query:
+                        if segment_id in segment_feature_vectors:
+                            if len(segment_feature_vectors[segment_id]) == len(feature_ids):
+                                concatenated = np.concatenate(segment_feature_vectors[segment_id])
+                                feature_vectors.append(concatenated)
+                                segment_ids.append(segment_id)
+
+                    if len(feature_vectors) >= 2:
+                        X = np.array(feature_vectors)
+                        pca = PCA(n_components=pca_components)
+                        X_pca = pca.fit_transform(X)
+
+                        # Find index of reference segment
+                        try:
+                            ref_idx = segment_ids.index(ref_segment_id)
+                        except ValueError:
+                            print(f"  [WARNING] Reference segment {ref_segment_id} not found in class {label_id}")
+                            continue
+
+                        class_data[label_id] = {
+                            'X_pca': X_pca,
+                            'ref_idx': ref_idx,
+                            'centroid': np.array([ref['centroid_x'], ref['centroid_y']]),
+                            'pca': pca
+                        }
+
+                # Generate plot for this configuration
+                if class_data:
+                    fig, ax = plt.subplots(figsize=(12, 10))
+
+                    for label_id, data in class_data.items():
+                        X_pca = data['X_pca']
+                        ref_idx = data['ref_idx']
+                        centroid = data['centroid']
+
+                        # Scatter all segments in class
+                        ax.scatter(X_pca[:, 0], X_pca[:, 1], alpha=0.5, label=f'Class {label_id}', s=30)
+
+                        # Mark centroid
+                        ax.scatter(centroid[0], centroid[1], marker='X', s=200,
+                                  edgecolors='black', linewidths=2, zorder=10)
+
+                        # Mark selected reference segment
+                        ax.scatter(X_pca[ref_idx, 0], X_pca[ref_idx, 1],
+                                  marker='*', s=300, edgecolors='red', linewidths=2, zorder=11)
+
+                    # Use explained variance from first class
+                    first_pca = list(class_data.values())[0]['pca']
+                    ax.set_xlabel(f'PC1 ({first_pca.explained_variance_ratio_[0]*100:.1f}% variance)')
+                    ax.set_ylabel(f'PC2 ({first_pca.explained_variance_ratio_[1]*100:.1f}% variance)')
+                    ax.set_title(f'PCA Reference Selection\n'
+                                f'Exp {exp_id}, Classifier {cls_id}\n'
+                                f'Dec={dec}, DataType={dtype}, Amp={amp}, EFS={efs}')
+                    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+                    ax.grid(True, alpha=0.3)
+
+                    plot_filename = (f'exp{exp_id:03d}_cls{cls_id:03d}_'
+                                    f'dec{dec}_dtype{dtype}_amp{amp}_efs{efs}_pca_references.png')
+                    plot_path = os.path.join(plot_dir, plot_filename)
+
+                    plt.tight_layout()
+                    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+                    plt.close()
+
+                    print(f"  Saved: {plot_filename}")
+                    plot_count += 1
+
+            print(f"\n[SUCCESS] Generated {plot_count} PCA plots in {plot_dir}")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Missing required package: {e}")
+            print("Install with: pip install numpy scikit-learn matplotlib")
+        except Exception as e:
+            print(f"\n[ERROR] Failed to generate plots: {e}")
             import traceback
             traceback.print_exc()
 
