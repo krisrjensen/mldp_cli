@@ -3,18 +3,21 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_160000
-File version: 2.0.9.14
+Date Revised: 20251019_170000
+File version: 2.0.9.15
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 14)
+- CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.14):
-1. PHASE 4 ENHANCEMENT - Added amplitude method filtering to SVM training
+Changes in this version (9.15):
+1. PHASE 4 ENHANCEMENT - Added verbose progress output to SVM training
+   - v2.0.9.15: Enhanced classifier-train-svm progress reporting
+                Shows EACH task completion with config and test accuracy
+                Shows summary statistics every 10 tasks with avg time/task
    - v2.0.9.14: Added --amplitude-method option to classifier-train-svm command
                 Allows training only specific amplitude methods (e.g., --amplitude-method 2)
    - v2.0.9.13: Added classifier-config-remove-hyperparameters command (~230 lines)
@@ -364,7 +367,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.14"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.15"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15804,7 +15807,8 @@ class MLDPShell:
 
             # Train SVMs in parallel
             print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
-            print("[INFO] This may take 30-90 minutes depending on dataset size and workers...\n")
+            print("[INFO] This may take 30-90 minutes depending on dataset size and workers...")
+            print("[INFO] Showing progress after EACH task completion for better visibility\n")
 
             from multiprocessing import Pool
             import time
@@ -15812,25 +15816,35 @@ class MLDPShell:
             start_time = time.time()
             results = []
             failed_count = 0
+            last_update = start_time
 
             with Pool(processes=num_workers) as pool:
                 for i, result in enumerate(pool.imap_unordered(train_svm_worker, work_items), 1):
+                    task_complete_time = time.time()
+
                     if result['success']:
                         results.append(result)
+                        dec, dtype, amp, efs = result['config']
+                        kernel = result['svm_params']['kernel']
+                        acc = result['metrics_test']['accuracy']
+                        print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
+                              f"kernel={kernel}, test_acc={acc:.4f}")
                     else:
                         failed_count += 1
                         dec, dtype, amp, efs = result['config']
-                        print(f"[ERROR] Task {i}/{total_tasks} FAILED: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
-                        print(f"        Error: {result['error']}")
+                        print(f"[TASK {i}/{total_tasks}] FAILED: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
+                        print(f"                   Error: {result['error']}")
 
-                    # Progress update every 10 tasks or on completion
+                    # Progress summary every 10 tasks or on completion
                     if i % 10 == 0 or i == total_tasks:
                         elapsed = time.time() - start_time
                         rate = i / elapsed if elapsed > 0 else 0
                         remaining = (total_tasks - i) / rate if rate > 0 else 0
-                        print(f"[PROGRESS] {i}/{total_tasks} ({i/total_tasks*100:.1f}%) | "
-                              f"Success: {len(results)} | Failed: {failed_count} | "
-                              f"Elapsed: {elapsed/60:.1f}m | Remaining: ~{remaining/60:.1f}m")
+                        avg_time = elapsed / i if i > 0 else 0
+                        print(f"\n[SUMMARY] {i}/{total_tasks} ({i/total_tasks*100:.1f}%) | "
+                              f"Success: {len(results)} | Failed: {failed_count}")
+                        print(f"          Elapsed: {elapsed/60:.1f}m | Avg/task: {avg_time:.1f}s | "
+                              f"Remaining: ~{remaining/60:.1f}m\n")
 
             total_time = time.time() - start_time
 
