@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_170000
-File version: 2.0.9.15
+Date Revised: 20251019_180000
+File version: 2.0.9.16
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,13 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.15):
-1. PHASE 4 ENHANCEMENT - Added verbose progress output to SVM training
+Changes in this version (9.16):
+1. PHASE 4 DIAGNOSTICS - Added comprehensive performance instrumentation
+   - v2.0.9.16: Added detailed timing instrumentation to train_svm_worker
+                Added classifier-test-svm-single diagnostic command
+                Shows timing breakdown for each operation (load, train, CV, predict, save)
+                Identifies bottleneck operation automatically
+                Helps diagnose performance issues in SVM training
    - v2.0.9.15: Enhanced classifier-train-svm progress reporting
                 Shows EACH task completion with config and test accuracy
                 Shows summary statistics every 10 tasks with avg time/task
@@ -367,7 +372,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.15"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.16"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -570,6 +575,8 @@ class MLDPCompleter(Completer):
             'classifier-train-svm-init': ['--help'],
             'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--amplitude-method',
                                     '--feature-set', '--kernel', '--C', '--gamma', '--force', '--help'],
+            'classifier-test-svm-single': ['--decimation-factor', '--data-type', '--amplitude-method',
+                                          '--feature-set', '--kernel', '--C', '--gamma', '--help'],
             'classifier-clean-svm-results': ['--amplitude-method', '--decimation-factor', '--data-type',
                                             '--feature-set', '--force', '--help'],
             'classifier-clean-features': ['--amplitude-method', '--decimation-factor', '--data-type',
@@ -658,24 +665,41 @@ def train_svm_worker(config_tuple):
     # Unpack configuration
     dec, dtype, amp, efs, svm_params, db_config, label_categories, exp_id, cls_id, global_classifier_id = config_tuple
 
+    # Timing dictionary for diagnostics
+    timings = {}
+    t_total_start = time.time()
+
     try:
-        # Connect to database
+        # CHECKPOINT 1: Database connection
+        t_db_start = time.time()
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
+        timings['db_connection'] = time.time() - t_db_start
 
-        # Load feature vectors for all three splits
+        # CHECKPOINT 2: Feature loading (split by train/test/verify)
+        t_load_train_start = time.time()
         X_train, y_train = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'training'
         )
+        timings['feature_load_train'] = time.time() - t_load_train_start
+
+        t_load_test_start = time.time()
         X_test, y_test = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'test'
         )
+        timings['feature_load_test'] = time.time() - t_load_test_start
+
+        t_load_verify_start = time.time()
         X_verify, y_verify = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'verification'
         )
+        timings['feature_load_verify'] = time.time() - t_load_verify_start
+        timings['feature_load_total'] = (timings['feature_load_train'] +
+                                          timings['feature_load_test'] +
+                                          timings['feature_load_verify'])
 
-        # Train SVM
-        start_time = time.time()
+        # CHECKPOINT 3: SVM training
+        t_svm_start = time.time()
 
         # Build SVM parameters
         svm_kwargs = {
@@ -692,15 +716,18 @@ def train_svm_worker(config_tuple):
 
         svm = SVC(**svm_kwargs)
         svm.fit(X_train, y_train)
-        training_time = time.time() - start_time
+        training_time = time.time() - t_svm_start
+        timings['svm_training'] = training_time
 
-        # Cross-validation on training set
+        # CHECKPOINT 4: Cross-validation
+        t_cv_start = time.time()
         cv_scores = cross_val_score(svm, X_train, y_train, cv=5, scoring='accuracy')
         cv_mean = np.mean(cv_scores)
         cv_std = np.std(cv_scores)
+        timings['cross_validation'] = time.time() - t_cv_start
 
-        # Make predictions on all splits
-        start_pred_time = time.time()
+        # CHECKPOINT 5: Predictions
+        t_pred_start = time.time()
         y_pred_train = svm.predict(X_train)
         y_pred_test = svm.predict(X_test)
         y_pred_verify = svm.predict(X_verify)
@@ -709,8 +736,11 @@ def train_svm_worker(config_tuple):
         y_proba_train = svm.predict_proba(X_train)
         y_proba_test = svm.predict_proba(X_test)
         y_proba_verify = svm.predict_proba(X_verify)
-        prediction_time = time.time() - start_pred_time
+        prediction_time = time.time() - t_pred_start
+        timings['prediction'] = prediction_time
 
+        # CHECKPOINT 6: Metrics computation
+        t_metrics_start = time.time()
         # Compute 13-class metrics using helper function
         metrics_train = compute_multiclass_metrics_worker(y_train, y_pred_train)
         metrics_test = compute_multiclass_metrics_worker(y_test, y_pred_test)
@@ -726,10 +756,15 @@ def train_svm_worker(config_tuple):
         binary_metrics_verify = compute_binary_arc_metrics_worker(
             y_verify, y_pred_verify, y_proba_verify, label_categories
         )
+        timings['metrics_computation'] = time.time() - t_metrics_start
 
-        # Save SVM model using helper function
+        # CHECKPOINT 7: Model saving
+        t_save_model_start = time.time()
         model_path = save_svm_model_worker(svm, exp_id, cls_id, dec, dtype, amp, efs, svm_params)
+        timings['save_model'] = time.time() - t_save_model_start
 
+        # CHECKPOINT 8: Visualization saving
+        t_save_viz_start = time.time()
         # Save confusion matrices using helper function
         cm_paths = save_confusion_matrices_worker(
             y_train, y_pred_train, y_test, y_pred_test,
@@ -743,10 +778,22 @@ def train_svm_worker(config_tuple):
             y_verify, y_proba_verify, label_categories,
             exp_id, cls_id, dec, dtype, amp, efs, svm_params
         )
+        timings['save_visualizations'] = time.time() - t_save_viz_start
 
         # Close database connection
         cursor.close()
         conn.close()
+
+        # Calculate total time
+        timings['total'] = time.time() - t_total_start
+
+        # Calculate data sizes for diagnostics
+        data_sizes = {
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'verify_samples': len(X_verify),
+            'feature_dim': X_train.shape[1] if len(X_train) > 0 else 0
+        }
 
         # Return results
         return {
@@ -767,17 +814,26 @@ def train_svm_worker(config_tuple):
             'model_path': model_path,
             'cm_paths': cm_paths,
             'curve_paths': curve_paths,
-            'unique_labels': np.unique(y_train).tolist()
+            'unique_labels': np.unique(y_train).tolist(),
+            'timings': timings,
+            'data_sizes': data_sizes
         }
 
     except Exception as e:
         import traceback
+        # Calculate partial timings if available
+        if 'timings' in locals():
+            timings['total'] = time.time() - t_total_start
+        else:
+            timings = {'total': time.time() - t_total_start if 't_total_start' in locals() else 0}
+
         return {
             'success': False,
             'config': (dec, dtype, amp, efs),
             'svm_params': svm_params,
             'error': str(e),
-            'traceback': traceback.format_exc()
+            'traceback': traceback.format_exc(),
+            'timings': timings
         }
 
 
@@ -1263,6 +1319,7 @@ class MLDPShell:
             # Classifier SVM training commands (Phase 4)
             'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
             'classifier-train-svm': self.cmd_classifier_train_svm,
+            'classifier-test-svm-single': self.cmd_classifier_test_svm_single,
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
         }
@@ -15469,6 +15526,254 @@ class MLDPShell:
             import traceback
             traceback.print_exc()
 
+    def cmd_classifier_test_svm_single(self, args):
+        """
+        Test single SVM training with detailed diagnostics
+
+        Usage: classifier-test-svm-single [OPTIONS]
+
+        Diagnostic command to test ONE SVM training task with detailed timing output.
+        Helps identify performance bottlenecks without multiprocessing complexity.
+
+        Options:
+          --decimation-factor <n>   Test with this decimation factor (default: 0)
+          --data-type <id>          Test with this data type (default: 6)
+          --amplitude-method <id>   Test with this amplitude method (default: 2)
+          --feature-set <id>        Test with this feature set (default: 1)
+          --kernel <name>           Test with this kernel (default: linear)
+          --C <value>               SVM C parameter (default: 1.0)
+          --gamma <value>           SVM gamma parameter (default: scale)
+
+        This command is for DIAGNOSTICS ONLY. It does NOT insert results into database.
+        Use classifier-train-svm for actual training.
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>'")
+            return
+
+        if not self.current_classifier:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>'")
+            return
+
+        exp_id = self.current_experiment
+        cls_id = self.current_classifier
+
+        # Parse arguments
+        dec = 0
+        dtype = 6
+        amp = 2
+        efs = 1
+        kernel = 'linear'
+        C = 1.0
+        gamma = 'scale'
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--kernel':
+                if i + 1 < len(args):
+                    kernel = args[i + 1]
+                    if kernel not in ['linear', 'rbf', 'poly']:
+                        print(f"[ERROR] Invalid kernel: {kernel}. Must be linear, rbf, or poly")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --kernel requires a value")
+                    return
+            elif args[i] == '--C':
+                if i + 1 < len(args):
+                    try:
+                        C = float(args[i + 1])
+                    except ValueError:
+                        print(f"[ERROR] Invalid C value: {args[i + 1]}")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --C requires a value")
+                    return
+            elif args[i] == '--gamma':
+                if i + 1 < len(args):
+                    gamma_val = args[i + 1]
+                    if gamma_val not in ['scale', 'auto']:
+                        try:
+                            gamma = float(gamma_val)
+                        except ValueError:
+                            print(f"[ERROR] Invalid gamma value: {gamma_val}. Must be 'scale', 'auto', or a number")
+                            return
+                    else:
+                        gamma = gamma_val
+                    i += 2
+                else:
+                    print("[ERROR] --gamma requires a value")
+                    return
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        # Get global_classifier_id
+        cursor = self.db_conn.cursor()
+        cursor.execute("""
+            SELECT global_classifier_id
+            FROM ml_experiment_classifiers
+            WHERE experiment_id = %s AND local_classifier_id = %s
+        """, (exp_id, cls_id))
+        row = cursor.fetchone()
+        if not row:
+            print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+            return
+        global_classifier_id = row[0]
+
+        # Get label categories
+        cursor.execute(f"""
+            SELECT label_id, category
+            FROM experiment_{exp_id:03d}_segment_labels
+        """)
+        label_categories = {label_id: category for label_id, category in cursor.fetchall()}
+
+        # Build SVM parameters
+        svm_params = {
+            'kernel': kernel,
+            'C': C
+        }
+        if kernel in ['rbf', 'poly']:
+            svm_params['gamma'] = gamma
+
+        # Build database config for worker
+        db_config = {
+            'dbname': 'arc_detection',
+            'user': 'kjensen',
+            'password': '',
+            'host': 'localhost',
+            'port': 5432
+        }
+
+        # Build work item tuple
+        config_tuple = (
+            dec, dtype, amp, efs, svm_params, db_config, label_categories,
+            exp_id, cls_id, global_classifier_id
+        )
+
+        print(f"\n[INFO] Testing SVM Training - DIAGNOSTIC MODE")
+        print(f"[INFO] Experiment {exp_id}, Classifier {cls_id}")
+        print(f"[INFO] Config: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
+        print(f"[INFO] SVM: kernel={kernel}, C={C}", end="")
+        if kernel in ['rbf', 'poly']:
+            print(f", gamma={gamma}")
+        else:
+            print()
+        print(f"\n[INFO] This is a diagnostic test. Results will NOT be inserted into database.")
+        print(f"[INFO] Starting single SVM training task...\n")
+
+        # Call worker function directly (no multiprocessing)
+        result = train_svm_worker(config_tuple)
+
+        # Display results
+        if result['success']:
+            print(f"\n{'='*80}")
+            print(f"[SUCCESS] SVM Training Completed")
+            print(f"{'='*80}\n")
+
+            # Show test accuracy
+            acc = result['metrics_test']['accuracy']
+            print(f"Test Accuracy: {acc:.4f}\n")
+
+            # Show detailed timing breakdown
+            if 'timings' in result:
+                t = result['timings']
+                print(f"TIMING BREAKDOWN:")
+                print(f"  Database Connection:     {t.get('db_connection', 0):>8.2f}s")
+                print(f"  Feature Loading (train): {t.get('feature_load_train', 0):>8.2f}s")
+                print(f"  Feature Loading (test):  {t.get('feature_load_test', 0):>8.2f}s")
+                print(f"  Feature Loading (verify):{t.get('feature_load_verify', 0):>8.2f}s")
+                print(f"  Feature Loading (TOTAL): {t.get('feature_load_total', 0):>8.2f}s  <-- May be bottleneck")
+                print(f"  SVM Training:            {t.get('svm_training', 0):>8.2f}s")
+                print(f"  Cross-Validation:        {t.get('cross_validation', 0):>8.2f}s")
+                print(f"  Prediction:              {t.get('prediction', 0):>8.2f}s")
+                print(f"  Metrics Computation:     {t.get('metrics_computation', 0):>8.2f}s")
+                print(f"  Save Model:              {t.get('save_model', 0):>8.2f}s")
+                print(f"  Save Visualizations:     {t.get('save_visualizations', 0):>8.2f}s")
+                print(f"  {'-'*40}")
+                print(f"  TOTAL TIME:              {t.get('total', 0):>8.2f}s\n")
+
+                # Identify bottleneck
+                max_time = 0
+                max_step = ""
+                for step, time_val in t.items():
+                    if step != 'total' and time_val > max_time:
+                        max_time = time_val
+                        max_step = step
+
+                if max_time > 0:
+                    pct = (max_time / t.get('total', 1)) * 100
+                    print(f"BOTTLENECK: '{max_step}' took {max_time:.2f}s ({pct:.1f}% of total time)\n")
+
+            # Show data sizes
+            if 'data_sizes' in result:
+                ds = result['data_sizes']
+                print(f"DATA SIZES:")
+                print(f"  Training samples:   {ds.get('train_samples', 0):>6}")
+                print(f"  Test samples:       {ds.get('test_samples', 0):>6}")
+                print(f"  Verification samples:{ds.get('verify_samples', 0):>6}")
+                print(f"  Feature dimensions: {ds.get('feature_dim', 0):>6}\n")
+
+            # Show metrics summary
+            print(f"METRICS SUMMARY:")
+            print(f"  Training accuracy:   {result['metrics_train']['accuracy']:.4f}")
+            print(f"  Test accuracy:       {result['metrics_test']['accuracy']:.4f}")
+            print(f"  Verification accuracy:{result['metrics_verify']['accuracy']:.4f}")
+            print(f"  Cross-val mean:      {result['cv_mean']:.4f} ± {result['cv_std']:.4f}\n")
+
+            # Show binary arc detection
+            print(f"BINARY ARC DETECTION:")
+            print(f"  Training accuracy:   {result['binary_metrics_train']['accuracy']:.4f}")
+            print(f"  Test accuracy:       {result['binary_metrics_test']['accuracy']:.4f}")
+            print(f"  Verification accuracy:{result['binary_metrics_verify']['accuracy']:.4f}\n")
+
+            print(f"Model saved to: {result['model_path']}\n")
+            print(f"NOTE: Results NOT inserted into database (diagnostic mode)")
+
+        else:
+            print(f"\n{'='*80}")
+            print(f"[FAILED] SVM Training Failed")
+            print(f"{'='*80}\n")
+            print(f"Error: {result['error']}\n")
+            if 'traceback' in result:
+                print(f"Traceback:")
+                print(result['traceback'])
+            if 'timings' in result:
+                print(f"\nFailed after {result['timings'].get('total', 0):.2f}s")
+
     def cmd_classifier_train_svm(self, args):
         """
         Train SVM classifier using distance-based feature vectors
@@ -15827,13 +16132,33 @@ class MLDPShell:
                         dec, dtype, amp, efs = result['config']
                         kernel = result['svm_params']['kernel']
                         acc = result['metrics_test']['accuracy']
-                        print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
-                              f"kernel={kernel}, test_acc={acc:.4f}")
+
+                        # Show timing breakdown if available
+                        if 'timings' in result and 'data_sizes' in result:
+                            t = result['timings']
+                            ds = result['data_sizes']
+                            print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
+                                  f"kernel={kernel}, test_acc={acc:.4f}")
+                            print(f"  Timing: LOAD={t.get('feature_load_total', 0):.1f}s, "
+                                  f"SVM={t.get('svm_training', 0):.1f}s, "
+                                  f"CV={t.get('cross_validation', 0):.1f}s, "
+                                  f"PRED={t.get('prediction', 0):.1f}s, "
+                                  f"SAVE={t.get('save_model', 0) + t.get('save_visualizations', 0):.1f}s, "
+                                  f"TOTAL={t.get('total', 0):.1f}s")
+                            print(f"  Data: train={ds.get('train_samples', 0)}, "
+                                  f"test={ds.get('test_samples', 0)}, "
+                                  f"verify={ds.get('verify_samples', 0)}, "
+                                  f"features={ds.get('feature_dim', 0)}")
+                        else:
+                            print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
+                                  f"kernel={kernel}, test_acc={acc:.4f}")
                     else:
                         failed_count += 1
                         dec, dtype, amp, efs = result['config']
                         print(f"[TASK {i}/{total_tasks}] FAILED: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
-                        print(f"                   Error: {result['error']}")
+                        print(f"  Error: {result['error']}")
+                        if 'timings' in result:
+                            print(f"  Failed after {result['timings'].get('total', 0):.1f}s")
 
                     # Progress summary every 10 tasks or on completion
                     if i % 10 == 0 or i == total_tasks:
