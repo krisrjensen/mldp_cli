@@ -3,17 +3,28 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_073500
-File version: 2.0.8.3
+Date Revised: 20251019_100000
+File version: 2.0.9.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 8)
+- COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (8.3):
+Changes in this version (9.0):
+1. PHASE 4 START - SVM Training & Evaluation
+   - v2.0.9.0: Implementing classifier-train-svm command
+   - Train SVM classifiers on distance-based feature vectors
+   - Two confusion matrices: 13-class and binary arc detection
+   - Parallel processing with --workers N (default: 7, max: 28)
+   - Precision-recall curves in addition to ROC curves
+   - Evaluate on train/test/verification splits
+   - Binary arc detection: map 13 classes → 2 (arc vs. non-arc)
+   - Category-based classification using segment_labels.category
+
+Changes in previous version (8.3):
 1. BUGFIX - Include custom function_type in distance function query
    - v2.0.8.3: Removed function_type='builtin' filter
    - Now includes Pearson (function_type='custom') that uses sklearn.metrics.pairwise
@@ -332,7 +343,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.8.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -524,6 +535,10 @@ class MLDPCompleter(Completer):
             # Classifier Feature Construction (Phase 3)
             'classifier-build-features': ['--force', '--batch-size', '--decimation-factor', '--data-type',
                                          '--amplitude-method', '--feature-set', '--help'],
+
+            # Classifier SVM Training (Phase 4)
+            'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--feature-set',
+                                    '--kernel', '--C', '--gamma', '--force', '--help'],
 
             # Utilities
             'verify': [],
@@ -735,6 +750,8 @@ class MLDPShell:
             'classifier-plot-reference-features': self.cmd_classifier_plot_reference_features,
             # Classifier feature construction commands (Phase 3)
             'classifier-build-features': self.cmd_classifier_build_features,
+            # Classifier SVM training commands (Phase 4)
+            'classifier-train-svm': self.cmd_classifier_train_svm,
         }
     
     def get_prompt(self):
@@ -14123,6 +14140,383 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to build features: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_train_svm(self, args):
+        """
+        Train SVM classifier using distance-based feature vectors
+
+        Usage: classifier-train-svm [OPTIONS]
+
+        Trains SVM on feature vectors from Phase 3 using data splits from Phase 1.
+        Evaluates on train/test/verification splits with both 13-class and binary
+        arc detection metrics.
+
+        Options:
+            --workers <n>             Parallel workers (default: 7, max: 28)
+            --decimation-factor <n>   Train only this decimation factor
+            --data-type <id>          Train only this data type
+            --feature-set <id>        Train only this feature set
+            --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
+            --C <value>               SVM C parameter (default: grid search)
+            --gamma <value>           SVM gamma parameter (default: grid search)
+            --force                   Overwrite existing results
+
+        Examples:
+            classifier-train-svm
+            classifier-train-svm --workers 21
+            classifier-train-svm --decimation-factor 0 --data-type 4
+            classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        num_workers = 7
+        filter_dec = None
+        filter_dtype = None
+        filter_efs = None
+        svm_kernel = None
+        svm_C = None
+        svm_gamma = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--workers':
+                if i + 1 < len(args):
+                    num_workers = int(args[i + 1])
+                    if num_workers < 1 or num_workers > 28:
+                        print("[ERROR] --workers must be between 1 and 28")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --workers requires a value")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--kernel':
+                if i + 1 < len(args):
+                    svm_kernel = args[i + 1]
+                    if svm_kernel not in ['linear', 'rbf', 'poly']:
+                        print("[ERROR] --kernel must be linear, rbf, or poly")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --kernel requires a value")
+                    return
+            elif args[i] == '--C':
+                if i + 1 < len(args):
+                    svm_C = float(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --C requires a value")
+                    return
+            elif args[i] == '--gamma':
+                if i + 1 < len(args):
+                    svm_gamma = args[i + 1]
+                    # Can be 'scale', 'auto', or numeric
+                    if svm_gamma not in ['scale', 'auto']:
+                        try:
+                            svm_gamma = float(svm_gamma)
+                        except ValueError:
+                            print("[ERROR] --gamma must be 'scale', 'auto', or numeric")
+                            return
+                    i += 2
+                else:
+                    print("[ERROR] --gamma requires a value")
+                    return
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            print(f"\n[INFO] Training SVM for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Using {num_workers} parallel workers")
+            print(f"[INFO] This process may take 30-60 minutes...")
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id, classifier_name
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+
+            global_classifier_id, classifier_name = result
+            print(f"[INFO] Using classifier: {classifier_name}")
+
+            # Check if active configuration exists
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] No active configuration found for classifier {cls_id}")
+                print("Use 'classifier-config-activate <config_id>' to activate a configuration")
+                return
+
+            config_id, config_name = result
+            print(f"[INFO] Using configuration: {config_name}")
+
+            # Check if data splits exist
+            splits_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits"
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {splits_table_name}
+            """)
+            split_count = cursor.fetchone()[0]
+            if split_count == 0:
+                print(f"[ERROR] No data splits found in {splits_table_name}")
+                print("Run 'classifier-assign-splits' first")
+                return
+
+            print(f"[INFO] Found {split_count} split assignments")
+
+            # Check if feature vectors exist
+            features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM {features_table_name}
+                WHERE extraction_status_id = 2
+            """)
+            feature_count = cursor.fetchone()[0]
+            if feature_count == 0:
+                print(f"[ERROR] No feature vectors found in {features_table_name}")
+                print("Run 'classifier-build-features' first")
+                return
+
+            print(f"[INFO] Found {feature_count} feature vectors")
+
+            # Create svm_results table if needed
+            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+            per_class_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_per_class_results"
+
+            # Check if tables exist
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (results_table_name,))
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"[INFO] Creating table {results_table_name}...")
+
+                # Create svm_results table
+                create_results_sql = f"""
+                CREATE TABLE {results_table_name} (
+                    result_id BIGSERIAL PRIMARY KEY,
+                    global_classifier_id INTEGER NOT NULL,
+                    classifier_id INTEGER NOT NULL DEFAULT {cls_id},
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    amplitude_processing_method_id INTEGER NOT NULL,
+                    experiment_feature_set_id BIGINT NOT NULL,
+
+                    -- SVM hyperparameters
+                    svm_kernel VARCHAR(20) NOT NULL,
+                    svm_c_parameter DOUBLE PRECISION NOT NULL,
+                    svm_gamma VARCHAR(20),
+                    class_weight VARCHAR(20) DEFAULT 'balanced',
+                    random_state INTEGER DEFAULT 42,
+
+                    -- Training configuration
+                    train_ratio DOUBLE PRECISION DEFAULT 0.70,
+                    test_ratio DOUBLE PRECISION DEFAULT 0.20,
+                    verification_ratio DOUBLE PRECISION DEFAULT 0.10,
+                    cv_folds INTEGER DEFAULT 5,
+
+                    -- 13-class multiclass metrics (TRAINING SET)
+                    accuracy_train DOUBLE PRECISION,
+                    precision_macro_train DOUBLE PRECISION,
+                    recall_macro_train DOUBLE PRECISION,
+                    f1_macro_train DOUBLE PRECISION,
+                    precision_weighted_train DOUBLE PRECISION,
+                    recall_weighted_train DOUBLE PRECISION,
+                    f1_weighted_train DOUBLE PRECISION,
+                    cv_mean_accuracy DOUBLE PRECISION,
+                    cv_std_accuracy DOUBLE PRECISION,
+
+                    -- 13-class multiclass metrics (TEST SET)
+                    accuracy_test DOUBLE PRECISION,
+                    precision_macro_test DOUBLE PRECISION,
+                    recall_macro_test DOUBLE PRECISION,
+                    f1_macro_test DOUBLE PRECISION,
+                    precision_weighted_test DOUBLE PRECISION,
+                    recall_weighted_test DOUBLE PRECISION,
+                    f1_weighted_test DOUBLE PRECISION,
+
+                    -- 13-class multiclass metrics (VERIFICATION SET)
+                    accuracy_verify DOUBLE PRECISION,
+                    precision_macro_verify DOUBLE PRECISION,
+                    recall_macro_verify DOUBLE PRECISION,
+                    f1_macro_verify DOUBLE PRECISION,
+                    precision_weighted_verify DOUBLE PRECISION,
+                    recall_weighted_verify DOUBLE PRECISION,
+                    f1_weighted_verify DOUBLE PRECISION,
+
+                    -- Binary arc detection metrics (TRAINING SET)
+                    arc_accuracy_train DOUBLE PRECISION,
+                    arc_precision_train DOUBLE PRECISION,
+                    arc_recall_train DOUBLE PRECISION,
+                    arc_f1_train DOUBLE PRECISION,
+                    arc_specificity_train DOUBLE PRECISION,
+                    arc_roc_auc_train DOUBLE PRECISION,
+                    arc_pr_auc_train DOUBLE PRECISION,
+
+                    -- Binary arc detection metrics (TEST SET)
+                    arc_accuracy_test DOUBLE PRECISION,
+                    arc_precision_test DOUBLE PRECISION,
+                    arc_recall_test DOUBLE PRECISION,
+                    arc_f1_test DOUBLE PRECISION,
+                    arc_specificity_test DOUBLE PRECISION,
+                    arc_roc_auc_test DOUBLE PRECISION,
+                    arc_pr_auc_test DOUBLE PRECISION,
+
+                    -- Binary arc detection metrics (VERIFICATION SET)
+                    arc_accuracy_verify DOUBLE PRECISION,
+                    arc_precision_verify DOUBLE PRECISION,
+                    arc_recall_verify DOUBLE PRECISION,
+                    arc_f1_verify DOUBLE PRECISION,
+                    arc_specificity_verify DOUBLE PRECISION,
+                    arc_roc_auc_verify DOUBLE PRECISION,
+                    arc_pr_auc_verify DOUBLE PRECISION,
+
+                    -- File paths
+                    model_path TEXT NOT NULL,
+                    confusion_matrix_13class_train_path TEXT,
+                    confusion_matrix_13class_test_path TEXT,
+                    confusion_matrix_13class_verify_path TEXT,
+                    confusion_matrix_binary_train_path TEXT,
+                    confusion_matrix_binary_test_path TEXT,
+                    confusion_matrix_binary_verify_path TEXT,
+                    roc_curve_binary_train_path TEXT,
+                    roc_curve_binary_test_path TEXT,
+                    roc_curve_binary_verify_path TEXT,
+                    pr_curve_binary_train_path TEXT,
+                    pr_curve_binary_test_path TEXT,
+                    pr_curve_binary_verify_path TEXT,
+                    classification_report_path TEXT,
+
+                    -- Performance tracking
+                    training_time_seconds DOUBLE PRECISION,
+                    prediction_time_seconds DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE (decimation_factor, data_type_id, amplitude_processing_method_id,
+                            experiment_feature_set_id, svm_kernel, svm_c_parameter, svm_gamma),
+
+                    FOREIGN KEY (global_classifier_id)
+                        REFERENCES ml_experiment_classifiers(global_classifier_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_results_config
+                    ON {results_table_name}(
+                        decimation_factor, data_type_id, amplitude_processing_method_id,
+                        experiment_feature_set_id);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_results_accuracy
+                    ON {results_table_name}(accuracy_test DESC);
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_svm_results_arc_f1
+                    ON {results_table_name}(arc_f1_test DESC);
+                """
+
+                cursor.execute(create_results_sql)
+
+                # Create per_class_results table
+                create_per_class_sql = f"""
+                CREATE TABLE {per_class_table_name} (
+                    result_id BIGINT NOT NULL,
+                    segment_label_id INTEGER NOT NULL,
+                    split_type VARCHAR(20) NOT NULL,
+
+                    -- Per-class metrics
+                    precision DOUBLE PRECISION,
+                    recall DOUBLE PRECISION,
+                    f1_score DOUBLE PRECISION,
+                    support INTEGER,
+
+                    PRIMARY KEY (result_id, segment_label_id, split_type),
+
+                    FOREIGN KEY (result_id)
+                        REFERENCES {results_table_name}(result_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (segment_label_id)
+                        REFERENCES segment_labels(label_id)
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_per_class_label
+                    ON {per_class_table_name}(segment_label_id);
+                """
+
+                cursor.execute(create_per_class_sql)
+                self.db_conn.commit()
+                print(f"[SUCCESS] Tables created: {results_table_name}, {per_class_table_name}")
+
+            # Check for existing results
+            if table_exists and not force:
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"\n[WARNING] {existing_count} existing results found")
+                    print("Use --force to overwrite existing results")
+                    return
+
+            if force and table_exists:
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"[INFO] Deleting {existing_count} existing results...")
+                    cursor.execute(f"DELETE FROM {results_table_name}")
+                    self.db_conn.commit()
+
+            # [PLACEHOLDER: Rest of implementation will be added in next steps]
+            print("[INFO] Command structure and table creation complete")
+            print("[INFO] SVM training implementation in progress...")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to train SVM: {e}")
             import traceback
             traceback.print_exc()
 
