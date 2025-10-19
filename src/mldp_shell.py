@@ -3,18 +3,21 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_140000
-File version: 2.0.9.12
+Date Revised: 20251019_150000
+File version: 2.0.9.13
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 12)
+- CHANGE: Tracks changes within current commit cycle (currently 13)
 
-Changes in this version (9.12):
-1. PHASE 0b BUGFIX - Fixed junction table INSERT statements
+Changes in this version (9.13):
+1. PHASE 0b NEW COMMAND - Added hyperparameter removal command
+   - v2.0.9.13: Added classifier-config-remove-hyperparameters command (~230 lines)
+                Allows removing amplitude methods, decimation factors, data types,
+                distance functions, and experiment feature sets from existing configs
    - v2.0.9.12: Fixed classifier-config-add-hyperparameters to include global_classifier_id
                 and experiment_id in all 5 junction table INSERT statements
    - v2.0.9.11: Added classifier-config-add-hyperparameters command (~250 lines)
@@ -359,7 +362,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.12"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.13"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -526,6 +529,9 @@ class MLDPCompleter(Completer):
             'classifier-config-add-hyperparameters': ['--config', '--amplitude-methods', '--decimation-factors',
                                                      '--data-types', '--distance-functions',
                                                      '--experiment-feature-sets', '--help'],
+            'classifier-config-remove-hyperparameters': ['--config', '--amplitude-methods', '--decimation-factors',
+                                                        '--data-types', '--distance-functions',
+                                                        '--experiment-feature-sets', '--force', '--help'],
             'classifier-create-global-config-table': ['--force', '--help'],
             'classifier-add-config-foreign-keys': ['--help'],
             'classifier-migrate-configs-to-global': ['--experiment-id', '--classifier-id', '--help'],
@@ -1231,6 +1237,7 @@ class MLDPShell:
             'classifier-config-create': self.cmd_classifier_config_create,
             'classifier-config-add-feature-sets': self.cmd_classifier_config_add_feature_sets,
             'classifier-config-add-hyperparameters': self.cmd_classifier_config_add_hyperparameters,
+            'classifier-config-remove-hyperparameters': self.cmd_classifier_config_remove_hyperparameters,
             'classifier-config-delete': self.cmd_classifier_config_delete,
             'classifier-config-list': self.cmd_classifier_config_list,
             'classifier-config-activate': self.cmd_classifier_config_activate,
@@ -2668,6 +2675,15 @@ class MLDPShell:
     --distance-functions <list>       Comma-separated distance function names
     --experiment-feature-sets <list>  Comma-separated experiment feature set IDs
 
+  classifier-config-remove-hyperparameters  Remove hyperparameters from existing config
+    --config <name|id>                Config name or ID (required)
+    --amplitude-methods <list>        Comma-separated amplitude method IDs
+    --decimation-factors <list>       Comma-separated decimation factors
+    --data-types <list>               Comma-separated data type names or IDs
+    --distance-functions <list>       Comma-separated distance function names
+    --experiment-feature-sets <list>  Comma-separated experiment feature set IDs
+    --force                           Required to confirm deletion (REQUIRED)
+
   classifier-create-global-config-table       Create global ml_classifier_configs table (one-time)
   classifier-create-feature-builder-table     Create ml_classifier_feature_builder table (one-time)
 
@@ -2695,6 +2711,8 @@ class MLDPShell:
     classifier-config-add-feature-sets --config-id 1 --feature-sets 1,2,5
     classifier-config-add-hyperparameters --config baseline --amplitude-methods 2
     classifier-config-add-hyperparameters --config baseline --decimation-factors 31,63
+    classifier-config-remove-hyperparameters --config baseline --amplitude-methods 1 --force
+    classifier-config-remove-hyperparameters --config 1 --decimation-factors 255 --force
     classifier-config-set-feature-builder --config-id 1 --include-original --compute-distances-inter
     classifier-config-show    # Shows hyperparameters AND feature builder settings
     classifier-config-delete --config-name "test_config" --confirm
@@ -11464,6 +11482,231 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to add hyperparameters: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_config_remove_hyperparameters(self, args):
+        """
+        Remove hyperparameters from an existing configuration
+
+        Usage: classifier-config-remove-hyperparameters --config <name|id> [OPTIONS]
+
+        Removes hyperparameters from an existing configuration by deleting from
+        the appropriate junction tables. Can remove multiple types at once.
+
+        Options:
+            --config <name|id>            Config name or ID (required)
+            --amplitude-methods <list>    Comma-separated amplitude method IDs
+            --decimation-factors <list>   Comma-separated decimation factors
+            --data-types <list>           Comma-separated data type names or IDs
+            --distance-functions <list>   Comma-separated distance function names
+            --experiment-feature-sets <list>  Comma-separated experiment feature set IDs
+            --force                       Required to confirm deletion
+
+        Examples:
+            classifier-config-remove-hyperparameters --config baseline --amplitude-methods 2 --force
+            classifier-config-remove-hyperparameters --config 1 --decimation-factors 31,63 --force
+            classifier-config-remove-hyperparameters --config baseline --data-types adc2 --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        config_name_or_id = None
+        amplitude_methods = None
+        decimation_factors = None
+        data_types = None
+        distance_functions = None
+        experiment_feature_sets = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--config' and i + 1 < len(args):
+                config_name_or_id = args[i + 1]
+                i += 2
+            elif args[i] == '--amplitude-methods' and i + 1 < len(args):
+                amplitude_methods = args[i + 1]
+                i += 2
+            elif args[i] == '--decimation-factors' and i + 1 < len(args):
+                decimation_factors = args[i + 1]
+                i += 2
+            elif args[i] == '--data-types' and i + 1 < len(args):
+                data_types = args[i + 1]
+                i += 2
+            elif args[i] == '--distance-functions' and i + 1 < len(args):
+                distance_functions = args[i + 1]
+                i += 2
+            elif args[i] == '--experiment-feature-sets' and i + 1 < len(args):
+                experiment_feature_sets = args[i + 1]
+                i += 2
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_config_remove_hyperparameters.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if not config_name_or_id:
+            print("[ERROR] --config is required")
+            return
+
+        if not any([amplitude_methods, decimation_factors, data_types, distance_functions, experiment_feature_sets]):
+            print("[ERROR] At least one hyperparameter type must be specified")
+            print("Options: --amplitude-methods, --decimation-factors, --data-types,")
+            print("         --distance-functions, --experiment-feature-sets")
+            return
+
+        if not force:
+            print("[ERROR] --force flag required to confirm deletion")
+            print("Re-run with --force to proceed")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (self.current_experiment, self.current_classifier_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {self.current_classifier_id} not found")
+                return
+            global_classifier_id = result[0]
+
+            # Resolve config_id from name or ID
+            if config_name_or_id.isdigit():
+                config_id = int(config_name_or_id)
+            else:
+                cursor.execute("""
+                    SELECT config_id FROM ml_classifier_configs
+                    WHERE global_classifier_id = %s AND config_name = %s
+                """, (global_classifier_id, config_name_or_id))
+                result = cursor.fetchone()
+                if not result:
+                    print(f"[ERROR] Configuration '{config_name_or_id}' not found")
+                    return
+                config_id = result[0]
+
+            removed_count = 0
+
+            # Remove amplitude methods
+            if amplitude_methods:
+                amp_ids = [int(x.strip()) for x in amplitude_methods.split(',')]
+                for amp_id in amp_ids:
+                    cursor.execute("""
+                        DELETE FROM ml_classifier_config_amplitude_methods
+                        WHERE config_id = %s AND amplitude_processing_method_id = %s
+                    """, (config_id, amp_id))
+                    if cursor.rowcount > 0:
+                        removed_count += cursor.rowcount
+                        print(f"[SUCCESS] Removed amplitude method {amp_id} from configuration")
+                    else:
+                        print(f"[INFO] Amplitude method {amp_id} not found in config, skipping")
+
+            # Remove decimation factors
+            if decimation_factors:
+                dec_values = [int(x.strip()) for x in decimation_factors.split(',')]
+                for dec in dec_values:
+                    cursor.execute("""
+                        DELETE FROM ml_classifier_config_decimation_factors
+                        WHERE config_id = %s AND decimation_factor = %s
+                    """, (config_id, dec))
+                    if cursor.rowcount > 0:
+                        removed_count += cursor.rowcount
+                        print(f"[SUCCESS] Removed decimation factor {dec} from configuration")
+                    else:
+                        print(f"[INFO] Decimation factor {dec} not found in config, skipping")
+
+            # Remove data types
+            if data_types:
+                dt_list = [x.strip() for x in data_types.split(',')]
+                for dt in dt_list:
+                    # Try to parse as ID or name
+                    if dt.isdigit():
+                        dt_id = int(dt)
+                    else:
+                        # Look up data type ID by name
+                        cursor.execute("""
+                            SELECT data_type_id FROM experiment_data_types
+                            WHERE experiment_id = %s AND data_type_name = %s
+                        """, (self.current_experiment, dt))
+                        result = cursor.fetchone()
+                        if not result:
+                            print(f"[WARNING] Data type '{dt}' not found for experiment {self.current_experiment}, skipping")
+                            continue
+                        dt_id = result[0]
+
+                    cursor.execute("""
+                        DELETE FROM ml_classifier_config_data_types
+                        WHERE config_id = %s AND data_type_id = %s
+                    """, (config_id, dt_id))
+                    if cursor.rowcount > 0:
+                        removed_count += cursor.rowcount
+                        print(f"[SUCCESS] Removed data type {dt_id} from configuration")
+                    else:
+                        print(f"[INFO] Data type {dt_id} not found in config, skipping")
+
+            # Remove distance functions
+            if distance_functions:
+                df_names = [x.strip() for x in distance_functions.split(',')]
+                for df_name in df_names:
+                    # Look up distance function ID
+                    cursor.execute("""
+                        SELECT function_id FROM distance_functions
+                        WHERE function_name = %s
+                    """, (df_name,))
+                    result = cursor.fetchone()
+                    if not result:
+                        print(f"[WARNING] Distance function '{df_name}' not found, skipping")
+                        continue
+                    df_id = result[0]
+
+                    cursor.execute("""
+                        DELETE FROM ml_classifier_config_distance_functions
+                        WHERE config_id = %s AND distance_function_id = %s
+                    """, (config_id, df_id))
+                    if cursor.rowcount > 0:
+                        removed_count += cursor.rowcount
+                        print(f"[SUCCESS] Removed distance function '{df_name}' from configuration")
+                    else:
+                        print(f"[INFO] Distance function '{df_name}' not found in config, skipping")
+
+            # Remove experiment feature sets
+            if experiment_feature_sets:
+                efs_ids = [int(x.strip()) for x in experiment_feature_sets.split(',')]
+                for efs_id in efs_ids:
+                    cursor.execute("""
+                        DELETE FROM ml_classifier_config_experiment_feature_sets
+                        WHERE config_id = %s AND experiment_feature_set_id = %s
+                    """, (config_id, efs_id))
+                    if cursor.rowcount > 0:
+                        removed_count += cursor.rowcount
+                        print(f"[SUCCESS] Removed experiment feature set {efs_id} from configuration")
+                    else:
+                        print(f"[INFO] Experiment feature set {efs_id} not found in config, skipping")
+
+            self.db_conn.commit()
+            print(f"\n[SUCCESS] Removed {removed_count} hyperparameter(s) from configuration '{config_name_or_id}'")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to remove hyperparameters: {e}")
             import traceback
             traceback.print_exc()
 
