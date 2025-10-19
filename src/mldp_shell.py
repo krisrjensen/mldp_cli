@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_073000
-File version: 2.0.8.2
+Date Revised: 20251019_073500
+File version: 2.0.8.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,13 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 8)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (8.2):
+Changes in this version (8.3):
+1. BUGFIX - Include custom function_type in distance function query
+   - v2.0.8.3: Removed function_type='builtin' filter
+   - Now includes Pearson (function_type='custom') that uses sklearn.metrics.pairwise
+   - Query filters only by library_name='sklearn.metrics.pairwise'
+
+Changes in previous version (8.2):
 1. ENHANCEMENT - Use sklearn pairwise distances from ml_distance_functions_lut
    - v2.0.8.2: Replaced manual distance calculations with sklearn.metrics.pairwise.pairwise_distances
    - Queries distance functions from ml_distance_functions_lut (builtin, sklearn.metrics.pairwise)
@@ -326,7 +332,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.8.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.8.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -13782,7 +13788,6 @@ class MLDPShell:
                 FROM ml_classifier_config_distance_functions cdf
                 JOIN ml_distance_functions_lut df ON cdf.distance_function_id = df.distance_function_id
                 WHERE cdf.config_id = %s
-                  AND df.function_type = 'builtin'
                   AND df.library_name = 'sklearn.metrics.pairwise'
                 ORDER BY df.distance_function_id
             """, (config_id,))
