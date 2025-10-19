@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_070000
-File version: 2.0.8.0
+Date Revised: 20251019_071500
+File version: 2.0.8.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,13 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 8)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (8.0):
+Changes in this version (8.1):
+1. BUGFIX - classifier-build-features junction table name
+   - v2.0.8.1: Fixed query to use ml_classifier_config_experiment_feature_sets
+   - Was using incorrect table name ml_classifier_config_feature_sets
+   - Now correctly queries experiment_feature_set_id from config
+
+Changes in previous version (8.0):
 1. PHASE 3 START - Feature Vector Construction
    - v2.0.8.0: Implemented classifier-build-features command (590 lines)
    - Builds distance-based SVM feature vectors for ALL segments
@@ -311,7 +317,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.8.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.8.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -13754,7 +13760,7 @@ class MLDPShell:
 
             cursor.execute("""
                 SELECT DISTINCT experiment_feature_set_id
-                FROM ml_classifier_config_feature_sets
+                FROM ml_classifier_config_experiment_feature_sets
                 WHERE config_id = %s
                 ORDER BY experiment_feature_set_id
             """, (config_id,))
