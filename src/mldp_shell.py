@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.2
+File version: 2.0.9.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
-Changes in this version (9.2):
-1. PHASE 4 START - SVM Training & Evaluation
+Changes in this version (9.3):
+1. PHASE 4 START - SVM Training & Evaluation (Step 2)
+   - v2.0.9.3: Implemented SVM training helper functions (~427 lines)
    - v2.0.9.2: Fixed NameError for 'force' variable in classifier-train-svm-init
    - v2.0.9.1: Renamed classifier-train-svm to classifier-train-svm-init
    - v2.0.9.0: Implementing classifier-train-svm command
@@ -345,7 +346,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -14409,6 +14410,437 @@ class MLDPShell:
             print(f"\n[ERROR] Failed to initialize SVM training: {e}")
             import traceback
             traceback.print_exc()
+
+    # ========== SVM Training Helper Functions (Phase 4) ==========
+
+    def _load_feature_vectors_from_db(self, cursor, exp_id, cls_id, dec, dtype, amp, efs, split_type):
+        """
+        Load feature vectors for a specific configuration and split
+
+        Args:
+            cursor: Database cursor
+            exp_id: Experiment ID
+            cls_id: Classifier ID
+            dec: Decimation factor
+            dtype: Data type ID
+            amp: Amplitude processing method ID
+            efs: Experiment feature set ID
+            split_type: Split type ('training', 'test', 'verification')
+
+        Returns:
+            X: Feature vectors (numpy array)
+            y: Labels (numpy array)
+        """
+        import numpy as np
+
+        # Query feature vectors from database
+        cursor.execute(f"""
+            SELECT sf.segment_id, sf.segment_label_id, sf.svm_feature_file_path
+            FROM experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features sf
+            JOIN experiment_{exp_id:03d}_classifier_{cls_id:03d}_data_splits ds
+                ON sf.segment_id = ds.segment_id
+                AND sf.decimation_factor = ds.decimation_factor
+                AND sf.data_type_id = ds.data_type_id
+            WHERE sf.decimation_factor = %s
+              AND sf.data_type_id = %s
+              AND sf.amplitude_processing_method_id = %s
+              AND sf.experiment_feature_set_id = %s
+              AND ds.split_type = %s
+              AND sf.extraction_status_id = 2
+            ORDER BY sf.segment_id
+        """, (dec, dtype, amp, efs, split_type))
+
+        rows = cursor.fetchall()
+
+        if len(rows) == 0:
+            raise ValueError(f"No feature vectors found for config: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, split={split_type}")
+
+        # Load feature vectors from .npy files
+        X = []
+        y = []
+        failed_count = 0
+
+        for segment_id, label_id, file_path in rows:
+            try:
+                features = np.load(file_path)
+                X.append(features)
+                y.append(label_id)
+            except Exception as e:
+                failed_count += 1
+                if failed_count <= 5:  # Only print first 5 errors
+                    print(f"[WARNING] Failed to load {file_path}: {e}")
+
+        if failed_count > 0:
+            print(f"[WARNING] Failed to load {failed_count}/{len(rows)} feature vectors")
+
+        if len(X) == 0:
+            raise ValueError(f"No valid feature vectors loaded for split {split_type}")
+
+        return np.array(X), np.array(y)
+
+    def _compute_multiclass_metrics(self, y_true, y_pred):
+        """
+        Compute 13-class classification metrics
+
+        Args:
+            y_true: True labels
+            y_pred: Predicted labels
+
+        Returns:
+            Dictionary of metrics
+        """
+        from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+
+        accuracy = accuracy_score(y_true, y_pred)
+
+        # Macro-averaged metrics (equal weight to each class)
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+            y_true, y_pred, average='macro', zero_division=0
+        )
+
+        # Weighted metrics (weight by class support)
+        precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            y_true, y_pred, average='weighted', zero_division=0
+        )
+
+        # Per-class metrics
+        precision_per_class, recall_per_class, f1_per_class, support_per_class = \
+            precision_recall_fscore_support(y_true, y_pred, zero_division=0)
+
+        return {
+            'accuracy': accuracy,
+            'precision_macro': precision_macro,
+            'recall_macro': recall_macro,
+            'f1_macro': f1_macro,
+            'precision_weighted': precision_weighted,
+            'recall_weighted': recall_weighted,
+            'f1_weighted': f1_weighted,
+            'per_class': {
+                'precision': precision_per_class,
+                'recall': recall_per_class,
+                'f1': f1_per_class,
+                'support': support_per_class
+            }
+        }
+
+    def _compute_binary_arc_metrics(self, y_true, y_pred, y_proba, label_categories):
+        """
+        Compute binary arc detection metrics (arc vs. non-arc)
+
+        Args:
+            y_true: True labels (13-class)
+            y_pred: Predicted labels (13-class)
+            y_proba: Prediction probabilities (13-class)
+            label_categories: Dictionary mapping label_id to category
+
+        Returns:
+            Dictionary of binary metrics
+        """
+        import numpy as np
+        from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
+                                     confusion_matrix, roc_auc_score, average_precision_score)
+
+        # Map 13-class labels to binary (1=arc, 0=non-arc)
+        y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+        y_pred_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_pred])
+
+        # Get probability for arc class (sum probabilities of all arc labels)
+        unique_labels = np.unique(y_true)
+        arc_label_indices = [i for i, label in enumerate(unique_labels)
+                             if label_categories.get(int(label), 'unknown') == 'arc']
+
+        if len(arc_label_indices) > 0 and y_proba.shape[1] >= len(unique_labels):
+            y_proba_arc = np.sum(y_proba[:, arc_label_indices], axis=1)
+        else:
+            y_proba_arc = np.zeros(len(y_true))
+
+        # Compute metrics
+        accuracy = accuracy_score(y_true_binary, y_pred_binary)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_true_binary, y_pred_binary, average='binary', zero_division=0
+        )
+
+        # Confusion matrix for specificity (TN / (TN + FP))
+        cm = confusion_matrix(y_true_binary, y_pred_binary)
+        if cm.size == 4:
+            tn, fp, fn, tp = cm.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        else:
+            tn, fp, fn, tp = 0, 0, 0, 0
+            specificity = 0.0
+
+        # ROC AUC
+        try:
+            if len(np.unique(y_true_binary)) > 1:
+                roc_auc = roc_auc_score(y_true_binary, y_proba_arc)
+            else:
+                roc_auc = np.nan
+        except Exception:
+            roc_auc = np.nan
+
+        # Precision-Recall AUC
+        try:
+            if len(np.unique(y_true_binary)) > 1:
+                pr_auc = average_precision_score(y_true_binary, y_proba_arc)
+            else:
+                pr_auc = np.nan
+        except Exception:
+            pr_auc = np.nan
+
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'specificity': specificity,
+            'roc_auc': roc_auc,
+            'pr_auc': pr_auc,
+            'confusion_matrix': (tn, fp, fn, tp),
+            'y_true': y_true_binary,
+            'y_pred': y_pred_binary,
+            'y_proba': y_proba_arc
+        }
+
+    def _save_confusion_matrices(self, y_train, y_pred_train, y_test, y_pred_test,
+                                  y_verify, y_pred_verify, label_categories,
+                                  exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+        """
+        Save confusion matrices as PNG images
+
+        Args:
+            y_train, y_pred_train: Training labels and predictions
+            y_test, y_pred_test: Test labels and predictions
+            y_verify, y_pred_verify: Verification labels and predictions
+            label_categories: Dictionary mapping label_id to category
+            exp_id: Experiment ID
+            cls_id: Classifier ID
+            dec: Decimation factor
+            dtype: Data type ID
+            amp: Amplitude method ID
+            efs: Experiment feature set ID
+            svm_params: SVM parameters dictionary
+
+        Returns:
+            Dictionary of file paths
+        """
+        import os
+        import numpy as np
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from sklearn.metrics import confusion_matrix
+
+        base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_results"
+        classifier_dir = f"classifier_{cls_id:03d}"
+        config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+        svm_dir = f"{svm_params['kernel']}_C{svm_params['C']}"
+        if svm_params.get('gamma'):
+            svm_dir += f"_G{svm_params['gamma']}"
+
+        full_dir = os.path.join(base_dir, classifier_dir, config_dir, svm_dir)
+        os.makedirs(full_dir, exist_ok=True)
+
+        paths = {}
+
+        # 13-class confusion matrices
+        for split_name, y_true, y_pred in [
+            ('train', y_train, y_pred_train),
+            ('test', y_test, y_pred_test),
+            ('verify', y_verify, y_pred_verify)
+        ]:
+            cm = confusion_matrix(y_true, y_pred)
+
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+            plt.title(f'13-Class Confusion Matrix ({split_name.title()} Set)')
+            plt.ylabel('True Label')
+            plt.xlabel('Predicted Label')
+
+            filename = f"confusion_matrix_13class_{split_name}.png"
+            filepath = os.path.join(full_dir, filename)
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+
+            paths[f'cm_13class_{split_name}'] = filepath
+
+        # Binary arc detection confusion matrices
+        for split_name, y_true, y_pred in [
+            ('train', y_train, y_pred_train),
+            ('test', y_test, y_pred_test),
+            ('verify', y_verify, y_pred_verify)
+        ]:
+            y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+            y_pred_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_pred])
+
+            cm = confusion_matrix(y_true_binary, y_pred_binary)
+
+            plt.figure(figsize=(6, 5))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Oranges',
+                       xticklabels=['Non-arc', 'Arc'],
+                       yticklabels=['Non-arc', 'Arc'])
+            plt.title(f'Binary Arc Detection ({split_name.title()} Set)')
+            plt.ylabel('True Label')
+            plt.xlabel('Predicted Label')
+
+            filename = f"confusion_matrix_binary_{split_name}.png"
+            filepath = os.path.join(full_dir, filename)
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+
+            paths[f'cm_binary_{split_name}'] = filepath
+
+        return paths
+
+    def _save_curves(self, y_train, y_proba_train, y_test, y_proba_test,
+                     y_verify, y_proba_verify, label_categories,
+                     exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+        """
+        Save ROC and Precision-Recall curves
+
+        Args:
+            y_train, y_proba_train: Training labels and probabilities
+            y_test, y_proba_test: Test labels and probabilities
+            y_verify, y_proba_verify: Verification labels and probabilities
+            label_categories: Dictionary mapping label_id to category
+            exp_id: Experiment ID
+            cls_id: Classifier ID
+            dec: Decimation factor
+            dtype: Data type ID
+            amp: Amplitude method ID
+            efs: Experiment feature set ID
+            svm_params: SVM parameters dictionary
+
+        Returns:
+            Dictionary of file paths
+        """
+        import os
+        import numpy as np
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import roc_curve, precision_recall_curve, roc_auc_score, average_precision_score
+
+        base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_results"
+        classifier_dir = f"classifier_{cls_id:03d}"
+        config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+        svm_dir = f"{svm_params['kernel']}_C{svm_params['C']}"
+        if svm_params.get('gamma'):
+            svm_dir += f"_G{svm_params['gamma']}"
+
+        full_dir = os.path.join(base_dir, classifier_dir, config_dir, svm_dir)
+        os.makedirs(full_dir, exist_ok=True)
+
+        paths = {}
+
+        # Get arc probability for each split
+        unique_labels = np.unique(y_train)
+        arc_label_indices = [i for i, label in enumerate(unique_labels)
+                             if label_categories.get(int(label), 'unknown') == 'arc']
+
+        for split_name, y_true, y_proba in [
+            ('train', y_train, y_proba_train),
+            ('test', y_test, y_proba_test),
+            ('verify', y_verify, y_proba_verify)
+        ]:
+            y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+
+            if len(arc_label_indices) > 0 and y_proba.shape[1] >= len(unique_labels):
+                y_proba_arc = np.sum(y_proba[:, arc_label_indices], axis=1)
+            else:
+                y_proba_arc = np.zeros(len(y_true))
+
+            # Skip if only one class present
+            if len(np.unique(y_true_binary)) <= 1:
+                continue
+
+            # ROC Curve
+            try:
+                fpr, tpr, _ = roc_curve(y_true_binary, y_proba_arc)
+                roc_auc = roc_auc_score(y_true_binary, y_proba_arc)
+
+                plt.figure(figsize=(8, 6))
+                plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {roc_auc:.3f})')
+                plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+                plt.xlabel('False Positive Rate')
+                plt.ylabel('True Positive Rate')
+                plt.title(f'ROC Curve - Arc Detection ({split_name.title()} Set)')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+
+                filename = f"roc_curve_binary_{split_name}.png"
+                filepath = os.path.join(full_dir, filename)
+                plt.savefig(filepath, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                paths[f'roc_binary_{split_name}'] = filepath
+            except Exception as e:
+                print(f"[WARNING] Failed to create ROC curve for {split_name}: {e}")
+
+            # Precision-Recall Curve
+            try:
+                precision, recall, _ = precision_recall_curve(y_true_binary, y_proba_arc)
+                pr_auc = average_precision_score(y_true_binary, y_proba_arc)
+
+                plt.figure(figsize=(8, 6))
+                plt.plot(recall, precision, label=f'PR Curve (AUC = {pr_auc:.3f})')
+                plt.xlabel('Recall')
+                plt.ylabel('Precision')
+                plt.title(f'Precision-Recall Curve - Arc Detection ({split_name.title()} Set)')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+
+                filename = f"pr_curve_binary_{split_name}.png"
+                filepath = os.path.join(full_dir, filename)
+                plt.savefig(filepath, dpi=150, bbox_inches='tight')
+                plt.close()
+
+                paths[f'pr_binary_{split_name}'] = filepath
+            except Exception as e:
+                print(f"[WARNING] Failed to create PR curve for {split_name}: {e}")
+
+        return paths
+
+    def _save_svm_model(self, svm_model, exp_id, cls_id, dec, dtype, amp, efs, svm_params):
+        """
+        Save trained SVM model to disk
+
+        Args:
+            svm_model: Trained SVM model
+            exp_id: Experiment ID
+            cls_id: Classifier ID
+            dec: Decimation factor
+            dtype: Data type ID
+            amp: Amplitude method ID
+            efs: Experiment feature set ID
+            svm_params: SVM parameters dictionary
+
+        Returns:
+            Model file path
+        """
+        import os
+        import joblib
+
+        base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_models"
+        classifier_dir = f"classifier_{cls_id:03d}"
+        config_dir = f"D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+
+        full_dir = os.path.join(base_dir, classifier_dir, config_dir)
+        os.makedirs(full_dir, exist_ok=True)
+
+        # Create filename
+        filename = f"svm_{svm_params['kernel']}_C{svm_params['C']}"
+        if svm_params.get('gamma'):
+            filename += f"_G{svm_params['gamma']}"
+        filename += ".pkl"
+
+        filepath = os.path.join(full_dir, filename)
+
+        # Save model
+        joblib.dump(svm_model, filepath, compress=3)
+
+        return filepath
+
 
     def cmd_exit(self, args):
         """Exit the shell"""
