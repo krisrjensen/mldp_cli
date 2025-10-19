@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.5
+File version: 2.0.9.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
-Changes in this version (9.5):
-1. PHASE 4 START - SVM Training & Evaluation (Step 4)
+Changes in this version (9.6):
+1. PHASE 4 COMPLETE - SVM Training & Evaluation (Step 5)
+   - v2.0.9.6: Implemented database insertion and summary statistics (~250 lines)
    - v2.0.9.5: Implemented classifier-train-svm main training loop (~370 lines)
    - v2.0.9.4: Implemented SVM worker function and helpers (~470 lines)
    - v2.0.9.3: Implemented SVM training helper functions (~427 lines)
@@ -348,7 +349,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.6"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15249,10 +15250,255 @@ class MLDPShell:
             print(f"[INFO] Successful: {len(results)}/{total_tasks}")
             print(f"[INFO] Failed: {failed_count}/{total_tasks}")
 
-            # Store results for database insertion (Step 5)
-            self._svm_training_results = results
-            print(f"\n[INFO] Results ready for database insertion")
-            print(f"[INFO] Next step: Implement database insertion (Step 5)")
+            # ========== Step 5: Database Insertion ==========
+            print(f"\n[INFO] Inserting {len(results)} results into database...")
+
+            inserted_count = 0
+            insert_errors = 0
+
+            for result in results:
+                try:
+                    dec, dtype, amp, efs = result['config']
+                    svm_params = result['svm_params']
+                    metrics_train = result['metrics_train']
+                    metrics_test = result['metrics_test']
+                    metrics_verify = result['metrics_verify']
+                    binary_train = result['binary_metrics_train']
+                    binary_test = result['binary_metrics_test']
+                    binary_verify = result['binary_metrics_verify']
+                    cm_paths = result['cm_paths']
+                    curve_paths = result['curve_paths']
+
+                    # Insert into svm_results table
+                    cursor.execute(f"""
+                        INSERT INTO {results_table_name}
+                            (global_classifier_id, classifier_id, decimation_factor, data_type_id,
+                             amplitude_processing_method_id, experiment_feature_set_id,
+                             svm_kernel, svm_c_parameter, svm_gamma,
+                             class_weight, random_state,
+                             train_ratio, test_ratio, verification_ratio, cv_folds,
+
+                             accuracy_train, precision_macro_train, recall_macro_train, f1_macro_train,
+                             precision_weighted_train, recall_weighted_train, f1_weighted_train,
+                             cv_mean_accuracy, cv_std_accuracy,
+
+                             accuracy_test, precision_macro_test, recall_macro_test, f1_macro_test,
+                             precision_weighted_test, recall_weighted_test, f1_weighted_test,
+
+                             accuracy_verify, precision_macro_verify, recall_macro_verify, f1_macro_verify,
+                             precision_weighted_verify, recall_weighted_verify, f1_weighted_verify,
+
+                             arc_accuracy_train, arc_precision_train, arc_recall_train, arc_f1_train,
+                             arc_specificity_train, arc_roc_auc_train, arc_pr_auc_train,
+
+                             arc_accuracy_test, arc_precision_test, arc_recall_test, arc_f1_test,
+                             arc_specificity_test, arc_roc_auc_test, arc_pr_auc_test,
+
+                             arc_accuracy_verify, arc_precision_verify, arc_recall_verify, arc_f1_verify,
+                             arc_specificity_verify, arc_roc_auc_verify, arc_pr_auc_verify,
+
+                             model_path,
+                             confusion_matrix_13class_train_path, confusion_matrix_13class_test_path,
+                             confusion_matrix_13class_verify_path,
+                             confusion_matrix_binary_train_path, confusion_matrix_binary_test_path,
+                             confusion_matrix_binary_verify_path,
+                             roc_curve_binary_train_path, roc_curve_binary_test_path,
+                             roc_curve_binary_verify_path,
+                             pr_curve_binary_train_path, pr_curve_binary_test_path,
+                             pr_curve_binary_verify_path,
+
+                             training_time_seconds, prediction_time_seconds)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s,
+                                %s,
+                                %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s,
+                                %s, %s, %s,
+                                %s, %s)
+                        RETURNING result_id
+                    """, (
+                        global_classifier_id, cls_id, dec, dtype, amp, efs,
+                        svm_params['kernel'], svm_params['C'], svm_params.get('gamma'),
+                        'balanced', 42,
+                        0.70, 0.20, 0.10, 5,
+
+                        metrics_train['accuracy'], metrics_train['precision_macro'],
+                        metrics_train['recall_macro'], metrics_train['f1_macro'],
+                        metrics_train['precision_weighted'], metrics_train['recall_weighted'],
+                        metrics_train['f1_weighted'],
+                        result['cv_mean'], result['cv_std'],
+
+                        metrics_test['accuracy'], metrics_test['precision_macro'],
+                        metrics_test['recall_macro'], metrics_test['f1_macro'],
+                        metrics_test['precision_weighted'], metrics_test['recall_weighted'],
+                        metrics_test['f1_weighted'],
+
+                        metrics_verify['accuracy'], metrics_verify['precision_macro'],
+                        metrics_verify['recall_macro'], metrics_verify['f1_macro'],
+                        metrics_verify['precision_weighted'], metrics_verify['recall_weighted'],
+                        metrics_verify['f1_weighted'],
+
+                        binary_train['accuracy'], binary_train['precision'],
+                        binary_train['recall'], binary_train['f1'],
+                        binary_train['specificity'], binary_train['roc_auc'], binary_train['pr_auc'],
+
+                        binary_test['accuracy'], binary_test['precision'],
+                        binary_test['recall'], binary_test['f1'],
+                        binary_test['specificity'], binary_test['roc_auc'], binary_test['pr_auc'],
+
+                        binary_verify['accuracy'], binary_verify['precision'],
+                        binary_verify['recall'], binary_verify['f1'],
+                        binary_verify['specificity'], binary_verify['roc_auc'], binary_verify['pr_auc'],
+
+                        result['model_path'],
+                        cm_paths.get('cm_13class_train'), cm_paths.get('cm_13class_test'),
+                        cm_paths.get('cm_13class_verify'),
+                        cm_paths.get('cm_binary_train'), cm_paths.get('cm_binary_test'),
+                        cm_paths.get('cm_binary_verify'),
+                        curve_paths.get('roc_binary_train'), curve_paths.get('roc_binary_test'),
+                        curve_paths.get('roc_binary_verify'),
+                        curve_paths.get('pr_binary_train'), curve_paths.get('pr_binary_test'),
+                        curve_paths.get('pr_binary_verify'),
+
+                        result['training_time'], result['prediction_time']
+                    ))
+
+                    result_id = cursor.fetchone()[0]
+
+                    # Insert per-class metrics for each split
+                    unique_labels = result['unique_labels']
+
+                    for split_name, metrics_key in [
+                        ('training', 'metrics_train'),
+                        ('test', 'metrics_test'),
+                        ('verification', 'metrics_verify')
+                    ]:
+                        per_class = result[metrics_key]['per_class']
+
+                        for label_idx, label_id in enumerate(unique_labels):
+                            cursor.execute(f"""
+                                INSERT INTO {per_class_table_name}
+                                    (result_id, segment_label_id, split_type,
+                                     precision, recall, f1_score, support)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                result_id, label_id, split_name,
+                                float(per_class['precision'][label_idx]),
+                                float(per_class['recall'][label_idx]),
+                                float(per_class['f1'][label_idx]),
+                                int(per_class['support'][label_idx])
+                            ))
+
+                    self.db_conn.commit()
+                    inserted_count += 1
+
+                    if inserted_count % 100 == 0:
+                        print(f"  Inserted {inserted_count}/{len(results)} results...")
+
+                except Exception as e:
+                    insert_errors += 1
+                    print(f"[ERROR] Failed to insert result for config {result['config']}: {e}")
+                    self.db_conn.rollback()
+                    continue
+
+            print(f"\n[SUCCESS] Database insertion complete!")
+            print(f"[INFO] Inserted: {inserted_count}/{len(results)}")
+            if insert_errors > 0:
+                print(f"[WARNING] Errors: {insert_errors}/{len(results)}")
+
+            # ========== Display Summary Statistics ==========
+            print(f"\n{'='*80}")
+            print(f"SVM TRAINING SUMMARY - Experiment {exp_id}, Classifier {cls_id}")
+            print(f"{'='*80}")
+
+            # Query summary statistics
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) as total_models,
+                    AVG(accuracy_test) as avg_accuracy_test,
+                    MAX(accuracy_test) as max_accuracy_test,
+                    AVG(f1_macro_test) as avg_f1_test,
+                    MAX(f1_macro_test) as max_f1_test,
+                    AVG(arc_f1_test) as avg_arc_f1_test,
+                    MAX(arc_f1_test) as max_arc_f1_test,
+                    AVG(training_time_seconds) as avg_training_time
+                FROM {results_table_name}
+            """)
+            stats = cursor.fetchone()
+
+            print(f"\nOverall Statistics:")
+            print(f"  Total models trained: {stats[0]}")
+            print(f"  Average training time: {stats[7]:.2f} seconds")
+            print(f"\n13-Class Classification (Test Set):")
+            print(f"  Average accuracy: {stats[1]:.4f}")
+            print(f"  Best accuracy:    {stats[2]:.4f}")
+            print(f"  Average F1-macro: {stats[3]:.4f}")
+            print(f"  Best F1-macro:    {stats[4]:.4f}")
+            print(f"\nBinary Arc Detection (Test Set):")
+            print(f"  Average F1:       {stats[5]:.4f}")
+            print(f"  Best F1:          {stats[6]:.4f}")
+
+            # Display top 5 models by test accuracy
+            print(f"\n{'-'*80}")
+            print(f"TOP 5 MODELS BY TEST ACCURACY (13-Class)")
+            print(f"{'-'*80}")
+
+            cursor.execute(f"""
+                SELECT
+                    decimation_factor, data_type_id, experiment_feature_set_id,
+                    svm_kernel, svm_c_parameter, svm_gamma,
+                    accuracy_test, f1_macro_test, arc_f1_test,
+                    training_time_seconds
+                FROM {results_table_name}
+                ORDER BY accuracy_test DESC
+                LIMIT 5
+            """)
+
+            print(f"{'Rank':<6}{'Dec':<6}{'Type':<6}{'EFS':<6}{'Kernel':<8}{'C':<10}{'Gamma':<10}"
+                  f"{'Acc':<8}{'F1':<8}{'Arc-F1':<8}{'Time(s)':<8}")
+            print(f"{'-'*80}")
+
+            for i, row in enumerate(cursor.fetchall(), 1):
+                dec, dtype, efs, kernel, C, gamma, acc, f1, arc_f1, train_time = row
+                gamma_str = str(gamma) if gamma else 'N/A'
+                print(f"{i:<6}{dec:<6}{dtype:<6}{efs:<6}{kernel:<8}{C:<10.2f}{gamma_str:<10}"
+                      f"{acc:<8.4f}{f1:<8.4f}{arc_f1:<8.4f}{train_time:<8.1f}")
+
+            # Display top 5 models by arc detection F1
+            print(f"\n{'-'*80}")
+            print(f"TOP 5 MODELS BY ARC DETECTION F1 (Binary)")
+            print(f"{'-'*80}")
+
+            cursor.execute(f"""
+                SELECT
+                    decimation_factor, data_type_id, experiment_feature_set_id,
+                    svm_kernel, svm_c_parameter, svm_gamma,
+                    accuracy_test, f1_macro_test, arc_f1_test,
+                    arc_precision_test, arc_recall_test, arc_roc_auc_test
+                FROM {results_table_name}
+                ORDER BY arc_f1_test DESC
+                LIMIT 5
+            """)
+
+            print(f"{'Rank':<6}{'Dec':<6}{'Type':<6}{'EFS':<6}{'Kernel':<8}{'C':<10}"
+                  f"{'Arc-F1':<8}{'Arc-P':<8}{'Arc-R':<8}{'ROC-AUC':<8}")
+            print(f"{'-'*80}")
+
+            for i, row in enumerate(cursor.fetchall(), 1):
+                dec, dtype, efs, kernel, C, gamma, acc, f1, arc_f1, arc_p, arc_r, roc_auc = row
+                print(f"{i:<6}{dec:<6}{dtype:<6}{efs:<6}{kernel:<8}{C:<10.2f}"
+                      f"{arc_f1:<8.4f}{arc_p:<8.4f}{arc_r:<8.4f}{roc_auc:<8.4f}")
+
+            print(f"\n{'='*80}")
+            print(f"[SUCCESS] SVM training and evaluation complete!")
+            print(f"[INFO] Results stored in: {results_table_name}")
+            print(f"[INFO] Per-class metrics in: {per_class_table_name}")
+            print(f"{'='*80}\n")
 
         except Exception as e:
             self.db_conn.rollback()
