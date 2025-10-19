@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_182000
-File version: 2.0.9.18
+Date Revised: 20251019_183000
+File version: 2.0.9.19
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,12 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.18):
+Changes in this version (9.19):
 1. PHASE 4 DIAGNOSTICS - Bug fixes
+   - v2.0.9.19: Fixed segment_labels table reference in classifier-test-svm-single
+                Changed FROM experiment_041_segment_labels to FROM segment_labels
+                Added WHERE active = TRUE filter
+                Matches actual database schema (global table, not per-experiment)
    - v2.0.9.18: Fixed SQL column name error in classifier-test-svm-single
                 Changed local_classifier_id to classifier_id in query
                 Matches actual ml_experiment_classifiers table schema
@@ -378,7 +382,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.18"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.19"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15661,9 +15665,11 @@ class MLDPShell:
         global_classifier_id = row[0]
 
         # Get label categories
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT label_id, category
-            FROM experiment_{exp_id:03d}_segment_labels
+            FROM segment_labels
+            WHERE active = TRUE
+            ORDER BY label_id
         """)
         label_categories = {label_id: category for label_id, category in cursor.fetchall()}
 
