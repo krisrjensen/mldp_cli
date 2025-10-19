@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.7
+File version: 2.0.9.8
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 7)
+- CHANGE: Tracks changes within current commit cycle (currently 8)
 
-Changes in this version (9.7):
-1. PHASE 4 BUGFIX - Fixed hyperparameter table queries
+Changes in this version (9.8):
+1. PHASE 4 BUGFIX - Fixed numpy type conversion in database insertion
+   - v2.0.9.8: Convert numpy types to Python types before DB insertion
    - v2.0.9.7: Fixed queries to use correct Phase 0b table names
    - v2.0.9.6: Implemented database insertion and summary statistics (~250 lines)
    - v2.0.9.5: Implemented classifier-train-svm main training loop (~370 lines)
@@ -350,7 +351,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.7"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.8"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15254,6 +15255,18 @@ class MLDPShell:
             # ========== Step 5: Database Insertion ==========
             print(f"\n[INFO] Inserting {len(results)} results into database...")
 
+            # Helper function to convert numpy types to Python types
+            def to_python_type(value):
+                """Convert numpy types to Python native types, handle NaN"""
+                import numpy as np
+                if value is None:
+                    return None
+                if isinstance(value, (np.floating, np.integer)):
+                    if np.isnan(value) or np.isinf(value):
+                        return None
+                    return float(value)
+                return value
+
             inserted_count = 0
             insert_errors = 0
 
@@ -15328,33 +15341,33 @@ class MLDPShell:
                         'balanced', 42,
                         0.70, 0.20, 0.10, 5,
 
-                        metrics_train['accuracy'], metrics_train['precision_macro'],
-                        metrics_train['recall_macro'], metrics_train['f1_macro'],
-                        metrics_train['precision_weighted'], metrics_train['recall_weighted'],
-                        metrics_train['f1_weighted'],
-                        result['cv_mean'], result['cv_std'],
+                        to_python_type(metrics_train['accuracy']), to_python_type(metrics_train['precision_macro']),
+                        to_python_type(metrics_train['recall_macro']), to_python_type(metrics_train['f1_macro']),
+                        to_python_type(metrics_train['precision_weighted']), to_python_type(metrics_train['recall_weighted']),
+                        to_python_type(metrics_train['f1_weighted']),
+                        to_python_type(result['cv_mean']), to_python_type(result['cv_std']),
 
-                        metrics_test['accuracy'], metrics_test['precision_macro'],
-                        metrics_test['recall_macro'], metrics_test['f1_macro'],
-                        metrics_test['precision_weighted'], metrics_test['recall_weighted'],
-                        metrics_test['f1_weighted'],
+                        to_python_type(metrics_test['accuracy']), to_python_type(metrics_test['precision_macro']),
+                        to_python_type(metrics_test['recall_macro']), to_python_type(metrics_test['f1_macro']),
+                        to_python_type(metrics_test['precision_weighted']), to_python_type(metrics_test['recall_weighted']),
+                        to_python_type(metrics_test['f1_weighted']),
 
-                        metrics_verify['accuracy'], metrics_verify['precision_macro'],
-                        metrics_verify['recall_macro'], metrics_verify['f1_macro'],
-                        metrics_verify['precision_weighted'], metrics_verify['recall_weighted'],
-                        metrics_verify['f1_weighted'],
+                        to_python_type(metrics_verify['accuracy']), to_python_type(metrics_verify['precision_macro']),
+                        to_python_type(metrics_verify['recall_macro']), to_python_type(metrics_verify['f1_macro']),
+                        to_python_type(metrics_verify['precision_weighted']), to_python_type(metrics_verify['recall_weighted']),
+                        to_python_type(metrics_verify['f1_weighted']),
 
-                        binary_train['accuracy'], binary_train['precision'],
-                        binary_train['recall'], binary_train['f1'],
-                        binary_train['specificity'], binary_train['roc_auc'], binary_train['pr_auc'],
+                        to_python_type(binary_train['accuracy']), to_python_type(binary_train['precision']),
+                        to_python_type(binary_train['recall']), to_python_type(binary_train['f1']),
+                        to_python_type(binary_train['specificity']), to_python_type(binary_train['roc_auc']), to_python_type(binary_train['pr_auc']),
 
-                        binary_test['accuracy'], binary_test['precision'],
-                        binary_test['recall'], binary_test['f1'],
-                        binary_test['specificity'], binary_test['roc_auc'], binary_test['pr_auc'],
+                        to_python_type(binary_test['accuracy']), to_python_type(binary_test['precision']),
+                        to_python_type(binary_test['recall']), to_python_type(binary_test['f1']),
+                        to_python_type(binary_test['specificity']), to_python_type(binary_test['roc_auc']), to_python_type(binary_test['pr_auc']),
 
-                        binary_verify['accuracy'], binary_verify['precision'],
-                        binary_verify['recall'], binary_verify['f1'],
-                        binary_verify['specificity'], binary_verify['roc_auc'], binary_verify['pr_auc'],
+                        to_python_type(binary_verify['accuracy']), to_python_type(binary_verify['precision']),
+                        to_python_type(binary_verify['recall']), to_python_type(binary_verify['f1']),
+                        to_python_type(binary_verify['specificity']), to_python_type(binary_verify['roc_auc']), to_python_type(binary_verify['pr_auc']),
 
                         result['model_path'],
                         cm_paths.get('cm_13class_train'), cm_paths.get('cm_13class_test'),
@@ -15366,7 +15379,7 @@ class MLDPShell:
                         curve_paths.get('pr_binary_train'), curve_paths.get('pr_binary_test'),
                         curve_paths.get('pr_binary_verify'),
 
-                        result['training_time'], result['prediction_time']
+                        to_python_type(result['training_time']), to_python_type(result['prediction_time'])
                     ))
 
                     result_id = cursor.fetchone()[0]
@@ -15434,15 +15447,19 @@ class MLDPShell:
 
             print(f"\nOverall Statistics:")
             print(f"  Total models trained: {stats[0]}")
-            print(f"  Average training time: {stats[7]:.2f} seconds")
-            print(f"\n13-Class Classification (Test Set):")
-            print(f"  Average accuracy: {stats[1]:.4f}")
-            print(f"  Best accuracy:    {stats[2]:.4f}")
-            print(f"  Average F1-macro: {stats[3]:.4f}")
-            print(f"  Best F1-macro:    {stats[4]:.4f}")
-            print(f"\nBinary Arc Detection (Test Set):")
-            print(f"  Average F1:       {stats[5]:.4f}")
-            print(f"  Best F1:          {stats[6]:.4f}")
+
+            if stats[0] > 0 and stats[7] is not None:
+                print(f"  Average training time: {stats[7]:.2f} seconds")
+                print(f"\n13-Class Classification (Test Set):")
+                print(f"  Average accuracy: {stats[1]:.4f}")
+                print(f"  Best accuracy:    {stats[2]:.4f}")
+                print(f"  Average F1-macro: {stats[3]:.4f}")
+                print(f"  Best F1-macro:    {stats[4]:.4f}")
+                print(f"\nBinary Arc Detection (Test Set):")
+                print(f"  Average F1:       {stats[5]:.4f}")
+                print(f"  Best F1:          {stats[6]:.4f}")
+            else:
+                print(f"\n[WARNING] No valid results to display statistics")
 
             # Display top 5 models by test accuracy
             print(f"\n{'-'*80}")
