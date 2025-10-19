@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_180000
-File version: 2.0.9.16
+Date Revised: 20251019_181000
+File version: 2.0.9.17
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,11 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 9)
 - CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (9.16):
-1. PHASE 4 DIAGNOSTICS - Added comprehensive performance instrumentation
+Changes in this version (9.17):
+1. PHASE 4 DIAGNOSTICS - Bug fix and enhancements
+   - v2.0.9.17: Fixed AttributeError in classifier-test-svm-single
+                Changed self.current_classifier to self.current_classifier_id
+                Now matches convention used by all other classifier commands
    - v2.0.9.16: Added detailed timing instrumentation to train_svm_worker
                 Added classifier-test-svm-single diagnostic command
                 Shows timing breakdown for each operation (load, train, CV, predict, save)
@@ -372,7 +375,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.16"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.17"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15555,12 +15558,12 @@ class MLDPShell:
             print("[ERROR] No experiment selected. Use 'set experiment <id>'")
             return
 
-        if not self.current_classifier:
+        if not self.current_classifier_id:
             print("[ERROR] No classifier selected. Use 'set classifier <id>'")
             return
 
         exp_id = self.current_experiment
-        cls_id = self.current_classifier
+        cls_id = self.current_classifier_id
 
         # Parse arguments
         dec = 0
