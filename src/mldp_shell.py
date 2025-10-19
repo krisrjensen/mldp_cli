@@ -4,17 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251019_100000
-File version: 2.0.9.6
+File version: 2.0.9.7
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 6)
+- CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (9.6):
-1. PHASE 4 COMPLETE - SVM Training & Evaluation (Step 5)
+Changes in this version (9.7):
+1. PHASE 4 BUGFIX - Fixed hyperparameter table queries
+   - v2.0.9.7: Fixed queries to use correct Phase 0b table names
    - v2.0.9.6: Implemented database insertion and summary statistics (~250 lines)
    - v2.0.9.5: Implemented classifier-train-svm main training loop (~370 lines)
    - v2.0.9.4: Implemented SVM worker function and helpers (~470 lines)
@@ -349,7 +350,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.6"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.7"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -15103,7 +15104,7 @@ class MLDPShell:
             # Query hyperparameter combinations from active configuration
             cursor.execute("""
                 SELECT DISTINCT decimation_factor
-                FROM ml_classifier_config_hyperparameters
+                FROM ml_classifier_config_decimation_factors
                 WHERE config_id = %s
                 ORDER BY decimation_factor
             """, (config_id,))
@@ -15111,7 +15112,7 @@ class MLDPShell:
 
             cursor.execute("""
                 SELECT DISTINCT data_type_id
-                FROM ml_classifier_config_hyperparameters
+                FROM ml_classifier_config_data_types
                 WHERE config_id = %s
                 ORDER BY data_type_id
             """, (config_id,))
@@ -15119,7 +15120,7 @@ class MLDPShell:
 
             cursor.execute("""
                 SELECT DISTINCT amplitude_processing_method_id
-                FROM ml_classifier_config_hyperparameters
+                FROM ml_classifier_config_amplitude_methods
                 WHERE config_id = %s
                 ORDER BY amplitude_processing_method_id
             """, (config_id,))
@@ -15127,7 +15128,7 @@ class MLDPShell:
 
             cursor.execute("""
                 SELECT DISTINCT experiment_feature_set_id
-                FROM ml_classifier_config_hyperparameters
+                FROM ml_classifier_config_experiment_feature_sets
                 WHERE config_id = %s
                 ORDER BY experiment_feature_set_id
             """, (config_id,))
