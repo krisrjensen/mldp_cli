@@ -537,8 +537,7 @@ class MLDPCompleter(Completer):
                                          '--amplitude-method', '--feature-set', '--help'],
 
             # Classifier SVM Training (Phase 4)
-            'classifier-train-svm': ['--workers', '--decimation-factor', '--data-type', '--feature-set',
-                                    '--kernel', '--C', '--gamma', '--force', '--help'],
+            'classifier-train-svm-init': ['--help'],
 
             # Utilities
             'verify': [],
@@ -751,7 +750,7 @@ class MLDPShell:
             # Classifier feature construction commands (Phase 3)
             'classifier-build-features': self.cmd_classifier_build_features,
             # Classifier SVM training commands (Phase 4)
-            'classifier-train-svm': self.cmd_classifier_train_svm,
+            'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
         }
     
     def get_prompt(self):
@@ -14143,31 +14142,19 @@ class MLDPShell:
             import traceback
             traceback.print_exc()
 
-    def cmd_classifier_train_svm(self, args):
+    def cmd_classifier_train_svm_init(self, args):
         """
-        Train SVM classifier using distance-based feature vectors
+        Initialize SVM training tables and validate prerequisites
 
-        Usage: classifier-train-svm [OPTIONS]
+        Usage: classifier-train-svm-init
 
-        Trains SVM on feature vectors from Phase 3 using data splits from Phase 1.
-        Evaluates on train/test/verification splits with both 13-class and binary
-        arc detection metrics.
+        Creates database tables for storing SVM training results and validates
+        that all prerequisites are met (data splits, feature vectors, etc.).
 
-        Options:
-            --workers <n>             Parallel workers (default: 7, max: 28)
-            --decimation-factor <n>   Train only this decimation factor
-            --data-type <id>          Train only this data type
-            --feature-set <id>        Train only this feature set
-            --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
-            --C <value>               SVM C parameter (default: grid search)
-            --gamma <value>           SVM gamma parameter (default: grid search)
-            --force                   Overwrite existing results
+        This is a one-time setup command. Run this before classifier-train-svm.
 
         Examples:
-            classifier-train-svm
-            classifier-train-svm --workers 21
-            classifier-train-svm --decimation-factor 0 --data-type 4
-            classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
+            classifier-train-svm-init
         """
         # Check session context
         if not self.current_experiment:
@@ -14178,95 +14165,12 @@ class MLDPShell:
             print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
             return
 
-        # Parse arguments
-        num_workers = 7
-        filter_dec = None
-        filter_dtype = None
-        filter_efs = None
-        svm_kernel = None
-        svm_C = None
-        svm_gamma = None
-        force = False
-
-        i = 0
-        while i < len(args):
-            if args[i] == '--workers':
-                if i + 1 < len(args):
-                    num_workers = int(args[i + 1])
-                    if num_workers < 1 or num_workers > 28:
-                        print("[ERROR] --workers must be between 1 and 28")
-                        return
-                    i += 2
-                else:
-                    print("[ERROR] --workers requires a value")
-                    return
-            elif args[i] == '--decimation-factor':
-                if i + 1 < len(args):
-                    filter_dec = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --decimation-factor requires a value")
-                    return
-            elif args[i] == '--data-type':
-                if i + 1 < len(args):
-                    filter_dtype = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --data-type requires a value")
-                    return
-            elif args[i] == '--feature-set':
-                if i + 1 < len(args):
-                    filter_efs = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --feature-set requires a value")
-                    return
-            elif args[i] == '--kernel':
-                if i + 1 < len(args):
-                    svm_kernel = args[i + 1]
-                    if svm_kernel not in ['linear', 'rbf', 'poly']:
-                        print("[ERROR] --kernel must be linear, rbf, or poly")
-                        return
-                    i += 2
-                else:
-                    print("[ERROR] --kernel requires a value")
-                    return
-            elif args[i] == '--C':
-                if i + 1 < len(args):
-                    svm_C = float(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --C requires a value")
-                    return
-            elif args[i] == '--gamma':
-                if i + 1 < len(args):
-                    svm_gamma = args[i + 1]
-                    # Can be 'scale', 'auto', or numeric
-                    if svm_gamma not in ['scale', 'auto']:
-                        try:
-                            svm_gamma = float(svm_gamma)
-                        except ValueError:
-                            print("[ERROR] --gamma must be 'scale', 'auto', or numeric")
-                            return
-                    i += 2
-                else:
-                    print("[ERROR] --gamma requires a value")
-                    return
-            elif args[i] == '--force':
-                force = True
-                i += 1
-            else:
-                print(f"[ERROR] Unknown option: {args[i]}")
-                return
-
         try:
             cursor = self.db_conn.cursor()
             exp_id = self.current_experiment
             cls_id = self.current_classifier_id
 
-            print(f"\n[INFO] Training SVM for Experiment {exp_id}, Classifier {cls_id}")
-            print(f"[INFO] Using {num_workers} parallel workers")
-            print(f"[INFO] This process may take 30-60 minutes...")
+            print(f"\n[INFO] Initializing SVM training for Experiment {exp_id}, Classifier {cls_id}")
 
             # Get global_classifier_id
             cursor.execute("""
