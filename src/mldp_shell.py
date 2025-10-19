@@ -3,17 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_040000
-File version: 2.0.7.3
+Date Revised: 20251019_050000
+File version: 2.0.7.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
-Changes in this version (7.3):
+Changes in this version (7.4):
+1. SCHEMA FIX - Updated reference_segments table schema
+   - v2.0.7.4: Made feature_set_feature_id NULLABLE (was NOT NULL)
+   - Removed feature_set_feature_id from UNIQUE constraint
+   - Added classifier-drop-references-table command to recreate table
+   - UNIQUE constraint now: (segment_label_id, decimation_factor,
+     data_type_id, amplitude_processing_method_id, experiment_feature_set_id)
+   - Allows NULL feature_set_feature_id for multi-feature feature_sets
+
+Changes in previous version (7.3):
 1. CRITICAL ARCHITECTURE FIX - Feature concatenation within feature_sets
    - v2.0.7.3: Rewrote loop structure to properly handle multi-feature feature_sets
    - REMOVED inner loop over individual features
@@ -12218,6 +12227,140 @@ class MLDPShell:
             import traceback
             traceback.print_exc()
 
+    def cmd_classifier_drop_references_table(self, args):
+        """
+        Drop and recreate reference_segments table with updated schema
+
+        Usage: classifier-drop-references-table --confirm
+
+        Drops experiment_{exp}_classifier_{cls}_reference_segments table and
+        recreates it with the current schema. Use this to fix schema issues
+        after code updates.
+
+        WARNING: This will DELETE all existing reference segments!
+
+        Options:
+            --confirm    Required confirmation flag
+
+        Example:
+            classifier-drop-references-table --confirm
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        confirm = '--confirm' in args
+
+        if not confirm:
+            print("[ERROR] This command requires --confirm flag")
+            print("WARNING: This will DELETE all existing reference segments!")
+            return
+
+        exp_id = self.current_experiment['experiment_id']
+        cls_id = self.current_classifier_id
+        table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Check if table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (table_name,))
+
+            table_exists = cursor.fetchone()[0]
+
+            if table_exists:
+                print(f"[INFO] Dropping table {table_name}...")
+                cursor.execute(f"DROP TABLE {table_name} CASCADE")
+                self.db_conn.commit()
+                print(f"[SUCCESS] Table dropped")
+
+            # Recreate table with updated schema
+            print(f"[INFO] Creating table {table_name} with updated schema...")
+
+            create_sql = f"""
+            CREATE TABLE {table_name} (
+                reference_id BIGSERIAL PRIMARY KEY,
+                global_classifier_id INTEGER NOT NULL,
+                classifier_id INTEGER NOT NULL DEFAULT {cls_id},
+                segment_label_id INTEGER NOT NULL,
+                decimation_factor INTEGER NOT NULL,
+                data_type_id INTEGER NOT NULL,
+                amplitude_processing_method_id INTEGER NOT NULL,
+                experiment_feature_set_id BIGINT NOT NULL,
+                feature_set_feature_id BIGINT,
+                reference_segment_id INTEGER NOT NULL,
+                centroid_x DOUBLE PRECISION,
+                centroid_y DOUBLE PRECISION,
+                distance_to_centroid DOUBLE PRECISION,
+                total_segments_in_class INTEGER,
+                pca_explained_variance_ratio_1 DOUBLE PRECISION,
+                pca_explained_variance_ratio_2 DOUBLE PRECISION,
+                created_at TIMESTAMP DEFAULT NOW(),
+
+                UNIQUE (segment_label_id, decimation_factor, data_type_id,
+                        amplitude_processing_method_id, experiment_feature_set_id),
+
+                FOREIGN KEY (global_classifier_id)
+                    REFERENCES ml_experiment_classifiers(global_classifier_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (segment_label_id)
+                    REFERENCES segment_labels(label_id),
+                FOREIGN KEY (reference_segment_id)
+                    REFERENCES data_segments(segment_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (data_type_id)
+                    REFERENCES ml_data_types_lut(data_type_id),
+                FOREIGN KEY (amplitude_processing_method_id)
+                    REFERENCES ml_amplitude_normalization_lut(method_id),
+                FOREIGN KEY (experiment_feature_set_id)
+                    REFERENCES ml_experiments_feature_sets(experiment_feature_set_id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_global
+                ON {table_name}(global_classifier_id);
+
+            CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_label
+                ON {table_name}(segment_label_id);
+
+            CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_dec
+                ON {table_name}(decimation_factor);
+
+            CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_dtype
+                ON {table_name}(data_type_id);
+
+            CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_refs_segment
+                ON {table_name}(reference_segment_id);
+            """
+
+            cursor.execute(create_sql)
+            self.db_conn.commit()
+            print(f"[SUCCESS] Table {table_name} created with updated schema")
+            print(f"\nSchema changes:")
+            print(f"  - feature_set_feature_id: NOW NULLABLE (was NOT NULL)")
+            print(f"  - UNIQUE constraint: Removed feature_set_feature_id")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to drop/recreate table: {e}")
+            import traceback
+            traceback.print_exc()
+
     def cmd_classifier_select_references(self, args):
         """
         Select reference segments for each class using PCA + centroid analysis
@@ -12386,7 +12529,7 @@ class MLDPShell:
                     data_type_id INTEGER NOT NULL,
                     amplitude_processing_method_id INTEGER NOT NULL,
                     experiment_feature_set_id BIGINT NOT NULL,
-                    feature_set_feature_id BIGINT NOT NULL,
+                    feature_set_feature_id BIGINT,
                     reference_segment_id INTEGER NOT NULL,
                     centroid_x DOUBLE PRECISION,
                     centroid_y DOUBLE PRECISION,
@@ -12397,8 +12540,7 @@ class MLDPShell:
                     created_at TIMESTAMP DEFAULT NOW(),
 
                     UNIQUE (segment_label_id, decimation_factor, data_type_id,
-                            amplitude_processing_method_id, experiment_feature_set_id,
-                            feature_set_feature_id),
+                            amplitude_processing_method_id, experiment_feature_set_id),
 
                     FOREIGN KEY (global_classifier_id)
                         REFERENCES ml_experiment_classifiers(global_classifier_id)
