@@ -3,17 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_012000
-File version: 2.0.6.33
+Date Revised: 20251019_013000
+File version: 2.0.6.34
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 6)
-- CHANGE: Tracks changes within current commit cycle (currently 33)
+- CHANGE: Tracks changes within current commit cycle (currently 34)
 
-Changes in this version (6.33):
+Changes in this version (6.34):
+1. CRITICAL FIX - Command Registration
+   - v2.0.6.34: Registered Phase 0b and Phase 1 commands in command handler
+   - Added missing Phase 0b commands: classifier-config-list, classifier-config-activate,
+     classifier-config-show, classifier-create-feature-builder-table
+   - Added Phase 1 commands: classifier-create-splits-table, classifier-assign-splits,
+     classifier-show-splits
+   - Commands were implemented but not registered in self.commands dictionary
+
+Changes in previous version (6.33):
 1. PHASE 1 COMPLETION - Data Split Assignment System
    - v2.0.6.33: Updated help system with Phase 1 documentation
    - Added comprehensive help for all three split commands
@@ -166,7 +175,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.6.33"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.6.34"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -535,6 +544,14 @@ class MLDPShell:
             'classifier-config-create': self.cmd_classifier_config_create,
             'classifier-config-add-feature-sets': self.cmd_classifier_config_add_feature_sets,
             'classifier-config-delete': self.cmd_classifier_config_delete,
+            'classifier-config-list': self.cmd_classifier_config_list,
+            'classifier-config-activate': self.cmd_classifier_config_activate,
+            'classifier-config-show': self.cmd_classifier_config_show,
+            'classifier-create-feature-builder-table': self.cmd_classifier_create_feature_builder_table,
+            # Classifier data split assignment commands (Phase 1)
+            'classifier-create-splits-table': self.cmd_classifier_create_splits_table,
+            'classifier-assign-splits': self.cmd_classifier_assign_splits,
+            'classifier-show-splits': self.cmd_classifier_show_splits,
         }
     
     def get_prompt(self):
