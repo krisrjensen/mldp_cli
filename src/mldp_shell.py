@@ -3,17 +3,27 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_030000
-File version: 2.0.7.1
+Date Revised: 20251019_032000
+File version: 2.0.7.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 7)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (7.1):
+Changes in this version (7.2):
+1. CRITICAL FIX - Feature file amplitude column selection
+   - v2.0.7.2: Fixed feature loading to select correct amplitude method column
+   - Feature files have shape (n_samples, 2) with TWO amplitude methods:
+     * Column 0: amplitude_method_id 1 (minmax normalization)
+     * Column 1: amplitude_method_id 2 (zscore normalization)
+   - Now selects correct column: column_idx = amplitude_method_id - 1
+   - Prevents PCA "Found array with dim 3" error
+   - Each feature vector is now 1D: (8192,) instead of (8192, 2)
+
+Changes in previous version (7.1):
 1. PHASE 2 START - Reference Segment Selection
    - v2.0.7.1: Implemented classifier-select-references command
    - Uses PCA dimensionality reduction to 2D + centroid analysis
@@ -223,7 +233,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.7.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.7.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -12499,7 +12509,13 @@ class MLDPShell:
                                     for segment_id, feature_file_path in segments:
                                         try:
                                             features = np.load(feature_file_path)
-                                            feature_vectors.append(features)
+                                            # Feature files have shape (n_samples, 2) where:
+                                            # column 0 = amplitude_method_id 1 (minmax)
+                                            # column 1 = amplitude_method_id 2 (zscore)
+                                            # Select the correct column based on amplitude_method_id
+                                            column_idx = amplitude_method_id - 1
+                                            features_1d = features[:, column_idx]  # Shape: (n_samples,)
+                                            feature_vectors.append(features_1d)
                                             segment_ids.append(segment_id)
                                         except Exception as e:
                                             print(f"  [WARNING] Failed to load {feature_file_path}: {e}")
