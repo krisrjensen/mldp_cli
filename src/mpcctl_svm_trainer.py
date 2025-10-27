@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_230800
-File version: 1.0.0.7
-Description: MPCCTL-based SVM training with file-based worker coordination and static progress bars
+Date Revised: 20251027_234200
+File version: 1.0.0.8
+Description: MPCCTL-based SVM training with round-robin task distribution for balanced workload
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -781,19 +781,20 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
             log("ERROR: No configs to process")
             return
 
-        # Distribute configs among workers
-        configs_per_worker = total_configs // workers_count
+        # Distribute configs among workers using round-robin for balanced workload
+        # Round-robin ensures each worker gets a mix of all parameter combinations
+        # (avoids assigning all slow dec=0 tasks to first workers)
+        worker_assignments = [[] for _ in range(workers_count)]
+
+        for idx, config_line in enumerate(all_configs):
+            worker_idx = idx % workers_count
+            worker_assignments[worker_idx].append(config_line)
+
+        log(f"Round-robin distribution: {len(all_configs)} configs across {workers_count} workers")
+
         worker_pids = []
-
         for worker_idx in range(workers_count):
-            # Assign configs to this worker
-            start_idx = worker_idx * configs_per_worker
-            if worker_idx == workers_count - 1:
-                end_idx = total_configs
-            else:
-                end_idx = start_idx + configs_per_worker
-
-            assigned_configs = all_configs[start_idx:end_idx]
+            assigned_configs = worker_assignments[worker_idx]
 
             # Generate unique worker ID (use incremental IDs, actual PID will be different)
             worker_id = 10000 + worker_idx
@@ -809,7 +810,15 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
             done_file.touch()  # Create empty done file
 
             worker_pids.append(worker_id)
-            log(f"Worker {worker_id}: {len(assigned_configs)} configs assigned")
+
+            # Log distribution stats for this worker
+            # Extract decimation factors from assigned configs
+            dec_counts = {}
+            for config_line in assigned_configs:
+                dec = config_line.split()[0]
+                dec_counts[dec] = dec_counts.get(dec, 0) + 1
+            dec_summary = ', '.join([f"dec{k}={v}" for k, v in sorted(dec_counts.items())])
+            log(f"Worker {worker_id}: {len(assigned_configs)} configs ({dec_summary})")
 
         # Update state file with total tasks
         state['progress']['total_tasks'] = total_configs
