@@ -3,19 +3,32 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251027_160000
-File version: 2.0.9.31
+Date Revised: 20251027_170000
+File version: 2.0.10.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 31)
+- COMMIT: Increments on every git commit/push (currently 10)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (9.31):
-1. PHASE 4 CRITICAL FIX - Removed excessive worker print statements
-   - v2.0.9.31: Removed all print/flush statements from train_svm_worker function
+Changes in this version (10.1):
+1. PHASE 4 ARCHITECTURAL CHANGE - Implemented MPCCTL architecture for SVM training
+   - v2.0.10.1: COMPLETE REWRITE of classifier-train-svm using mpcctl architecture
+                Created new module: mpcctl_svm_trainer.py with file-based worker coordination
+                Manager creates .mpcctl/ directory with {PID}_todo.dat and {PID}_done.dat files
+                Workers read from todo files, write completed configs to done files
+                Workers insert results directly to database with autocommit=True
+                Main process monitors progress via .mpcctl_state.json file
+                Live progress monitor with ETA, rate, and progress bar
+                Detachable monitoring (Ctrl+C to detach, training continues)
+                Resumable: Workers skip already-completed configs in done files
+                NO DEADLOCKS: File-based coordination prevents pipe buffer issues
+                Based on proven mpcctl_cli_distance_calculator.py pattern
+   - Previous issues (v2.0.9.31-32): Pool.imap_unordered caused deadlocks
+                Workers spinning CPU or hanging after 8-24 tasks
+                Pipe buffer overflow from worker output or large return values
                 Worker debug output was filling multiprocessing pipe buffers
                 Caused deadlock after 8-24 tasks with main process blocked in imap_unordered
                 Workers now run silently, main process reports all progress
@@ -706,6 +719,9 @@ def train_svm_worker(config_tuple):
     Returns:
         Dictionary with training results and metrics
     """
+    import warnings
+    warnings.filterwarnings('ignore')  # Suppress all warnings to prevent pipe buffer overflow
+
     import numpy as np
     import psycopg2
     import time
@@ -16673,351 +16689,136 @@ class MLDPShell:
                 'user': 'kjensen'
             }
 
-            # Add db_config, label_categories, exp_id, cls_id, global_classifier_id to work items
-            work_items = [
-                (dec, dtype, amp, efs, svm_params, db_config, label_categories, exp_id, cls_id, global_classifier_id)
-                for dec, dtype, amp, efs, svm_params in work_queue
-            ]
-
-            # Train SVMs in parallel
-            print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
-            print("[INFO] This may take 30-90 minutes depending on dataset size and workers...")
-            print("[INFO] Showing progress after EACH task completion for better visibility\n")
-
-            from multiprocessing import Pool
+            # Use MPCCTL architecture for deadlock-free parallel training
+            import multiprocessing as mp
+            from pathlib import Path
+            import sys
             import time
+            import json
 
-            start_time = time.time()
-            results = []
-            failed_count = 0
-            last_update = start_time
+            # Add mpcctl_svm_trainer to path
+            sys.path.insert(0, str(Path(__file__).parent))
+            from mpcctl_svm_trainer import manager_process
 
-            with Pool(processes=num_workers) as pool:
-                for i, result in enumerate(pool.imap_unordered(train_svm_worker, work_items), 1):
-                    task_complete_time = time.time()
+            # Prepare mpcctl base directory
+            mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{exp_id:03d}')
 
-                    if result['success']:
-                        results.append(result)
-                        dec, dtype, amp, efs = result['config']
-                        kernel = result['svm_params']['kernel']
-                        acc = result['metrics_test']['accuracy']
+            # Prepare filter dictionary
+            filters = {
+                'decimation_factor': filter_dec,
+                'data_type': filter_dtype,
+                'amplitude_method': filter_amp,
+                'experiment_feature_set': filter_efs,
+                'svm_kernel': svm_kernel,
+                'svm_C': svm_C
+            }
 
-                        # Show timing breakdown if available
-                        if 'timings' in result and 'data_sizes' in result:
-                            t = result['timings']
-                            ds = result['data_sizes']
-                            print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
-                                  f"kernel={kernel}, test_acc={acc:.4f}")
-                            print(f"  Timing: LOAD={t.get('feature_load_total', 0):.1f}s, "
-                                  f"SVM={t.get('svm_training', 0):.1f}s, "
-                                  f"CV={t.get('cross_validation', 0):.1f}s, "
-                                  f"PRED={t.get('prediction', 0):.1f}s, "
-                                  f"SAVE={t.get('save_model', 0) + t.get('save_visualizations', 0):.1f}s, "
-                                  f"TOTAL={t.get('total', 0):.1f}s")
-                            print(f"  Data: train={ds.get('train_samples', 0)}, "
-                                  f"test={ds.get('test_samples', 0)}, "
-                                  f"verify={ds.get('verify_samples', 0)}, "
-                                  f"features={ds.get('feature_dim', 0)}")
-                        else:
-                            print(f"[TASK {i}/{total_tasks}] SUCCESS: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, "
-                                  f"kernel={kernel}, test_acc={acc:.4f}")
-                    else:
-                        failed_count += 1
-                        dec, dtype, amp, efs = result['config']
-                        print(f"[TASK {i}/{total_tasks}] FAILED: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
-                        print(f"  Error: {result['error']}")
-                        if 'timings' in result:
-                            print(f"  Failed after {result['timings'].get('total', 0):.1f}s")
+            # Create log file
+            log_file = None  # Could add --log flag later
 
-                    # Progress summary every 10 tasks or on completion
-                    if i % 10 == 0 or i == total_tasks:
-                        elapsed = time.time() - start_time
-                        rate = i / elapsed if elapsed > 0 else 0
-                        remaining = (total_tasks - i) / rate if rate > 0 else 0
-                        avg_time = elapsed / i if i > 0 else 0
-                        print(f"\n[SUMMARY] {i}/{total_tasks} ({i/total_tasks*100:.1f}%) | "
-                              f"Success: {len(results)} | Failed: {failed_count}")
-                        print(f"          Elapsed: {elapsed/60:.1f}m | Avg/task: {avg_time:.1f}s | "
-                              f"Remaining: ~{remaining/60:.1f}m\n")
+            print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
+            print("[INFO] Using MPCCTL architecture for deadlock-proof training")
+            print(f"[INFO] Expected tasks: {total_tasks}")
+            print(f"[INFO] Estimated time: {total_tasks * 1.5 / num_workers / 60:.1f} - {total_tasks * 3.0 / num_workers / 60:.1f} minutes\n")
 
-            total_time = time.time() - start_time
+            # Spawn manager process in background
+            manager = mp.Process(
+                target=manager_process,
+                args=(exp_id, cls_id, num_workers, db_config, filters, log_file, True, mpcctl_base_dir)
+            )
+            manager.start()
 
-            print(f"\n[SUCCESS] Training complete!")
-            print(f"[INFO] Total time: {total_time/60:.1f} minutes")
-            print(f"[INFO] Successful: {len(results)}/{total_tasks}")
-            print(f"[INFO] Failed: {failed_count}/{total_tasks}")
+            print(f"[INFO] Training manager started in background (PID {manager.pid})")
+            print(f"[INFO] Waiting for initialization...\n")
 
-            # ========== Step 5: Database Insertion ==========
-            print(f"\n[INFO] Inserting {len(results)} results into database...")
+            # Wait for state file to be created
+            state_file = mpcctl_base_dir / ".mpcctl_state.json"
+            max_wait = 10
+            waited = 0
+            while not state_file.exists() and waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
 
-            # Helper function to convert numpy types to Python types
-            def to_python_type(value):
-                """Convert numpy types to Python native types, handle NaN"""
-                import numpy as np
-                if value is None:
-                    return None
-                if isinstance(value, (np.floating, np.integer)):
-                    if np.isnan(value) or np.isinf(value):
-                        return None
-                    return float(value)
-                return value
+            if not state_file.exists():
+                print("[WARNING] State file not created yet")
+                print("Training is running in background")
+                print(f"Monitor progress: cat {state_file}")
+                return
 
-            inserted_count = 0
-            insert_errors = 0
+            print("[INFO] Live Progress Monitor (Press Ctrl+C to detach)\n")
 
-            for result in results:
-                try:
-                    dec, dtype, amp, efs = result['config']
-                    svm_params = result['svm_params']
-                    metrics_train = result['metrics_train']
-                    metrics_test = result['metrics_test']
-                    metrics_verify = result['metrics_verify']
-                    binary_train = result['binary_metrics_train']
-                    binary_test = result['binary_metrics_test']
-                    binary_verify = result['binary_metrics_verify']
-                    cm_paths = result['cm_paths']
-                    curve_paths = result['curve_paths']
+            # Live progress monitoring loop (similar to mpcctl_distance_insert pattern)
+            try:
+                last_status = None
+                last_completed = 0
+                while True:
+                    try:
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
 
-                    # Insert into svm_results table
-                    cursor.execute(f"""
-                        INSERT INTO {results_table_name}
-                            (global_classifier_id, classifier_id, decimation_factor, data_type_id,
-                             amplitude_processing_method_id, experiment_feature_set_id,
-                             svm_kernel, svm_c_parameter, svm_gamma,
-                             class_weight, random_state,
-                             train_ratio, test_ratio, verification_ratio, cv_folds,
+                        progress = state.get('progress', {})
+                        status = state.get('status', 'unknown')
+                        completed = progress.get('completed_tasks', 0)
 
-                             accuracy_train, precision_macro_train, recall_macro_train, f1_macro_train,
-                             precision_weighted_train, recall_weighted_train, f1_weighted_train,
-                             cv_mean_accuracy, cv_std_accuracy,
+                        # Only show update if progress changed
+                        if completed != last_completed or status != last_status:
+                            # Progress bar
+                            bar_width = 50
+                            percent = progress.get('percent_complete', 0)
+                            filled = int(bar_width * percent / 100)
+                            bar = '█' * filled + '░' * (bar_width - filled)
 
-                             accuracy_test, precision_macro_test, recall_macro_test, f1_macro_test,
-                             precision_weighted_test, recall_weighted_test, f1_weighted_test,
+                            # Format ETA
+                            eta_seconds = progress.get('estimated_time_remaining_seconds', 0)
+                            eta_minutes = eta_seconds // 60
+                            eta_seconds_remainder = eta_seconds % 60
 
-                             accuracy_verify, precision_macro_verify, recall_macro_verify, f1_macro_verify,
-                             precision_weighted_verify, recall_weighted_verify, f1_weighted_verify,
+                            # Clear previous output (move cursor up and clear lines)
+                            if last_status is not None:
+                                print('\033[6A\033[J', end='')
 
-                             arc_accuracy_train, arc_precision_train, arc_recall_train, arc_f1_train,
-                             arc_specificity_train, arc_roc_auc_train, arc_pr_auc_train,
+                            # Display progress
+                            print(f"Status: {status}")
+                            print(f"[{bar}] {percent:.1f}%")
+                            print(f"Completed: {completed:,} / {progress.get('total_tasks', 0):,} configs")
+                            print(f"Rate: {progress.get('configs_per_second', 0):.3f} configs/sec")
+                            print(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                            print(f"Workers: {state.get('workers_count', 0)}")
 
-                             arc_accuracy_test, arc_precision_test, arc_recall_test, arc_f1_test,
-                             arc_specificity_test, arc_roc_auc_test, arc_pr_auc_test,
+                            last_status = status
+                            last_completed = completed
 
-                             arc_accuracy_verify, arc_precision_verify, arc_recall_verify, arc_f1_verify,
-                             arc_specificity_verify, arc_roc_auc_verify, arc_pr_auc_verify,
+                        # Check if completed or stopped
+                        if status in ['completed', 'stopped', 'killed']:
+                            print(f"\n[SUCCESS] Training {status}")
+                            break
 
-                             model_path,
-                             confusion_matrix_13class_train_path, confusion_matrix_13class_test_path,
-                             confusion_matrix_13class_verify_path,
-                             confusion_matrix_binary_train_path, confusion_matrix_binary_test_path,
-                             confusion_matrix_binary_verify_path,
-                             roc_curve_binary_train_path, roc_curve_binary_test_path,
-                             roc_curve_binary_verify_path,
-                             pr_curve_binary_train_path, pr_curve_binary_test_path,
-                             pr_curve_binary_verify_path,
+                        time.sleep(1.0)
 
-                             training_time_seconds, prediction_time_seconds)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s,
-                                %s,
-                                %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s,
-                                %s, %s, %s,
-                                %s, %s)
-                        RETURNING result_id
-                    """, (
-                        global_classifier_id, cls_id, dec, dtype, amp, efs,
-                        svm_params['kernel'], svm_params['C'], svm_params.get('gamma'),
-                        'balanced', 42,
-                        0.70, 0.20, 0.10, 5,
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        # State file might be being written
+                        time.sleep(0.5)
+                        continue
 
-                        to_python_type(metrics_train['accuracy']), to_python_type(metrics_train['precision_macro']),
-                        to_python_type(metrics_train['recall_macro']), to_python_type(metrics_train['f1_macro']),
-                        to_python_type(metrics_train['precision_weighted']), to_python_type(metrics_train['recall_weighted']),
-                        to_python_type(metrics_train['f1_weighted']),
-                        to_python_type(result['cv_mean']), to_python_type(result['cv_std']),
+            except KeyboardInterrupt:
+                print(f"\n\n[INFO] Detached from monitoring (training continues in background)")
+                print(f"\n[INFO] Monitor progress:")
+                print(f"   cat {state_file}")
+                print(f"\n[INFO] Check .mpcctl folder:")
+                print(f"   ls -la {mpcctl_base_dir}/.mpcctl/")
+                return
 
-                        to_python_type(metrics_test['accuracy']), to_python_type(metrics_test['precision_macro']),
-                        to_python_type(metrics_test['recall_macro']), to_python_type(metrics_test['f1_macro']),
-                        to_python_type(metrics_test['precision_weighted']), to_python_type(metrics_test['recall_weighted']),
-                        to_python_type(metrics_test['f1_weighted']),
+            # Wait for manager to finish
+            manager.join(timeout=5)
+            if manager.is_alive():
+                print("[WARNING] Manager still running, detaching...")
 
-                        to_python_type(metrics_verify['accuracy']), to_python_type(metrics_verify['precision_macro']),
-                        to_python_type(metrics_verify['recall_macro']), to_python_type(metrics_verify['f1_macro']),
-                        to_python_type(metrics_verify['precision_weighted']), to_python_type(metrics_verify['recall_weighted']),
-                        to_python_type(metrics_verify['f1_weighted']),
-
-                        to_python_type(binary_train['accuracy']), to_python_type(binary_train['precision']),
-                        to_python_type(binary_train['recall']), to_python_type(binary_train['f1']),
-                        to_python_type(binary_train['specificity']), to_python_type(binary_train['roc_auc']), to_python_type(binary_train['pr_auc']),
-
-                        to_python_type(binary_test['accuracy']), to_python_type(binary_test['precision']),
-                        to_python_type(binary_test['recall']), to_python_type(binary_test['f1']),
-                        to_python_type(binary_test['specificity']), to_python_type(binary_test['roc_auc']), to_python_type(binary_test['pr_auc']),
-
-                        to_python_type(binary_verify['accuracy']), to_python_type(binary_verify['precision']),
-                        to_python_type(binary_verify['recall']), to_python_type(binary_verify['f1']),
-                        to_python_type(binary_verify['specificity']), to_python_type(binary_verify['roc_auc']), to_python_type(binary_verify['pr_auc']),
-
-                        result['model_path'],
-                        cm_paths.get('cm_13class_train'), cm_paths.get('cm_13class_test'),
-                        cm_paths.get('cm_13class_verify'),
-                        cm_paths.get('cm_binary_train'), cm_paths.get('cm_binary_test'),
-                        cm_paths.get('cm_binary_verify'),
-                        curve_paths.get('roc_binary_train'), curve_paths.get('roc_binary_test'),
-                        curve_paths.get('roc_binary_verify'),
-                        curve_paths.get('pr_binary_train'), curve_paths.get('pr_binary_test'),
-                        curve_paths.get('pr_binary_verify'),
-
-                        to_python_type(result['training_time']), to_python_type(result['prediction_time'])
-                    ))
-
-                    result_id = cursor.fetchone()[0]
-
-                    # Insert per-class metrics for each split
-                    unique_labels = result['unique_labels']
-
-                    for split_name, metrics_key in [
-                        ('training', 'metrics_train'),
-                        ('test', 'metrics_test'),
-                        ('verification', 'metrics_verify')
-                    ]:
-                        per_class = result[metrics_key]['per_class']
-
-                        for label_idx, label_id in enumerate(unique_labels):
-                            cursor.execute(f"""
-                                INSERT INTO {per_class_table_name}
-                                    (result_id, segment_label_id, split_type,
-                                     precision, recall, f1_score, support)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """, (
-                                result_id, label_id, split_name,
-                                float(per_class['precision'][label_idx]),
-                                float(per_class['recall'][label_idx]),
-                                float(per_class['f1'][label_idx]),
-                                int(per_class['support'][label_idx])
-                            ))
-
-                    self.db_conn.commit()
-                    inserted_count += 1
-
-                    if inserted_count % 100 == 0:
-                        print(f"  Inserted {inserted_count}/{len(results)} results...")
-
-                except Exception as e:
-                    insert_errors += 1
-                    print(f"[ERROR] Failed to insert result for config {result['config']}: {e}")
-                    self.db_conn.rollback()
-                    continue
-
-            print(f"\n[SUCCESS] Database insertion complete!")
-            print(f"[INFO] Inserted: {inserted_count}/{len(results)}")
-            if insert_errors > 0:
-                print(f"[WARNING] Errors: {insert_errors}/{len(results)}")
-
-            # ========== Display Summary Statistics ==========
-            print(f"\n{'='*80}")
-            print(f"SVM TRAINING SUMMARY - Experiment {exp_id}, Classifier {cls_id}")
-            print(f"{'='*80}")
-
-            # Query summary statistics
-            cursor.execute(f"""
-                SELECT
-                    COUNT(*) as total_models,
-                    AVG(accuracy_test) as avg_accuracy_test,
-                    MAX(accuracy_test) as max_accuracy_test,
-                    AVG(f1_macro_test) as avg_f1_test,
-                    MAX(f1_macro_test) as max_f1_test,
-                    AVG(arc_f1_test) as avg_arc_f1_test,
-                    MAX(arc_f1_test) as max_arc_f1_test,
-                    AVG(training_time_seconds) as avg_training_time
-                FROM {results_table_name}
-            """)
-            stats = cursor.fetchone()
-
-            print(f"\nOverall Statistics:")
-            print(f"  Total models trained: {stats[0]}")
-
-            if stats[0] > 0 and stats[7] is not None:
-                print(f"  Average training time: {stats[7]:.2f} seconds")
-                print(f"\n13-Class Classification (Test Set):")
-                print(f"  Average accuracy: {stats[1]:.4f}")
-                print(f"  Best accuracy:    {stats[2]:.4f}")
-                print(f"  Average F1-macro: {stats[3]:.4f}")
-                print(f"  Best F1-macro:    {stats[4]:.4f}")
-                print(f"\nBinary Arc Detection (Test Set):")
-                print(f"  Average F1:       {stats[5]:.4f}")
-                print(f"  Best F1:          {stats[6]:.4f}")
-            else:
-                print(f"\n[WARNING] No valid results to display statistics")
-
-            # Display top 5 models by test accuracy
-            print(f"\n{'-'*80}")
-            print(f"TOP 5 MODELS BY TEST ACCURACY (13-Class)")
-            print(f"{'-'*80}")
-
-            cursor.execute(f"""
-                SELECT
-                    decimation_factor, data_type_id, experiment_feature_set_id,
-                    svm_kernel, svm_c_parameter, svm_gamma,
-                    accuracy_test, f1_macro_test, arc_f1_test,
-                    training_time_seconds
-                FROM {results_table_name}
-                ORDER BY accuracy_test DESC
-                LIMIT 5
-            """)
-
-            print(f"{'Rank':<6}{'Dec':<6}{'Type':<6}{'EFS':<6}{'Kernel':<8}{'C':<10}{'Gamma':<10}"
-                  f"{'Acc':<8}{'F1':<8}{'Arc-F1':<8}{'Time(s)':<8}")
-            print(f"{'-'*80}")
-
-            for i, row in enumerate(cursor.fetchall(), 1):
-                dec, dtype, efs, kernel, C, gamma, acc, f1, arc_f1, train_time = row
-                gamma_str = str(gamma) if gamma else 'N/A'
-                print(f"{i:<6}{dec:<6}{dtype:<6}{efs:<6}{kernel:<8}{C:<10.2f}{gamma_str:<10}"
-                      f"{acc:<8.4f}{f1:<8.4f}{arc_f1:<8.4f}{train_time:<8.1f}")
-
-            # Display top 5 models by arc detection F1
-            print(f"\n{'-'*80}")
-            print(f"TOP 5 MODELS BY ARC DETECTION F1 (Binary)")
-            print(f"{'-'*80}")
-
-            cursor.execute(f"""
-                SELECT
-                    decimation_factor, data_type_id, experiment_feature_set_id,
-                    svm_kernel, svm_c_parameter, svm_gamma,
-                    accuracy_test, f1_macro_test, arc_f1_test,
-                    arc_precision_test, arc_recall_test, arc_roc_auc_test
-                FROM {results_table_name}
-                ORDER BY arc_f1_test DESC
-                LIMIT 5
-            """)
-
-            print(f"{'Rank':<6}{'Dec':<6}{'Type':<6}{'EFS':<6}{'Kernel':<8}{'C':<10}"
-                  f"{'Arc-F1':<8}{'Arc-P':<8}{'Arc-R':<8}{'ROC-AUC':<8}")
-            print(f"{'-'*80}")
-
-            for i, row in enumerate(cursor.fetchall(), 1):
-                dec, dtype, efs, kernel, C, gamma, acc, f1, arc_f1, arc_p, arc_r, roc_auc = row
-                print(f"{i:<6}{dec:<6}{dtype:<6}{efs:<6}{kernel:<8}{C:<10.2f}"
-                      f"{arc_f1:<8.4f}{arc_p:<8.4f}{arc_r:<8.4f}{roc_auc:<8.4f}")
-
-            print(f"\n{'='*80}")
-            print(f"[SUCCESS] SVM training and evaluation complete!")
-            print(f"[INFO] Results stored in: {results_table_name}")
-            print(f"[INFO] Per-class metrics in: {per_class_table_name}")
-            print(f"{'='*80}\n")
+            cursor.close()
 
         except Exception as e:
-            self.db_conn.rollback()
-            print(f"\n[ERROR] Failed to train SVM: {e}")
             import traceback
-            traceback.print_exc()
+            print(f"[ERROR] {e}")
+            print(traceback.format_exc())
 
     def cmd_classifier_clean_svm_results(self, args):
         """
