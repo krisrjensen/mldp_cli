@@ -3,18 +3,55 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251019_185000
-File version: 2.0.9.21
+Date Revised: 20251027_160000
+File version: 2.0.9.31
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 9)
-- CHANGE: Tracks changes within current commit cycle (currently 15)
+- CHANGE: Tracks changes within current commit cycle (currently 31)
 
-Changes in this version (9.21):
-1. PHASE 4 CRITICAL FIX - Disabled cross-validation to fix 46-hour training time
+Changes in this version (9.31):
+1. PHASE 4 CRITICAL FIX - Removed excessive worker print statements
+   - v2.0.9.31: Removed all print/flush statements from train_svm_worker function
+                Worker debug output was filling multiprocessing pipe buffers
+                Caused deadlock after 8-24 tasks with main process blocked in imap_unordered
+                Workers now run silently, main process reports all progress
+   - v2.0.9.30: Fixed THIRD location of decimation query (line 16580)
+                Previous fix in v2.0.9.27 only fixed 2 of 3 occurrences
+                NOW FIXED: classifier-train-svm will query all 7 decimations
+                Training should now work for all decimation factors
+   - v2.0.9.29: Added DEBUG prints to show actual hyperparameter values
+                Investigating why training uses IDs (1,4,5,6,7,8,9) instead of factors (0,7,15,31,63,127,255)
+   - v2.0.9.28: Fixed classifier-train-svm WHERE clause column names
+                Changed kernel_type -> svm_kernel
+                Changed C_parameter -> svm_c_parameter
+                Fixes "column does not exist" error in existing results check
+   - v2.0.9.27: Fixed decimation_factor storage in features and training
+                Config stores decimation IDs (1,4,5,6,7,8,9)
+                Now converts to actual factors (0,7,15,31,63,127,255) via JOIN with LUT
+                Fixes bug where only decimation 7 was trained (ID 7 = factor 63)
+                BREAKING: Must rebuild features and retrain models for classifier 2
+   - v2.0.9.26: Fixed classifier-train-svm existing results check
+                Now properly filters by --amplitude-method, --decimation-factor, etc.
+                Allows training different amplitude methods without --force
+                Also fixed force deletion to respect filters
+   - v2.0.9.25: Fixed classifier-build-features existing feature check
+                Now properly filters by --amplitude-method, --decimation-factor, etc.
+                Allows building different amplitude methods without --force
+   - v2.0.9.24: Fixed classifier-build-features to properly support raw features
+                Fixed filename generation to use vector_dims (not hardcoded)
+                Fixed database INSERT to use vector_dims and num_metrics variables
+                Raw features now work correctly (tested with include_original=True)
+   - v2.0.9.23: Added classifier-copy-reference-segments command
+                Fixed classifier-build-features to check feature_builder settings
+                Only requires reference segments when computing distances
+                Supports raw features only (no distance calculations)
+   - v2.0.9.22: Added classifier-copy-splits-from command to copy train/test/verify
+                splits from one classifier to another for fair model comparison
+                Ensures identical data splits when comparing different classifiers
    - v2.0.9.21: DISABLED 5-fold cross-validation in train_svm_worker
                 CV was taking 20-30 minutes per task (5x training time!)
                 With 84 tasks, CV alone would take 28-42 hours
@@ -392,7 +429,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.9.21"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.9.30"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -577,12 +614,14 @@ class MLDPCompleter(Completer):
             'classifier-create-splits-table': ['--force', '--help'],
             'classifier-assign-splits': ['--train-ratio', '--test-ratio', '--verification-ratio',
                                         '--seed', '--force', '--help'],
+            'classifier-copy-splits-from': ['--source-classifier', '--force', '--help'],
             'classifier-show-splits': ['--decimation-factor', '--data-type', '--detail', '--help'],
 
             # Classifier Reference Selection (Phase 2)
             'classifier-drop-references-table': ['--confirm', '--help'],
             'classifier-select-references': ['--force', '--plot', '--plot-dir', '--min-segments',
                                             '--pca-components', '--help'],
+            'classifier-copy-reference-segments': ['--source-classifier', '--force', '--help'],
             'classifier-plot-references': ['--plot-dir', '--pca-components', '--help'],
             'classifier-plot-reference-features': ['--plot-dir', '--decimation-factor', '--data-type',
                                                    '--amplitude-method', '--feature-set', '--help'],
@@ -691,54 +730,35 @@ def train_svm_worker(config_tuple):
 
     try:
         # CHECKPOINT 1: Database connection
-        print(f"[WORKER] Starting: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}")
         t_db_start = time.time()
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
         timings['db_connection'] = time.time() - t_db_start
-        print(f"[WORKER] DB connected in {timings['db_connection']:.2f}s")
 
         # CHECKPOINT 2: Feature loading (split by train/test/verify)
-        print(f"[WORKER] Loading training features...")
-        import sys
-        sys.stdout.flush()
         t_load_train_start = time.time()
         X_train, y_train = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'training'
         )
         timings['feature_load_train'] = time.time() - t_load_train_start
-        print(f"[WORKER] Loaded {len(X_train)} training samples in {timings['feature_load_train']:.2f}s")
-        sys.stdout.flush()
 
-        print(f"[WORKER] Loading test features...")
-        sys.stdout.flush()
         t_load_test_start = time.time()
         X_test, y_test = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'test'
         )
         timings['feature_load_test'] = time.time() - t_load_test_start
-        print(f"[WORKER] Loaded {len(X_test)} test samples in {timings['feature_load_test']:.2f}s")
-        sys.stdout.flush()
 
-        print(f"[WORKER] Loading verification features...")
-        sys.stdout.flush()
         t_load_verify_start = time.time()
         X_verify, y_verify = load_feature_vectors_from_db_worker(
             cursor, exp_id, cls_id, dec, dtype, amp, efs, 'verification'
         )
         timings['feature_load_verify'] = time.time() - t_load_verify_start
-        print(f"[WORKER] Loaded {len(X_verify)} verification samples in {timings['feature_load_verify']:.2f}s")
-        sys.stdout.flush()
 
         timings['feature_load_total'] = (timings['feature_load_train'] +
                                           timings['feature_load_test'] +
                                           timings['feature_load_verify'])
-        print(f"[WORKER] Total feature loading: {timings['feature_load_total']:.2f}s")
-        sys.stdout.flush()
 
         # CHECKPOINT 3: SVM training
-        print(f"[WORKER] Training SVM (kernel={svm_params['kernel']}, C={svm_params['C']})...")
-        sys.stdout.flush()
         t_svm_start = time.time()
 
         # Build SVM parameters
@@ -758,15 +778,11 @@ def train_svm_worker(config_tuple):
         svm.fit(X_train, y_train)
         training_time = time.time() - t_svm_start
         timings['svm_training'] = training_time
-        print(f"[WORKER] SVM training complete in {training_time:.2f}s")
-        sys.stdout.flush()
 
         # CHECKPOINT 4: Cross-validation (SKIPPED - too slow with large datasets)
         # Cross-validation was taking 20-30 minutes per task (5x the training time)
         # With 84 tasks, this would add 28-42 hours to total training time
         # We have a separate test set, so CV is not necessary
-        print(f"[WORKER] Skipping cross-validation (use test set for evaluation)")
-        sys.stdout.flush()
         cv_mean = 0.0
         cv_std = 0.0
         timings['cross_validation'] = 0.0
@@ -1353,10 +1369,12 @@ class MLDPShell:
             # Classifier data split assignment commands (Phase 1)
             'classifier-create-splits-table': self.cmd_classifier_create_splits_table,
             'classifier-assign-splits': self.cmd_classifier_assign_splits,
+            'classifier-copy-splits-from': self.cmd_classifier_copy_splits_from,
             'classifier-show-splits': self.cmd_classifier_show_splits,
             # Classifier reference selection commands (Phase 2)
             'classifier-drop-references-table': self.cmd_classifier_drop_references_table,
             'classifier-select-references': self.cmd_classifier_select_references,
+            'classifier-copy-reference-segments': self.cmd_classifier_copy_reference_segments,
             'classifier-plot-references': self.cmd_classifier_plot_references,
             'classifier-plot-reference-features': self.cmd_classifier_plot_reference_features,
             # Classifier feature construction commands (Phase 3)
@@ -2835,6 +2853,10 @@ class MLDPShell:
     [--seed <int>]                Random seed (default: 42)
     [--force]                     Overwrite existing splits
 
+  classifier-copy-splits-from     Copy splits from another classifier
+    --source-classifier <id>      Source classifier ID (required)
+    [--force]                     Overwrite existing splits
+
   classifier-show-splits          Display split statistics
     [--decimation-factor <n>]     Filter by decimation factor
     [--data-type <id>]            Filter by data type
@@ -2843,6 +2865,7 @@ class MLDPShell:
   Examples:
     classifier-create-splits-table
     classifier-assign-splits --train-ratio 0.80 --test-ratio 0.15 --verification-ratio 0.05
+    classifier-copy-splits-from --source-classifier 1
     classifier-show-splits --detail
 
 📊 REFERENCE SELECTION (Phase 2):
@@ -2853,8 +2876,13 @@ class MLDPShell:
     [--min-segments <n>]         Minimum segments per class (default: 5)
     [--pca-components <n>]       PCA components (default: 2)
 
+  classifier-copy-reference-segments  Copy reference segments from another classifier
+    --source-classifier <id>     Source classifier ID (required)
+    [--force]                    Overwrite existing references
+
   Examples:
     classifier-select-references --plot
+    classifier-copy-reference-segments --source-classifier 1
     classifier-select-references --plot --plot-dir ~/plots/exp041_cls001_refs
 
 🔧 FEATURE CONSTRUCTION (Phase 3):
@@ -10946,8 +10974,8 @@ class MLDPShell:
 
             global_classifier_id = result[0]
 
-            # STEP 2: Build config table name and create if needed
-            table_name = f"experiment_{self.current_experiment:03d}_classifier_{self.current_classifier_id:03d}_config"
+            # STEP 2: Use global ml_classifier_configs table (junction tables reference this)
+            table_name = "ml_classifier_configs"
 
             cursor.execute("""
                 SELECT EXISTS (
@@ -11102,10 +11130,10 @@ class MLDPShell:
             # STEP 8: Insert config row
             cursor.execute(f"""
                 INSERT INTO {table_name}
-                    (global_classifier_id, experiment_id, config_name, is_active, notes)
-                VALUES (%s, %s, %s, %s, %s)
+                    (global_classifier_id, experiment_id, classifier_id, config_name, is_active, notes)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING config_id
-            """, (global_classifier_id, self.current_experiment, config_name, set_active, notes))
+            """, (global_classifier_id, self.current_experiment, self.current_classifier_id, config_name, set_active, notes))
 
             config_id = cursor.fetchone()[0]
 
@@ -13291,6 +13319,171 @@ class MLDPShell:
             import traceback
             traceback.print_exc()
 
+    def cmd_classifier_copy_splits_from(self, args):
+        """
+        Copy data splits from another classifier to current classifier
+
+        Usage: classifier-copy-splits-from --source-classifier <id> [OPTIONS]
+
+        Copies all split assignments (training/test/verification) from a source
+        classifier to the current classifier. This ensures fair comparison when
+        evaluating different models on identical train/test splits.
+
+        Options:
+            --source-classifier <id>  Source classifier ID (required)
+            --force                   Overwrite existing splits if present
+
+        Examples:
+            classifier-copy-splits-from --source-classifier 1
+            classifier-copy-splits-from --source-classifier 1 --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        source_classifier_id = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--source-classifier' and i + 1 < len(args):
+                try:
+                    source_classifier_id = int(args[i + 1])
+                except ValueError:
+                    print(f"[ERROR] Invalid source classifier ID: {args[i + 1]}")
+                    return
+                i += 2
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_copy_splits_from.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if source_classifier_id is None:
+            print("[ERROR] --source-classifier is required")
+            print("Usage: classifier-copy-splits-from --source-classifier <id> [--force]")
+            return
+
+        if source_classifier_id == self.current_classifier_id:
+            print("[ERROR] Source and destination classifiers cannot be the same")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            src_cls_id = source_classifier_id
+            dest_cls_id = self.current_classifier_id
+
+            source_table = f"experiment_{exp_id:03d}_classifier_{src_cls_id:03d}_data_splits"
+            dest_table = f"experiment_{exp_id:03d}_classifier_{dest_cls_id:03d}_data_splits"
+
+            # Check if source table exists
+            cursor.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+            """, (source_table,))
+
+            if not cursor.fetchone():
+                print(f"[ERROR] Source table {source_table} does not exist")
+                print(f"  Classifier {src_cls_id} has no splits table")
+                return
+
+            # Check if source table has data
+            cursor.execute(f"SELECT COUNT(*) FROM {source_table}")
+            source_count = cursor.fetchone()[0]
+
+            if source_count == 0:
+                print(f"[ERROR] Source table {source_table} is empty")
+                print(f"  Classifier {src_cls_id} has no splits assigned")
+                return
+
+            # Check if destination table exists
+            cursor.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+            """, (dest_table,))
+
+            if not cursor.fetchone():
+                print(f"[ERROR] Destination table {dest_table} does not exist")
+                print(f"  Run 'classifier-create-splits-table' first")
+                return
+
+            # Check if destination already has splits
+            cursor.execute(f"SELECT COUNT(*) FROM {dest_table}")
+            dest_count = cursor.fetchone()[0]
+
+            if dest_count > 0 and not force:
+                print(f"[ERROR] Destination table {dest_table} already has {dest_count} splits")
+                print("  Use --force to overwrite existing splits")
+                return
+
+            # Clear existing splits if force is enabled
+            if dest_count > 0:
+                cursor.execute(f"DELETE FROM {dest_table}")
+                print(f"[INFO] Cleared {dest_count} existing splits from destination table")
+
+            # Copy splits from source to destination
+            cursor.execute(f"""
+                INSERT INTO {dest_table}
+                    (classifier_id, segment_id, split_type, random_seed,
+                     decimation_factor, data_type_id, is_experiment_data, segment_label_id)
+                SELECT
+                    %s as classifier_id, segment_id, split_type, random_seed,
+                    decimation_factor, data_type_id, is_experiment_data, segment_label_id
+                FROM {source_table}
+            """, (dest_cls_id,))
+
+            copied_count = cursor.rowcount
+
+            # Get split statistics
+            cursor.execute(f"""
+                SELECT split_type, COUNT(*)
+                FROM {dest_table}
+                GROUP BY split_type
+                ORDER BY split_type
+            """)
+            split_stats = cursor.fetchall()
+
+            # Get random seed
+            cursor.execute(f"""
+                SELECT DISTINCT random_seed
+                FROM {dest_table}
+                LIMIT 1
+            """)
+            seed_result = cursor.fetchone()
+            random_seed = seed_result[0] if seed_result else None
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Copied splits from classifier {src_cls_id} to classifier {dest_cls_id}")
+            print(f"  Total segments copied: {copied_count}")
+            print(f"  Random seed: {random_seed}")
+            print("\nSplit distribution:")
+            for split_type, count in split_stats:
+                print(f"  - {split_type}: {count}")
+
+            print("\nNext steps:")
+            print("  classifier-show-splits - View split statistics")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to copy splits: {e}")
+            import traceback
+            traceback.print_exc()
+
     def cmd_classifier_show_splits(self, args):
         """
         Display split statistics for current classifier
@@ -13738,10 +13931,11 @@ class MLDPShell:
 
             # Query hyperparameters from active configuration
             cursor.execute("""
-                SELECT DISTINCT decimation_factor
-                FROM ml_classifier_config_decimation_factors
-                WHERE config_id = %s
-                ORDER BY decimation_factor
+                SELECT DISTINCT lut.decimation_factor
+                FROM ml_classifier_config_decimation_factors cfg
+                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
+                WHERE cfg.config_id = %s
+                ORDER BY lut.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -14134,6 +14328,161 @@ class MLDPShell:
             print("Install with: pip install numpy scikit-learn matplotlib")
         except Exception as e:
             print(f"\n[ERROR] Failed to select references: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_classifier_copy_reference_segments(self, args):
+        """
+        Copy reference segments from another classifier to current classifier
+
+        Usage: classifier-copy-reference-segments --source-classifier <id> [OPTIONS]
+
+        Copies all reference segment assignments from a source classifier to the
+        current classifier. This is useful when multiple classifiers should use
+        the same reference segments for fair comparison.
+
+        Options:
+            --source-classifier <id>  Source classifier ID (required)
+            --force                   Overwrite existing references if present
+
+        Examples:
+            classifier-copy-reference-segments --source-classifier 1
+            classifier-copy-reference-segments --source-classifier 1 --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        source_classifier_id = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--source-classifier' and i + 1 < len(args):
+                try:
+                    source_classifier_id = int(args[i + 1])
+                except ValueError:
+                    print(f"[ERROR] Invalid source classifier ID: {args[i + 1]}")
+                    return
+                i += 2
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--help':
+                print(self.cmd_classifier_copy_reference_segments.__doc__)
+                return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        if source_classifier_id is None:
+            print("[ERROR] --source-classifier is required")
+            print("Usage: classifier-copy-reference-segments --source-classifier <id> [--force]")
+            return
+
+        if source_classifier_id == self.current_classifier_id:
+            print("[ERROR] Source and destination classifiers cannot be the same")
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            src_cls_id = source_classifier_id
+            dest_cls_id = self.current_classifier_id
+
+            source_table = f"experiment_{exp_id:03d}_classifier_{src_cls_id:03d}_reference_segments"
+            dest_table = f"experiment_{exp_id:03d}_classifier_{dest_cls_id:03d}_reference_segments"
+
+            # Check if source table exists
+            cursor.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+            """, (source_table,))
+
+            if not cursor.fetchone():
+                print(f"[ERROR] Source table {source_table} does not exist")
+                print(f"  Classifier {src_cls_id} has no reference segments table")
+                return
+
+            # Check if source table has data
+            cursor.execute(f"SELECT COUNT(*) FROM {source_table}")
+            source_count = cursor.fetchone()[0]
+
+            if source_count == 0:
+                print(f"[ERROR] Source table {source_table} is empty")
+                print(f"  Classifier {src_cls_id} has no reference segments")
+                return
+
+            # Check if destination table exists, create if not
+            cursor.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+            """, (dest_table,))
+
+            if not cursor.fetchone():
+                print(f"[INFO] Creating destination table {dest_table}...")
+
+                # Create destination table with same structure as source
+                cursor.execute(f"""
+                    CREATE TABLE {dest_table} (LIKE {source_table} INCLUDING ALL)
+                """)
+                self.db_conn.commit()
+                print(f"  ✓ Table created")
+
+            # Check if destination already has references
+            cursor.execute(f"SELECT COUNT(*) FROM {dest_table}")
+            dest_count = cursor.fetchone()[0]
+
+            if dest_count > 0 and not force:
+                print(f"[ERROR] Destination table {dest_table} already has {dest_count} references")
+                print("  Use --force to overwrite existing references")
+                return
+
+            # Clear existing references if force is enabled
+            if dest_count > 0:
+                cursor.execute(f"DELETE FROM {dest_table}")
+                print(f"[INFO] Cleared {dest_count} existing references from destination table")
+
+            # Copy references from source to destination
+            cursor.execute(f"""
+                INSERT INTO {dest_table}
+                SELECT * FROM {source_table}
+            """)
+
+            copied_count = cursor.rowcount
+
+            # Get reference statistics
+            cursor.execute(f"""
+                SELECT segment_label_id, COUNT(*)
+                FROM {dest_table}
+                GROUP BY segment_label_id
+                ORDER BY segment_label_id
+            """)
+            ref_stats = cursor.fetchall()
+
+            self.db_conn.commit()
+
+            print(f"\n[SUCCESS] Copied reference segments from classifier {src_cls_id} to classifier {dest_cls_id}")
+            print(f"  Total references copied: {copied_count}")
+            print("\nReference distribution by class:")
+            for label_id, count in ref_stats:
+                print(f"  - Class {label_id}: {count} references")
+
+            print("\nNext steps:")
+            print("  classifier-build-features - Build feature vectors using these references")
+
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to copy reference segments: {e}")
             import traceback
             traceback.print_exc()
 
@@ -14811,28 +15160,59 @@ class MLDPShell:
 
             print(f"[INFO] Using configuration: {config_name}")
 
-            # Check reference segments exist
-            ref_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+            # Query feature builder settings
             cursor.execute("""
-                SELECT EXISTS (
-                    SELECT FROM pg_tables
-                    WHERE schemaname = 'public'
-                    AND tablename = %s
-                )
-            """, (ref_table_name,))
-            if not cursor.fetchone()[0]:
-                print(f"[ERROR] Reference segments table does not exist: {ref_table_name}")
-                print("  Run 'classifier-select-references' first")
+                SELECT include_original_feature,
+                       compute_baseline_distances_inter,
+                       compute_baseline_distances_intra,
+                       statistical_features,
+                       external_function
+                FROM ml_classifier_feature_builder
+                WHERE config_id = %s
+            """, (config_id,))
+            fb_row = cursor.fetchone()
+
+            if not fb_row:
+                print("[ERROR] No feature builder configuration found")
+                print("  Run 'classifier-config-set-feature-builder' first")
                 return
 
-            cursor.execute(f"SELECT COUNT(*) FROM {ref_table_name}")
-            ref_count = cursor.fetchone()[0]
-            if ref_count == 0:
-                print("[ERROR] No reference segments found")
-                print("  Run 'classifier-select-references' first")
-                return
+            include_original, compute_inter, compute_intra, statistical, external = fb_row
 
-            print(f"[INFO] Found {ref_count} reference segments")
+            print(f"[INFO] Feature builder settings:")
+            print(f"  - Include original features: {include_original}")
+            print(f"  - Compute inter-class distances: {compute_inter}")
+            print(f"  - Compute intra-class distances: {compute_intra}")
+
+            # Check if distances are needed
+            needs_references = compute_inter or compute_intra
+
+            # Only check for reference segments if distances are needed
+            if needs_references:
+                ref_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_reference_segments"
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM pg_tables
+                        WHERE schemaname = 'public'
+                        AND tablename = %s
+                    )
+                """, (ref_table_name,))
+                if not cursor.fetchone()[0]:
+                    print(f"[ERROR] Reference segments table does not exist: {ref_table_name}")
+                    print("  Run 'classifier-select-references' first")
+                    return
+
+                cursor.execute(f"SELECT COUNT(*) FROM {ref_table_name}")
+                ref_count = cursor.fetchone()[0]
+                if ref_count == 0:
+                    print("[ERROR] No reference segments found")
+                    print("  Run 'classifier-select-references' first")
+                    return
+
+                print(f"[INFO] Found {ref_count} reference segments")
+            else:
+                ref_table_name = None
+                print(f"[INFO] Using raw features only (no distance calculations)")
 
             # Create svm_features table if needed
             features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
@@ -14907,32 +15287,16 @@ class MLDPShell:
                 self.db_conn.commit()
                 print(f"[SUCCESS] Table {features_table_name} created")
 
-            # Check for existing features
-            if table_exists and not force:
-                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name}")
-                existing_count = cursor.fetchone()[0]
-                if existing_count > 0:
-                    print(f"\n[WARNING] {existing_count} existing feature vectors found")
-                    print("Use --force to overwrite existing vectors")
-                    return
-
-            if force and table_exists:
-                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name}")
-                existing_count = cursor.fetchone()[0]
-                if existing_count > 0:
-                    print(f"[INFO] Deleting {existing_count} existing feature vectors...")
-                    cursor.execute(f"DELETE FROM {features_table_name}")
-                    self.db_conn.commit()
-
             print("[INFO] Feature construction starting...")
             print(f"[INFO] Batch size: {batch_size} segments")
 
             # Query hyperparameters from active configuration
             cursor.execute("""
-                SELECT DISTINCT decimation_factor
-                FROM ml_classifier_config_decimation_factors
-                WHERE config_id = %s
-                ORDER BY decimation_factor
+                SELECT DISTINCT lut.decimation_factor
+                FROM ml_classifier_config_decimation_factors cfg
+                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
+                WHERE cfg.config_id = %s
+                ORDER BY lut.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -14960,25 +15324,31 @@ class MLDPShell:
             """, (config_id,))
             experiment_feature_sets = [row[0] for row in cursor.fetchall()]
 
-            # Query distance functions from configuration
-            cursor.execute("""
-                SELECT DISTINCT df.distance_function_id, df.function_name,
-                       df.pairwise_metric_name, df.display_name
-                FROM ml_classifier_config_distance_functions cdf
-                JOIN ml_distance_functions_lut df ON cdf.distance_function_id = df.distance_function_id
-                WHERE cdf.config_id = %s
-                  AND df.library_name = 'sklearn.metrics.pairwise'
-                ORDER BY df.distance_function_id
-            """, (config_id,))
-            distance_functions = cursor.fetchall()
+            # Query distance functions from configuration (only if computing distances)
+            distance_functions = []
+            metric_names = []
 
-            if len(distance_functions) != 4:
-                print(f"[ERROR] Expected 4 distance functions (L1, L2, Cosine, Pearson), found {len(distance_functions)}")
-                return
+            if needs_references:
+                cursor.execute("""
+                    SELECT DISTINCT df.distance_function_id, df.function_name,
+                           df.pairwise_metric_name, df.display_name
+                    FROM ml_classifier_config_distance_functions cdf
+                    JOIN ml_distance_functions_lut df ON cdf.distance_function_id = df.distance_function_id
+                    WHERE cdf.config_id = %s
+                      AND df.library_name = 'sklearn.metrics.pairwise'
+                    ORDER BY df.distance_function_id
+                """, (config_id,))
+                distance_functions = cursor.fetchall()
 
-            # Extract metric names for pairwise_distances
-            metric_names = [df[2] for df in distance_functions]  # pairwise_metric_name
-            print(f"[INFO] Distance metrics: {[df[3] for df in distance_functions]}")  # display_name
+                if len(distance_functions) != 4:
+                    print(f"[ERROR] Expected 4 distance functions (L1, L2, Cosine, Pearson), found {len(distance_functions)}")
+                    return
+
+                # Extract metric names for pairwise_distances
+                metric_names = [df[2] for df in distance_functions]  # pairwise_metric_name
+                print(f"[INFO] Distance metrics: {[df[3] for df in distance_functions]}")  # display_name
+            else:
+                print(f"[INFO] Distance metrics: None (using raw features only)")
 
             # Apply filters if specified
             if filter_dec is not None:
@@ -14996,6 +15366,68 @@ class MLDPShell:
             print(f"  Amplitude methods: {amplitude_methods}")
             print(f"  Feature sets: {experiment_feature_sets}")
 
+            # Check for existing features with current filters
+            if table_exists and not force:
+                # Build WHERE clause for filters
+                where_conditions = []
+                params = []
+
+                if filter_dec is not None:
+                    where_conditions.append("decimation_factor = %s")
+                    params.append(filter_dec)
+                if filter_dtype is not None:
+                    where_conditions.append("data_type_id = %s")
+                    params.append(filter_dtype)
+                if filter_amp is not None:
+                    where_conditions.append("amplitude_processing_method_id = %s")
+                    params.append(filter_amp)
+                if filter_efs is not None:
+                    where_conditions.append("experiment_feature_set_id = %s")
+                    params.append(filter_efs)
+
+                where_clause = ""
+                if where_conditions:
+                    where_clause = "WHERE " + " AND ".join(where_conditions)
+
+                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name} {where_clause}", params)
+                existing_count = cursor.fetchone()[0]
+
+                if existing_count > 0:
+                    print(f"\n[WARNING] {existing_count} existing feature vectors found for specified filters")
+                    print("Use --force to overwrite existing vectors")
+                    return
+
+            # Delete existing features if force is enabled
+            if force and table_exists:
+                # Build WHERE clause for filters
+                where_conditions = []
+                params = []
+
+                if filter_dec is not None:
+                    where_conditions.append("decimation_factor = %s")
+                    params.append(filter_dec)
+                if filter_dtype is not None:
+                    where_conditions.append("data_type_id = %s")
+                    params.append(filter_dtype)
+                if filter_amp is not None:
+                    where_conditions.append("amplitude_processing_method_id = %s")
+                    params.append(filter_amp)
+                if filter_efs is not None:
+                    where_conditions.append("experiment_feature_set_id = %s")
+                    params.append(filter_efs)
+
+                where_clause = ""
+                if where_conditions:
+                    where_clause = "WHERE " + " AND ".join(where_conditions)
+
+                cursor.execute(f"SELECT COUNT(*) FROM {features_table_name} {where_clause}", params)
+                existing_count = cursor.fetchone()[0]
+
+                if existing_count > 0:
+                    print(f"[INFO] Deleting {existing_count} existing feature vectors...")
+                    cursor.execute(f"DELETE FROM {features_table_name} {where_clause}", params)
+                    self.db_conn.commit()
+
             # Query all segment labels (classes)
             cursor.execute(f"""
                 SELECT DISTINCT segment_label_id
@@ -15006,7 +15438,11 @@ class MLDPShell:
             num_classes = len(segment_labels)
 
             print(f"\n[INFO] Found {num_classes} classes: {segment_labels}")
-            print(f"[INFO] Feature vector dimensions: {num_classes} classes × 4 metrics = {num_classes * 4}")
+
+            if needs_references:
+                print(f"[INFO] Feature vector dimensions: {num_classes} classes × 4 metrics = {num_classes * 4}")
+            else:
+                print(f"[INFO] Feature vector dimensions: Variable (depends on feature set)")
 
             # Query all segments to process
             cursor.execute(f"""
@@ -15078,70 +15514,77 @@ class MLDPShell:
 
                             print(f"Features in set: {feature_names}")
 
-                            # Query reference segments for this configuration
-                            cursor.execute(f"""
-                                SELECT segment_label_id, reference_segment_id
-                                FROM {ref_table_name}
-                                WHERE decimation_factor = %s
-                                  AND data_type_id = %s
-                                  AND amplitude_processing_method_id = %s
-                                  AND experiment_feature_set_id = %s
-                                ORDER BY segment_label_id
-                            """, (dec, dtype, amp, efs))
-                            reference_segments = cursor.fetchall()
+                            # Initialize reference data structures
+                            reference_segments = []
+                            reference_map = {}
+                            reference_features = {}
 
-                            if len(reference_segments) != num_classes:
-                                print(f"[WARNING] Expected {num_classes} reference segments, found {len(reference_segments)}")
-                                print(f"[SKIP] Skipping this configuration")
-                                continue
+                            # Only load reference segments if computing distances
+                            if needs_references:
+                                # Query reference segments for this configuration
+                                cursor.execute(f"""
+                                    SELECT segment_label_id, reference_segment_id
+                                    FROM {ref_table_name}
+                                    WHERE decimation_factor = %s
+                                      AND data_type_id = %s
+                                      AND amplitude_processing_method_id = %s
+                                      AND experiment_feature_set_id = %s
+                                    ORDER BY segment_label_id
+                                """, (dec, dtype, amp, efs))
+                                reference_segments = cursor.fetchall()
 
-                            # Build reference_map: {label_id: reference_segment_id}
-                            reference_map = {label_id: ref_seg_id for label_id, ref_seg_id in reference_segments}
+                                if len(reference_segments) != num_classes:
+                                    print(f"[WARNING] Expected {num_classes} reference segments, found {len(reference_segments)}")
+                                    print(f"[SKIP] Skipping this configuration")
+                                    continue
 
-                            print(f"Reference segments: {len(reference_segments)}")
+                                # Build reference_map: {label_id: reference_segment_id}
+                                reference_map = {label_id: ref_seg_id for label_id, ref_seg_id in reference_segments}
 
-                            # Load ALL reference features (once per configuration)
-                            reference_features = {}  # {label_id: concatenated_feature_vector}
+                                print(f"Reference segments: {len(reference_segments)}")
 
-                            for label_id, ref_segment_id in reference_segments:
-                                ref_feature_parts = []
+                                # Load ALL reference features (once per configuration)
+                                for label_id, ref_segment_id in reference_segments:
+                                    ref_feature_parts = []
 
-                                for feature_id in feature_ids:
-                                    cursor.execute(f"""
-                                        SELECT feature_file_path
-                                        FROM experiment_{exp_id:03d}_feature_fileset
-                                        WHERE segment_id = %s
-                                          AND decimation_factor = %s
-                                          AND data_type_id = %s
-                                          AND amplitude_processing_method_id = %s
-                                          AND experiment_feature_set_id = %s
-                                          AND feature_set_feature_id = %s
-                                    """, (ref_segment_id, dec, dtype, amp, efs, feature_id))
+                                    for feature_id in feature_ids:
+                                        cursor.execute(f"""
+                                            SELECT feature_file_path
+                                            FROM experiment_{exp_id:03d}_feature_fileset
+                                            WHERE segment_id = %s
+                                              AND decimation_factor = %s
+                                              AND data_type_id = %s
+                                              AND amplitude_processing_method_id = %s
+                                              AND experiment_feature_set_id = %s
+                                              AND feature_set_feature_id = %s
+                                        """, (ref_segment_id, dec, dtype, amp, efs, feature_id))
 
-                                    result = cursor.fetchone()
-                                    if result:
-                                        feature_file_path = result[0]
-                                        try:
-                                            features = np.load(feature_file_path)
-                                            column_idx = amp - 1
-                                            features_1d = features[:, column_idx]
-                                            ref_feature_parts.append(features_1d)
-                                        except Exception as e:
-                                            print(f"[ERROR] Failed to load reference {ref_segment_id} feature {feature_id}: {e}")
-                                            ref_feature_parts = None
-                                            break
+                                        result = cursor.fetchone()
+                                        if result:
+                                            feature_file_path = result[0]
+                                            try:
+                                                features = np.load(feature_file_path)
+                                                column_idx = amp - 1
+                                                features_1d = features[:, column_idx]
+                                                ref_feature_parts.append(features_1d)
+                                            except Exception as e:
+                                                print(f"[ERROR] Failed to load reference {ref_segment_id} feature {feature_id}: {e}")
+                                                ref_feature_parts = None
+                                                break
 
-                                if ref_feature_parts and len(ref_feature_parts) == len(feature_ids):
-                                    reference_features[label_id] = np.concatenate(ref_feature_parts)
-                                else:
-                                    print(f"[ERROR] Failed to load complete reference for label {label_id}")
+                                    if ref_feature_parts and len(ref_feature_parts) == len(feature_ids):
+                                        reference_features[label_id] = np.concatenate(ref_feature_parts)
+                                    else:
+                                        print(f"[ERROR] Failed to load complete reference for label {label_id}")
 
-                            if len(reference_features) != num_classes:
-                                print(f"[ERROR] Failed to load all reference features")
-                                print(f"[SKIP] Skipping this configuration")
-                                continue
+                                if len(reference_features) != num_classes:
+                                    print(f"[ERROR] Failed to load all reference features")
+                                    print(f"[SKIP] Skipping this configuration")
+                                    continue
 
-                            print(f"[INFO] Loaded {len(reference_features)} reference feature vectors")
+                                print(f"[INFO] Loaded {len(reference_features)} reference feature vectors")
+                            else:
+                                print(f"[INFO] Using raw features (no reference segments needed)")
 
                             # Process all segments
                             segments_processed = 0
@@ -15194,21 +15637,31 @@ class MLDPShell:
 
                                     segment_features = np.concatenate(segment_feature_parts)
 
-                                    # Build feature vector: compute distances to all references
-                                    feature_vector = np.zeros(num_classes * 4)
+                                    # Build feature vector: either raw features or distance-based
+                                    if needs_references:
+                                        # Distance-based features: compute distances to all references
+                                        feature_vector = np.zeros(num_classes * 4)
 
-                                    for class_idx, label_id in enumerate(segment_labels):
-                                        if label_id not in reference_features:
-                                            raise ValueError(f"Missing reference for label {label_id}")
+                                        for class_idx, label_id in enumerate(segment_labels):
+                                            if label_id not in reference_features:
+                                                raise ValueError(f"Missing reference for label {label_id}")
 
-                                        ref_features = reference_features[label_id]
+                                            ref_features = reference_features[label_id]
 
-                                        # Compute distances using configured metrics
-                                        base_idx = class_idx * 4
-                                        for metric_idx, metric_name in enumerate(metric_names):
-                                            feature_vector[base_idx + metric_idx] = compute_distance(
-                                                segment_features, ref_features, metric_name
-                                            )
+                                            # Compute distances using configured metrics
+                                            base_idx = class_idx * 4
+                                            for metric_idx, metric_name in enumerate(metric_names):
+                                                feature_vector[base_idx + metric_idx] = compute_distance(
+                                                    segment_features, ref_features, metric_name
+                                                )
+
+                                        vector_dims = num_classes * 4
+                                        num_metrics = 4
+                                    else:
+                                        # Raw features: use concatenated features directly
+                                        feature_vector = segment_features
+                                        vector_dims = len(feature_vector)
+                                        num_metrics = 0
 
                                     # Construct file path
                                     base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_features"
@@ -15221,7 +15674,7 @@ class MLDPShell:
                                     full_dir = os.path.join(base_dir, classifier_dir, dec_dir, dtype_name, amp_name, efs_dir)
                                     os.makedirs(full_dir, exist_ok=True)
 
-                                    filename = f"SID{segment_id:08d}_SVM_FEATURES_{num_classes * 4:03d}.npy"
+                                    filename = f"SID{segment_id:08d}_SVM_FEATURES_{vector_dims:03d}.npy"
                                     file_path = os.path.join(full_dir, filename)
 
                                     # Save feature vector
@@ -15243,7 +15696,7 @@ class MLDPShell:
                                     """, (
                                         global_classifier_id, cls_id, segment_id, segment_label_id,
                                         dec, dtype, amp, efs, file_path,
-                                        num_classes * 4, num_classes, 4,
+                                        vector_dims, num_classes, num_metrics,
                                         2, extraction_time  # status_id=2 (complete)
                                     ))
 
@@ -16007,21 +16460,78 @@ class MLDPShell:
                 print("Run 'classifier-train-svm-init' first to create tables")
                 return
 
-            # Check for existing results
+            # Check for existing results with current filters
             if not force:
-                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                # Build WHERE clause for filters
+                where_conditions = []
+                params = []
+
+                if filter_dec is not None:
+                    where_conditions.append("decimation_factor = %s")
+                    params.append(filter_dec)
+                if filter_dtype is not None:
+                    where_conditions.append("data_type_id = %s")
+                    params.append(filter_dtype)
+                if filter_amp is not None:
+                    where_conditions.append("amplitude_processing_method_id = %s")
+                    params.append(filter_amp)
+                if filter_efs is not None:
+                    where_conditions.append("experiment_feature_set_id = %s")
+                    params.append(filter_efs)
+                if svm_kernel is not None:
+                    where_conditions.append("svm_kernel = %s")
+                    params.append(svm_kernel)
+                if svm_C is not None:
+                    where_conditions.append("svm_c_parameter = %s")
+                    params.append(svm_C)
+
+                where_clause = ""
+                if where_conditions:
+                    where_clause = "WHERE " + " AND ".join(where_conditions)
+
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name} {where_clause}", params)
                 existing_count = cursor.fetchone()[0]
+
                 if existing_count > 0:
-                    print(f"\n[WARNING] {existing_count} existing results found")
-                    print("Use --force to overwrite and retrain all models")
+                    print(f"\n[WARNING] {existing_count} existing results found for specified filters")
+                    print("Use --force to overwrite and retrain these models")
                     return
 
+            # Delete existing results if force is enabled
             if force:
-                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                # Build WHERE clause for filters
+                where_conditions = []
+                params = []
+
+                if filter_dec is not None:
+                    where_conditions.append("decimation_factor = %s")
+                    params.append(filter_dec)
+                if filter_dtype is not None:
+                    where_conditions.append("data_type_id = %s")
+                    params.append(filter_dtype)
+                if filter_amp is not None:
+                    where_conditions.append("amplitude_processing_method_id = %s")
+                    params.append(filter_amp)
+                if filter_efs is not None:
+                    where_conditions.append("experiment_feature_set_id = %s")
+                    params.append(filter_efs)
+                if svm_kernel is not None:
+                    where_conditions.append("svm_kernel = %s")
+                    params.append(svm_kernel)
+                if svm_C is not None:
+                    where_conditions.append("svm_c_parameter = %s")
+                    params.append(svm_C)
+
+                where_clause = ""
+                if where_conditions:
+                    where_clause = "WHERE " + " AND ".join(where_conditions)
+
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name} {where_clause}", params)
                 existing_count = cursor.fetchone()[0]
+
                 if existing_count > 0:
                     print(f"[INFO] Deleting {existing_count} existing results...")
-                    cursor.execute(f"DELETE FROM {results_table_name}")
+                    cursor.execute(f"DELETE FROM {results_table_name} {where_clause}", params)
                     self.db_conn.commit()
 
             # Check if data splits exist
@@ -16051,10 +16561,11 @@ class MLDPShell:
 
             # Query hyperparameter combinations from active configuration
             cursor.execute("""
-                SELECT DISTINCT decimation_factor
-                FROM ml_classifier_config_decimation_factors
-                WHERE config_id = %s
-                ORDER BY decimation_factor
+                SELECT DISTINCT lut.decimation_factor
+                FROM ml_classifier_config_decimation_factors cfg
+                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
+                WHERE cfg.config_id = %s
+                ORDER BY lut.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -16098,6 +16609,10 @@ class MLDPShell:
 
             print(f"[INFO] Hyperparameters: {len(decimation_factors)} decimations, {len(data_type_ids)} data types, "
                   f"{len(amplitude_methods)} amp methods, {len(experiment_feature_sets)} feature sets")
+            print(f"[DEBUG] Decimation factors: {decimation_factors}")
+            print(f"[DEBUG] Data types: {data_type_ids}")
+            print(f"[DEBUG] Amplitude methods: {amplitude_methods}")
+            print(f"[DEBUG] Feature sets: {experiment_feature_sets}")
 
             # Build SVM parameter grid
             if svm_kernel is None:
