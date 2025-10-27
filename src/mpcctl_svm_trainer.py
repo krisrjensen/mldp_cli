@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_170000
-File version: 1.0.0.2
+Date Revised: 20251027_173000
+File version: 1.0.0.3
 Description: MPCCTL-based SVM training with file-based worker coordination (deadlock-proof)
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -549,7 +549,7 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
         # Get global classifier ID
         cursor.execute("""
             SELECT global_classifier_id
-            FROM ml_classifiers
+            FROM ml_experiment_classifiers
             WHERE experiment_id = %s AND classifier_id = %s
         """, (experiment_id, classifier_id))
         result = cursor.fetchone()
