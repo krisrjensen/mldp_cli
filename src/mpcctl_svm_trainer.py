@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_224600
-File version: 1.0.0.5
-Description: MPCCTL-based SVM training with file-based worker coordination (deadlock-proof)
+Date Revised: 20251027_225400
+File version: 1.0.0.6
+Description: MPCCTL-based SVM training with file-based worker coordination and static progress bars
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -64,10 +64,9 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         )
 
     def log(message: str):
+        """Log to file only (no console output - progress shown via status files)."""
         if log_file:
             logging.info(message)
-        if verbose:
-            print(f"Worker {worker_id}: {message}")
 
     # Load worker assignments
     todo_file = mpcctl_dir / f"{worker_id}_todo.dat"
@@ -125,6 +124,24 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
 
     log(f"Processing {len(remaining_configs)} remaining configs")
 
+    # Initialize status file for progress tracking
+    status_file = mpcctl_dir / f"{worker_id}_status.json"
+
+    def update_status(completed: int, current_task: str = ""):
+        """Update worker status file for monitor display."""
+        status = {
+            'worker_id': worker_id,
+            'total_tasks': len(remaining_configs),
+            'completed_tasks': completed,
+            'current_task': current_task,
+            'last_update': datetime.now().isoformat()
+        }
+        with open(status_file, 'w') as f:
+            json.dump(status, f, indent=2)
+
+    # Write initial status
+    update_status(0, "Initializing...")
+
     # Connect to database with autocommit
     conn = psycopg2.connect(**db_config)
     conn.autocommit = True
@@ -168,6 +185,10 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         amp = cfg['amp']
         efs = cfg['efs']
         svm_params = {'kernel': cfg['kernel'], 'C': cfg['C'], 'gamma': cfg['gamma']}
+
+        # Update status at start of task
+        task_desc = f"dec={dec} dt={dtype} amp={amp} efs={efs} k={svm_params['kernel']}"
+        update_status(processed, task_desc)
 
         try:
             start_time = time.time()
@@ -435,47 +456,108 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
             processed += 1
             log(f"COMPLETED [{processed}/{len(remaining_configs)}]: dec={dec}, dtype={dtype}, amp={amp}, efs={efs}, acc={metrics_test['accuracy']:.4f}, time={training_time:.1f}s")
 
+            # Update status after completion
+            update_status(processed, "")
+
         except Exception as e:
             errors += 1
             log(f"ERROR: dec={dec}, dtype={dtype}, amp={amp}, efs={efs} - {str(e)}")
+            # Update status after error (keep completed count unchanged)
+            update_status(processed, "")
 
     cursor.close()
     conn.close()
+
+    # Final status update
+    update_status(processed, "Finished")
 
     log(f"Worker finished: {processed} processed, {errors} errors")
 
 
 def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
                      log_file: Optional[Path], verbose: bool, stop_flag: mp.Event):
-    """Monitor progress by scanning done files."""
+    """Monitor progress with static per-worker progress bars."""
 
     def log(msg):
+        """Log to file only (console shows progress bars)."""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         full_msg = f"[{timestamp}] {msg}"
-        if verbose:
-            print(full_msg)
         if log_file:
             with open(log_file, 'a') as f:
                 f.write(full_msg + '\n')
 
     start_time = time.time()
     last_completed = 0
+    first_display = True
 
-    while not stop_flag.is_set():
-        try:
-            # Count completed configs across all done files
-            completed = 0
-            for done_file in mpcctl_dir.glob('*_done.dat'):
-                if done_file.exists():
-                    with open(done_file, 'r') as f:
-                        completed += sum(1 for line in f if line.strip())
+    # ANSI escape codes
+    CLEAR_SCREEN = '\033[2J'
+    CURSOR_HOME = '\033[H'
+    HIDE_CURSOR = '\033[?25l'
+    SHOW_CURSOR = '\033[?25h'
 
-            if completed != last_completed:
+    try:
+        # Hide cursor for cleaner display
+        print(HIDE_CURSOR, end='', flush=True)
+
+        while not stop_flag.is_set():
+            try:
+                # Read all worker status files
+                worker_statuses = []
+                for status_file in sorted(mpcctl_dir.glob('*_status.json')):
+                    try:
+                        with open(status_file, 'r') as f:
+                            status = json.load(f)
+                            worker_statuses.append(status)
+                    except Exception:
+                        pass
+
+                # Calculate overall progress
+                total_completed = sum(w.get('completed_tasks', 0) for w in worker_statuses)
+                progress_pct = (total_completed / total_configs * 100) if total_configs > 0 else 0
                 elapsed = time.time() - start_time
-                rate = completed / elapsed if elapsed > 0 else 0
-                remaining = total_configs - completed
+                rate = total_completed / elapsed if elapsed > 0 else 0
+                remaining = total_configs - total_completed
                 eta_seconds = remaining / rate if rate > 0 else 0
-                progress = (completed / total_configs * 100) if total_configs > 0 else 0
+
+                # Clear screen and move cursor to home on first display or every update
+                if first_display:
+                    print(CLEAR_SCREEN + CURSOR_HOME, end='', flush=True)
+                    first_display = False
+                else:
+                    print(CURSOR_HOME, end='', flush=True)
+
+                # Display header
+                print("=" * 80)
+                print(f"SVM Training Progress - {total_completed:,}/{total_configs:,} configs ({progress_pct:.1f}%)")
+                print(f"Rate: {rate:.2f} configs/sec | ETA: {eta_seconds/60:.1f} min")
+                print("=" * 80)
+
+                # Display per-worker progress bars
+                bar_width = 50
+                for worker_status in worker_statuses:
+                    worker_id = worker_status.get('worker_id', 0)
+                    completed = worker_status.get('completed_tasks', 0)
+                    total = worker_status.get('total_tasks', 1)
+                    current_task = worker_status.get('current_task', '')
+
+                    worker_pct = (completed / total * 100) if total > 0 else 0
+                    filled = int(bar_width * completed / total) if total > 0 else 0
+                    bar = '█' * filled + '░' * (bar_width - filled)
+
+                    # Truncate current_task if too long
+                    task_display = current_task[:40] if len(current_task) > 40 else current_task
+
+                    print(f"Worker {worker_id}: [{bar}] {worker_pct:5.1f}%")
+                    if current_task:
+                        print(f"             {task_display}")
+                    else:
+                        print()
+
+                print("=" * 80)
+                print(f"Log file: {log_file if log_file else 'None'}")
+                print("Press Ctrl+C to detach (training continues in background)")
+                print("=" * 80)
 
                 # Update state file
                 if state_file.exists():
@@ -485,8 +567,8 @@ def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
 
                         state['progress'] = {
                             'total_tasks': total_configs,
-                            'completed_tasks': completed,
-                            'percent_complete': round(progress, 2),
+                            'completed_tasks': total_completed,
+                            'percent_complete': round(progress_pct, 2),
                             'configs_per_second': round(rate, 3),
                             'estimated_time_remaining_seconds': int(eta_seconds)
                         }
@@ -496,17 +578,23 @@ def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
                     except Exception:
                         pass
 
-                last_completed = completed
+                if total_completed != last_completed:
+                    log(f"Progress: {total_completed}/{total_configs} configs ({progress_pct:.1f}%)")
+                    last_completed = total_completed
 
-            if completed >= total_configs:
-                log("All configs completed")
-                break
+                if total_completed >= total_configs:
+                    log("All configs completed")
+                    break
 
-            time.sleep(2)  # Check every 2 seconds
+                time.sleep(1)  # Update every 1 second
 
-        except Exception as e:
-            log(f"Monitor error: {e}")
-            time.sleep(2)
+            except Exception as e:
+                log(f"Monitor error: {e}")
+                time.sleep(1)
+
+    finally:
+        # Show cursor again
+        print(SHOW_CURSOR, end='', flush=True)
 
 
 def manager_process(experiment_id: int, classifier_id: int, workers_count: int,

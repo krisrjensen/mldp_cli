@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251027_224600
-File version: 2.0.10.4
+Date Revised: 20251027_225400
+File version: 2.0.10.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -442,7 +442,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -16713,8 +16713,9 @@ class MLDPShell:
                 'svm_C': svm_C
             }
 
-            # Create log file
-            log_file = None  # Could add --log flag later
+            # Create timestamped log file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_file = mpcctl_base_dir / f"svm_training_{timestamp}.log"
 
             print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
             print("[INFO] Using MPCCTL architecture for deadlock-proof training")
