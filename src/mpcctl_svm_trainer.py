@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_225400
-File version: 1.0.0.6
+Date Revised: 20251027_230800
+File version: 1.0.0.7
 Description: MPCCTL-based SVM training with file-based worker coordination and static progress bars
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -486,9 +486,10 @@ def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
             with open(log_file, 'a') as f:
                 f.write(full_msg + '\n')
 
+    from datetime import datetime
+
     start_time = time.time()
     last_completed = 0
-    first_display = True
 
     # ANSI escape codes
     CLEAR_SCREEN = '\033[2J'
@@ -520,42 +521,68 @@ def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
                 remaining = total_configs - total_completed
                 eta_seconds = remaining / rate if rate > 0 else 0
 
-                # Clear screen and move cursor to home on first display or every update
-                if first_display:
-                    print(CLEAR_SCREEN + CURSOR_HOME, end='', flush=True)
-                    first_display = False
-                else:
-                    print(CURSOR_HOME, end='', flush=True)
+                # Clear screen and move cursor to home on every update
+                print(CLEAR_SCREEN + CURSOR_HOME, end='', flush=True)
 
                 # Display header
                 print("=" * 80)
                 print(f"SVM Training Progress - {total_completed:,}/{total_configs:,} configs ({progress_pct:.1f}%)")
                 print(f"Rate: {rate:.2f} configs/sec | ETA: {eta_seconds/60:.1f} min")
                 print("=" * 80)
+                print()
 
                 # Display per-worker progress bars
                 bar_width = 50
+                stalled_workers = []
                 for worker_status in worker_statuses:
                     worker_id = worker_status.get('worker_id', 0)
                     completed = worker_status.get('completed_tasks', 0)
                     total = worker_status.get('total_tasks', 1)
                     current_task = worker_status.get('current_task', '')
+                    last_update_str = worker_status.get('last_update', '')
 
                     worker_pct = (completed / total * 100) if total > 0 else 0
                     filled = int(bar_width * completed / total) if total > 0 else 0
                     bar = '█' * filled + '░' * (bar_width - filled)
 
-                    # Truncate current_task if too long
-                    task_display = current_task[:40] if len(current_task) > 40 else current_task
+                    # Check if worker is stalled (no update in 2 minutes)
+                    is_stalled = False
+                    time_since_update = 0
+                    if last_update_str and current_task != "Finished":
+                        try:
+                            last_update = datetime.fromisoformat(last_update_str)
+                            time_since_update = (datetime.now() - last_update).total_seconds()
+                            if time_since_update > 120:  # 2 minutes
+                                is_stalled = True
+                                stalled_workers.append(worker_id)
+                        except Exception:
+                            pass
 
+                    # Display worker progress
                     print(f"Worker {worker_id}: [{bar}] {worker_pct:5.1f}%")
-                    if current_task:
-                        print(f"             {task_display}")
+
+                    # Show current task or status
+                    if is_stalled:
+                        print(f"    ⚠ STALLED (no update for {int(time_since_update)}s) - may have crashed")
+                    elif current_task and current_task != "Finished":
+                        task_display = current_task[:60] if len(current_task) > 60 else current_task
+                        print(f"    {task_display}")
+                    elif current_task == "Finished":
+                        print(f"    ✓ Complete")
                     else:
                         print()
 
+                print()
+
+                # Show warning if workers are stalled
+                if stalled_workers:
+                    print("⚠ WARNING: Some workers appear to have crashed or stalled")
+                    print(f"   Stalled workers: {', '.join(map(str, stalled_workers))}")
+                    print(f"   These workers may have been killed by OS (out of memory)")
+                    print()
+
                 print("=" * 80)
-                print(f"Log file: {log_file if log_file else 'None'}")
+                print(f"Log: {log_file if log_file else 'None'}")
                 print("Press Ctrl+C to detach (training continues in background)")
                 print("=" * 80)
 
