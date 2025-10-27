@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_174000
-File version: 1.0.0.4
+Date Revised: 20251027_224600
+File version: 1.0.0.5
 Description: MPCCTL-based SVM training with file-based worker coordination (deadlock-proof)
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -86,6 +86,15 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 if len(parts) >= 6:
                     dec, dtype, amp, efs, kernel, c_val = parts[:6]
                     gamma_val = parts[6] if len(parts) > 6 and parts[6] != 'None' else None
+
+                    # Parse gamma: can be numeric, 'scale', 'auto', or None
+                    gamma = None
+                    if gamma_val:
+                        try:
+                            gamma = float(gamma_val)
+                        except ValueError:
+                            gamma = gamma_val  # Keep as string for 'scale', 'auto'
+
                     configs.append({
                         'dec': int(dec),
                         'dtype': int(dtype),
@@ -93,7 +102,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                         'efs': int(efs),
                         'kernel': kernel,
                         'C': float(c_val),
-                        'gamma': float(gamma_val) if gamma_val else None
+                        'gamma': gamma
                     })
 
     log(f"Loaded {len(configs)} config assignments")
