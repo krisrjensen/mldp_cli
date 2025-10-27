@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_173000
-File version: 1.0.0.3
+Date Revised: 20251027_174000
+File version: 1.0.0.4
 Description: MPCCTL-based SVM training with file-based worker coordination (deadlock-proof)
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -604,14 +604,6 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
         """, (config_id,))
         experiment_feature_sets = [row[0] for row in cursor.fetchall()]
 
-        cursor.execute("""
-            SELECT DISTINCT kernel, c_value, gamma_value
-            FROM ml_classifier_config_svm_hyperparameters
-            WHERE config_id = %s
-            ORDER BY kernel, c_value
-        """, (config_id,))
-        svm_hyperparams = cursor.fetchall()
-
         cursor.close()
         conn.close()
 
@@ -624,10 +616,29 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
             amplitude_methods = [filters['amplitude_method']]
         if filters.get('experiment_feature_set') is not None:
             experiment_feature_sets = [filters['experiment_feature_set']]
-        if filters.get('svm_kernel') is not None:
-            svm_hyperparams = [h for h in svm_hyperparams if h[0] == filters['svm_kernel']]
-        if filters.get('svm_C') is not None:
-            svm_hyperparams = [h for h in svm_hyperparams if h[1] == filters['svm_C']]
+
+        # Build SVM parameter grid (hardcoded like original implementation)
+        if filters.get('svm_kernel') is None:
+            kernels = ['linear', 'rbf', 'poly']
+        else:
+            kernels = [filters['svm_kernel']]
+
+        if filters.get('svm_C') is None:
+            C_values = [0.1, 1.0, 10.0, 100.0]
+        else:
+            C_values = [filters['svm_C']]
+
+        gamma_values = ['scale', 'auto', 0.001, 0.01, 0.1]
+
+        # Build svm_hyperparams list: (kernel, c_value, gamma_value)
+        svm_hyperparams = []
+        for k in kernels:
+            for c in C_values:
+                if k in ['rbf', 'poly']:
+                    for g in gamma_values:
+                        svm_hyperparams.append((k, c, g))
+                else:
+                    svm_hyperparams.append((k, c, None))
 
         # Build all configs
         all_configs = []
