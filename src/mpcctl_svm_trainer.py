@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_135401
-File version: 1.0.0.16
+Date Revised: 20251028_140525
+File version: 1.0.0.17
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -269,18 +269,32 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 log(f"Using LinearSVC with calibration (fast linear solver)")
             else:
                 # Use standard SVC for all kernels (linear, rbf, poly)
+                # Enforce minimum cache sizes for kernel matrix operations
+                # Linear kernel: min 2GB (n^2 dot products, iterative optimization)
+                # RBF/Poly kernels: min 2GB (n^2 expensive kernel evals, iterative optimization)
+                if svm_params['kernel'] == 'linear':
+                    min_cache = 2000  # 2GB minimum for linear kernel
+                elif svm_params['kernel'] in ['rbf', 'poly']:
+                    min_cache = 2000  # 2GB minimum for non-linear kernels
+                else:
+                    min_cache = 2000  # 2GB default
+
+                actual_cache = max(cache_size_mb, min_cache)
+                if actual_cache > cache_size_mb:
+                    log(f"WARNING: Requested cache {cache_size_mb}MB too small, using {actual_cache}MB minimum for kernel='{svm_params['kernel']}'")
+
                 svm_kwargs = {
                     'kernel': svm_params['kernel'],
                     'C': svm_params['C'],
                     'class_weight': 'balanced',
                     'random_state': 42,
                     'probability': True,
-                    'cache_size': cache_size_mb  # User-configurable cache size
+                    'cache_size': actual_cache  # Enforced minimum cache size
                 }
                 if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
                     svm_kwargs['gamma'] = svm_params['gamma']
                 svm = SVC(**svm_kwargs)
-                log(f"Using SVC(kernel='{svm_params['kernel']}')")
+                log(f"Using SVC(kernel='{svm_params['kernel']}') with {actual_cache}MB cache")
 
             svm.fit(X_train, y_train)
             training_time = time.time() - start_time

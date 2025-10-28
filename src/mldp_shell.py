@@ -3,18 +3,23 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_135401
-File version: 2.0.10.15
+Date Revised: 20251028_140525
+File version: 2.0.10.16
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 15)
+- CHANGE: Tracks changes within current commit cycle (currently 16)
 
-Changes in this version (10.15):
-1. PHASE 4 VISUALIZATION - Added F1 threshold curves for SVM and RF trainers
+Changes in this version (10.16):
+1. PHASE 4 MEMORY OPTIMIZATION - Fixed cache size configuration for kernel matrix operations
+   - v2.0.10.16: Enforced minimum 2GB cache per SVC worker (linear/rbf/poly kernels)
+                 Increased default memory budget from 16GB to 80GB
+                 Added warning when cache per worker is below minimum
+                 Fixed O(n²-n³) kernel matrix computation performance bottleneck
+2. PHASE 4 VISUALIZATION - Added F1 threshold curves for SVM and RF trainers
    - v2.0.10.15: Both SVM and RF trainers now generate F1 score vs threshold curves
                  Shows optimal classification threshold for binary arc detection
                  Generates 3 plots per split: train/test/verify
@@ -461,7 +466,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.15"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.16"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -16328,7 +16333,7 @@ class MLDPShell:
 
         Options:
             --workers <n>             Parallel workers (default: 7, max: 28)
-            --memory <mb>             Total memory budget in MB (default: 16000)
+            --memory <mb>             Total memory budget in MB (default: 80000)
             --decimation-factor <n>   Train only this decimation factor
             --data-type <id>          Train only this data type
             --amplitude-method <id>   Train only this amplitude method
@@ -16358,7 +16363,7 @@ class MLDPShell:
 
         # Parse arguments
         num_workers = 7
-        max_memory_mb = 16000  # Default 16GB total memory budget
+        max_memory_mb = 80000  # Default 80GB total memory budget (allows ~4GB per worker with 20 workers)
         filter_dec = None
         filter_dtype = None
         filter_amp = None
@@ -16759,6 +16764,13 @@ class MLDPShell:
             print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
             print("[INFO] Using MPCCTL architecture for deadlock-proof training")
             print(f"[INFO] Memory budget: {max_memory_mb:,} MB total ({cache_size_mb:,} MB per worker)")
+
+            # Warn if cache per worker is below minimum (2GB for SVC)
+            if cache_size_mb < 2000:
+                print(f"[WARNING] Cache per worker ({cache_size_mb} MB) is below recommended 2GB minimum")
+                print(f"[WARNING] SVC will automatically use 2GB minimum cache, which may exceed memory budget")
+                print(f"[WARNING] Consider: --memory {num_workers * 2000} or --workers {max_memory_mb // 2000}")
+
             print(f"[INFO] Expected tasks: {total_tasks}")
             print(f"[INFO] Estimated time: {total_tasks * 1.5 / num_workers / 60:.1f} - {total_tasks * 3.0 / num_workers / 60:.1f} minutes\n")
 
