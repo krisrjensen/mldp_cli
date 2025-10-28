@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_001500
-File version: 1.0.0.11
-Description: MPCCTL-based SVM training with user-configurable memory budget
+Date Revised: 20251028_003000
+File version: 1.0.0.12
+Description: MPCCTL-based SVM training with ROC/PR curve generation
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -156,7 +156,8 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
     from sklearn.svm import SVC, LinearSVC
     from sklearn.calibration import CalibratedClassifierCV
     from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
-                                 confusion_matrix, roc_auc_score, average_precision_score)
+                                 confusion_matrix, roc_auc_score, average_precision_score,
+                                 roc_curve, precision_recall_curve, auc)
     import joblib
     import matplotlib
     matplotlib.use('Agg')
@@ -396,6 +397,58 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 plt.xlabel('Predicted Label')
                 plt.savefig(f"{svm_viz_dir}/confusion_matrix_binary_{split_name}.png", dpi=150, bbox_inches='tight')
                 plt.close()
+
+            # Generate ROC and PR curves for binary classification
+            for split_name, y_true, y_proba_split in [
+                ('train', y_train, y_proba_train),
+                ('test', y_test, y_proba_test),
+                ('verify', y_verify, y_proba_verify)
+            ]:
+                # Get binary labels and arc probabilities
+                y_true_binary = np.array([1 if label_categories.get(int(y), 'unknown') == 'arc' else 0 for y in y_true])
+
+                # Get arc class probability
+                unique_labels = np.unique(y_train)
+                arc_label_indices = [i for i, lbl in enumerate(unique_labels) if label_categories.get(int(lbl), 'unknown') == 'arc']
+
+                if len(arc_label_indices) > 0 and y_proba_split.shape[1] >= len(unique_labels):
+                    y_proba_arc = np.sum(y_proba_split[:, arc_label_indices], axis=1)
+                else:
+                    y_proba_arc = np.zeros(len(y_true))
+
+                # ROC Curve
+                if len(np.unique(y_true_binary)) > 1:  # Need both classes present
+                    fpr, tpr, _ = roc_curve(y_true_binary, y_proba_arc)
+                    roc_auc_val = auc(fpr, tpr)
+
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc_val:.3f})')
+                    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Classifier')
+                    plt.xlim([0.0, 1.0])
+                    plt.ylim([0.0, 1.05])
+                    plt.xlabel('False Positive Rate')
+                    plt.ylabel('True Positive Rate')
+                    plt.title(f'ROC Curve - Arc Detection ({split_name.title()})')
+                    plt.legend(loc="lower right")
+                    plt.grid(True, alpha=0.3)
+                    plt.savefig(f"{svm_viz_dir}/roc_curve_binary_{split_name}.png", dpi=150, bbox_inches='tight')
+                    plt.close()
+
+                    # PR Curve
+                    precision, recall, _ = precision_recall_curve(y_true_binary, y_proba_arc)
+                    pr_auc_val = auc(recall, precision)
+
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(recall, precision, color='blue', lw=2, label=f'PR curve (AUC = {pr_auc_val:.3f})')
+                    plt.xlim([0.0, 1.0])
+                    plt.ylim([0.0, 1.05])
+                    plt.xlabel('Recall')
+                    plt.ylabel('Precision')
+                    plt.title(f'Precision-Recall Curve - Arc Detection ({split_name.title()})')
+                    plt.legend(loc="lower left")
+                    plt.grid(True, alpha=0.3)
+                    plt.savefig(f"{svm_viz_dir}/pr_curve_binary_{split_name}.png", dpi=150, bbox_inches='tight')
+                    plt.close()
 
             # Convert numpy types to Python types
             def to_python_type(value):
