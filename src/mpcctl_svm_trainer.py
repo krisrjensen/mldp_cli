@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_003000
-File version: 1.0.0.12
-Description: MPCCTL-based SVM training with ROC/PR curve generation
+Date Revised: 20251028_004000
+File version: 1.0.0.13
+Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -933,6 +933,91 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
         monitor.join(timeout=5)
         if monitor.is_alive():
             monitor.terminate()
+
+        # Generate and save training summary
+        try:
+            conn = psycopg2.connect(**db_config)
+            cursor = conn.cursor()
+
+            # Get results from database for this training run
+            results_table = f"experiment_{experiment_id:03d}_classifier_{classifier_id:03d}_svm_results"
+
+            # Build WHERE clause based on filters
+            where_conditions = []
+            where_params = []
+
+            if filters.get('decimation_factor') is not None:
+                where_conditions.append("decimation_factor = %s")
+                where_params.append(filters['decimation_factor'])
+            if filters.get('data_type') is not None:
+                where_conditions.append("data_type_id = %s")
+                where_params.append(filters['data_type'])
+            if filters.get('amplitude_method') is not None:
+                where_conditions.append("amplitude_processing_method_id = %s")
+                where_params.append(filters['amplitude_method'])
+            if filters.get('experiment_feature_set') is not None:
+                where_conditions.append("experiment_feature_set_id = %s")
+                where_params.append(filters['experiment_feature_set'])
+            if filters.get('svm_kernel') is not None:
+                where_conditions.append("svm_kernel = %s")
+                where_params.append(filters['svm_kernel'])
+
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+
+            query = f"""
+                SELECT
+                    COUNT(*) as total_configs,
+                    AVG(accuracy_test) as avg_test_acc,
+                    MAX(accuracy_test) as max_test_acc,
+                    AVG(arc_f1_test) as avg_arc_f1,
+                    MAX(arc_f1_test) as max_arc_f1,
+                    AVG(arc_roc_auc_test) as avg_roc_auc,
+                    MAX(arc_roc_auc_test) as max_roc_auc,
+                    AVG(training_time_seconds) as avg_train_time
+                FROM {results_table}
+                WHERE {where_clause}
+            """
+
+            cursor.execute(query, where_params)
+            row = cursor.fetchone()
+
+            summary_lines = []
+            summary_lines.append("=" * 80)
+            summary_lines.append("TRAINING SUMMARY")
+            summary_lines.append("=" * 80)
+            summary_lines.append(f"Experiment: {experiment_id}, Classifier: {classifier_id}")
+            summary_lines.append(f"Total Configurations Trained: {row[0]}")
+            summary_lines.append("")
+            summary_lines.append("Test Set Performance:")
+            summary_lines.append(f"  Average Accuracy: {row[1]:.4f}")
+            summary_lines.append(f"  Best Accuracy: {row[2]:.4f}")
+            summary_lines.append("")
+            summary_lines.append("Binary Arc Detection (Test Set):")
+            summary_lines.append(f"  Average F1 Score: {row[3]:.4f}")
+            summary_lines.append(f"  Best F1 Score: {row[4]:.4f}")
+            summary_lines.append(f"  Average ROC AUC: {row[5]:.4f}")
+            summary_lines.append(f"  Best ROC AUC: {row[6]:.4f}")
+            summary_lines.append("")
+            summary_lines.append(f"Average Training Time: {row[7]:.2f} seconds per config")
+            summary_lines.append("=" * 80)
+
+            summary_text = "\n".join(summary_lines)
+
+            # Display summary
+            print("\n" + summary_text)
+
+            # Save summary to file
+            summary_file = mpcctl_base_dir / f"training_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(summary_file, 'w') as f:
+                f.write(summary_text + "\n")
+
+            log(f"Training summary saved to: {summary_file}")
+
+            cursor.close()
+            conn.close()
+
+        except Exception as e:
+            log(f"Error generating summary: {e}")
 
         # Final state update
         state['status'] = 'completed'
