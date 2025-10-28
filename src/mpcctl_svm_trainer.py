@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_000600
-File version: 1.0.0.10
-Description: MPCCTL-based SVM training with LinearSVC optimization and 2GB kernel cache
+Date Revised: 20251028_001500
+File version: 1.0.0.11
+Description: MPCCTL-based SVM training with user-configurable memory budget
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -36,7 +36,7 @@ from datetime import datetime
 def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                   mpcctl_dir: Path, db_config: Dict, experiment_id: int,
                   classifier_id: int, global_classifier_id: int,
-                  log_file: Optional[Path], verbose: bool):
+                  log_file: Optional[Path], verbose: bool, cache_size_mb: int):
     """
     Worker process for SVM training using .mpcctl file-based coordination.
 
@@ -51,6 +51,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         global_classifier_id: Global classifier ID
         log_file: Optional log file path
         verbose: Verbose output flag
+        cache_size_mb: Cache size in MB for SVC kernel computations
     """
     # Suppress all warnings
     warnings.filterwarnings('ignore')
@@ -256,7 +257,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     'class_weight': 'balanced',
                     'random_state': 42,
                     'probability': True,
-                    'cache_size': 2000  # 2GB cache for kernel matrix (default 200MB too small)
+                    'cache_size': cache_size_mb  # User-configurable cache size
                 }
                 if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
                     svm_kwargs['gamma'] = svm_params['gamma']
@@ -642,7 +643,7 @@ def monitor_progress(mpcctl_dir: Path, total_configs: int, state_file: Path,
 
 def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
                    db_config: Dict, filters: Dict, log_file: Optional[Path],
-                   verbose: bool, mpcctl_base_dir: Path):
+                   verbose: bool, mpcctl_base_dir: Path, max_memory_mb: int):
     """Manager process - creates .mpcctl files and spawns workers."""
 
     def log(msg):
@@ -654,7 +655,11 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
             with open(log_file, 'a') as f:
                 f.write(full_msg + '\n')
 
+    # Calculate cache size per worker
+    cache_size_mb = max_memory_mb // workers_count
+
     log(f"Manager started: Experiment {experiment_id}, Classifier {classifier_id}, Workers {workers_count}")
+    log(f"Memory configuration: {max_memory_mb} MB total, {cache_size_mb} MB cache per worker")
 
     try:
         # Create .mpcctl directory
@@ -852,7 +857,7 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
                 target=worker_process,
                 args=(worker_id, pause_flag, stop_flag, mpcctl_dir, db_config,
                       experiment_id, classifier_id, global_classifier_id,
-                      log_file, verbose)
+                      log_file, verbose, cache_size_mb)
             )
             worker.start()
             workers.append(worker)

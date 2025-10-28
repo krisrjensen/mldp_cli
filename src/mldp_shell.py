@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_000600
-File version: 2.0.10.9
+Date Revised: 20251028_001500
+File version: 2.0.10.10
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -442,7 +442,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.9"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.10"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -16309,6 +16309,7 @@ class MLDPShell:
 
         Options:
             --workers <n>             Parallel workers (default: 7, max: 28)
+            --memory <mb>             Total memory budget in MB (default: 16000)
             --decimation-factor <n>   Train only this decimation factor
             --data-type <id>          Train only this data type
             --amplitude-method <id>   Train only this amplitude method
@@ -16320,9 +16321,9 @@ class MLDPShell:
 
         Examples:
             classifier-train-svm
-            classifier-train-svm --workers 21
+            classifier-train-svm --workers 21 --memory 80000
             classifier-train-svm --decimation-factor 0 --data-type 4
-            classifier-train-svm --amplitude-method 2 --workers 20
+            classifier-train-svm --amplitude-method 2 --workers 20 --memory 90000
             classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
         """
         # Check session context
@@ -16336,6 +16337,7 @@ class MLDPShell:
 
         # Parse arguments
         num_workers = 7
+        max_memory_mb = 16000  # Default 16GB total memory budget
         filter_dec = None
         filter_dtype = None
         filter_amp = None
@@ -16356,6 +16358,16 @@ class MLDPShell:
                     i += 2
                 else:
                     print("[ERROR] --workers requires a value")
+                    return
+            elif args[i] == '--memory':
+                if i + 1 < len(args):
+                    max_memory_mb = int(args[i + 1])
+                    if max_memory_mb < 1000:
+                        print("[ERROR] --memory must be at least 1000 MB (1GB)")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --memory requires a value")
                     return
             elif args[i] == '--decimation-factor':
                 if i + 1 < len(args):
@@ -16717,15 +16729,17 @@ class MLDPShell:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             log_file = mpcctl_base_dir / f"svm_training_{timestamp}.log"
 
+            cache_size_mb = max_memory_mb // num_workers
             print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
             print("[INFO] Using MPCCTL architecture for deadlock-proof training")
+            print(f"[INFO] Memory budget: {max_memory_mb:,} MB total ({cache_size_mb:,} MB per worker)")
             print(f"[INFO] Expected tasks: {total_tasks}")
             print(f"[INFO] Estimated time: {total_tasks * 1.5 / num_workers / 60:.1f} - {total_tasks * 3.0 / num_workers / 60:.1f} minutes\n")
 
             # Spawn manager process in background
             manager = mp.Process(
                 target=manager_process,
-                args=(exp_id, cls_id, num_workers, db_config, filters, log_file, True, mpcctl_base_dir)
+                args=(exp_id, cls_id, num_workers, db_config, filters, log_file, True, mpcctl_base_dir, max_memory_mb)
             )
             manager.start()
 
