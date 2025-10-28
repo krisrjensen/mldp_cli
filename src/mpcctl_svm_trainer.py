@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_140525
-File version: 1.0.0.17
+Date Revised: 20251028_143124
+File version: 1.0.0.18
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -289,12 +289,13 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     'class_weight': 'balanced',
                     'random_state': 42,
                     'probability': True,
-                    'cache_size': actual_cache  # Enforced minimum cache size
+                    'cache_size': actual_cache,  # Enforced minimum cache size
+                    'shrinking': False  # Disable shrinking to use full cache (increases memory, may improve speed)
                 }
                 if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
                     svm_kwargs['gamma'] = svm_params['gamma']
                 svm = SVC(**svm_kwargs)
-                log(f"Using SVC(kernel='{svm_params['kernel']}') with {actual_cache}MB cache")
+                log(f"Using SVC(kernel='{svm_params['kernel']}') with {actual_cache}MB cache, shrinking=False")
 
             svm.fit(X_train, y_train)
             training_time = time.time() - start_time

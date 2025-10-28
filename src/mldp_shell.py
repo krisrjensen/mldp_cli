@@ -3,18 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_140525
-File version: 2.0.10.16
+Date Revised: 20251028_143124
+File version: 2.0.10.17
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 16)
+- CHANGE: Tracks changes within current commit cycle (currently 17)
 
-Changes in this version (10.16):
-1. PHASE 4 MEMORY OPTIMIZATION - Fixed cache size configuration for kernel matrix operations
+Changes in this version (10.17):
+1. PHASE 4 MEMORY OPTIMIZATION - Disabled SVC shrinking heuristic to increase cache usage
+   - v2.0.10.17: Added shrinking=False to SVC to force full cache utilization
+                 Should increase memory usage beyond 295MB cap
+                 May improve speed by keeping all support vectors in working set
+2. PHASE 4 MEMORY OPTIMIZATION - Fixed cache size configuration for kernel matrix operations
    - v2.0.10.16: Enforced minimum 2GB cache per SVC worker (linear/rbf/poly kernels)
                  Increased default memory budget from 16GB to 80GB
                  Added warning when cache per worker is below minimum
@@ -466,7 +470,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.16"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.17"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
