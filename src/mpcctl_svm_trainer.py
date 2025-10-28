@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_000200
-File version: 1.0.0.9
-Description: MPCCTL-based SVM training with LinearSVC optimization for 10-100x faster linear kernel training
+Date Revised: 20251028_000600
+File version: 1.0.0.10
+Description: MPCCTL-based SVM training with LinearSVC optimization and 2GB kernel cache
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -255,7 +255,8 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     'C': svm_params['C'],
                     'class_weight': 'balanced',
                     'random_state': 42,
-                    'probability': True
+                    'probability': True,
+                    'cache_size': 2000  # 2GB cache for kernel matrix (default 200MB too small)
                 }
                 if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
                     svm_kwargs['gamma'] = svm_params['gamma']
