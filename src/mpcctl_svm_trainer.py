@@ -3,9 +3,9 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251027_234200
-File version: 1.0.0.8
-Description: MPCCTL-based SVM training with round-robin task distribution for balanced workload
+Date Revised: 20251028_000200
+File version: 1.0.0.9
+Description: MPCCTL-based SVM training with LinearSVC optimization for 10-100x faster linear kernel training
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -152,7 +152,8 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
     label_categories = {row[0]: row[1] for row in cursor.fetchall()}
 
     # Import ML libraries
-    from sklearn.svm import SVC
+    from sklearn.svm import SVC, LinearSVC
+    from sklearn.calibration import CalibratedClassifierCV
     from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
                                  confusion_matrix, roc_auc_score, average_precision_score)
     import joblib
@@ -235,17 +236,31 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
             X_verify, y_verify = load_split('verification')
 
             # Train SVM
-            svm_kwargs = {
-                'kernel': svm_params['kernel'],
-                'C': svm_params['C'],
-                'class_weight': 'balanced',
-                'random_state': 42,
-                'probability': True
-            }
-            if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
-                svm_kwargs['gamma'] = svm_params['gamma']
+            # Use LinearSVC for linear kernel (10-100x faster than SVC)
+            # Use CalibratedClassifierCV with cv=2 for probability estimates (3 models vs 6)
+            if svm_params['kernel'] == 'linear':
+                base_svm = LinearSVC(
+                    C=svm_params['C'],
+                    class_weight='balanced',
+                    random_state=42,
+                    max_iter=10000,
+                    dual='auto'  # Let sklearn choose based on n_samples vs n_features
+                )
+                # Wrap in calibrator for probability estimates (cv=2 means 3 models total)
+                svm = CalibratedClassifierCV(base_svm, cv=2, method='sigmoid')
+            else:
+                # Use SVC for non-linear kernels (rbf, poly)
+                svm_kwargs = {
+                    'kernel': svm_params['kernel'],
+                    'C': svm_params['C'],
+                    'class_weight': 'balanced',
+                    'random_state': 42,
+                    'probability': True
+                }
+                if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
+                    svm_kwargs['gamma'] = svm_params['gamma']
+                svm = SVC(**svm_kwargs)
 
-            svm = SVC(**svm_kwargs)
             svm.fit(X_train, y_train)
             training_time = time.time() - start_time
 
