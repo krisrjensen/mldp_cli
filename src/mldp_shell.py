@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_140000
-File version: 2.0.10.13
+Date Revised: 20251028_150000
+File version: 2.0.10.14
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,15 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 10)
 - CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (10.13):
-1. PHASE 4 RANDOM FOREST - Added Random Forest classifier training support
+Changes in this version (10.14):
+1. PHASE 4 SVM CONFIGURATION - Added --use-linear-svc flag for algorithm choice
+   - v2.0.10.14: Added --use-linear-svc flag to classifier-train-svm command
+                 By default, uses SVC(kernel='linear') for consistency across all kernels
+                 With --use-linear-svc, uses LinearSVC for 10-100x faster linear training
+                 User can choose between speed (LinearSVC) and consistency (SVC)
+                 Allows testing both implementations for comparison
+
+2. PHASE 4 RANDOM FOREST - Added Random Forest classifier training support
    - v2.0.10.13: Added classifier-train-rf command with MPCCTL architecture
                  Supports same configuration as SVM (decimation, data_type, amplitude, feature_set)
                  RF hyperparameters: n_estimators, max_depth, min_samples_split, max_features
@@ -16325,6 +16332,7 @@ class MLDPShell:
             --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
             --C <value>               SVM C parameter (default: grid search)
             --gamma <value>           SVM gamma parameter (default: grid search)
+            --use-linear-svc          Use LinearSVC for linear kernel (10-100x faster)
             --force                   Overwrite existing results
 
         Examples:
@@ -16332,6 +16340,7 @@ class MLDPShell:
             classifier-train-svm --workers 21 --memory 80000
             classifier-train-svm --decimation-factor 0 --data-type 4
             classifier-train-svm --amplitude-method 2 --workers 20 --memory 90000
+            classifier-train-svm --kernel linear --use-linear-svc
             classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
         """
         # Check session context
@@ -16353,6 +16362,7 @@ class MLDPShell:
         svm_kernel = None
         svm_C = None
         svm_gamma = None
+        use_linear_svc = False  # Use LinearSVC for linear kernel (10-100x faster)
         force = False
 
         i = 0
@@ -16436,6 +16446,9 @@ class MLDPShell:
                 else:
                     print("[ERROR] --gamma requires a value")
                     return
+            elif args[i] == '--use-linear-svc':
+                use_linear_svc = True
+                i += 1
             elif args[i] == '--force':
                 force = True
                 i += 1
@@ -16730,7 +16743,8 @@ class MLDPShell:
                 'amplitude_method': filter_amp,
                 'experiment_feature_set': filter_efs,
                 'svm_kernel': svm_kernel,
-                'svm_C': svm_C
+                'svm_C': svm_C,
+                'use_linear_svc': use_linear_svc
             }
 
             # Create timestamped log file

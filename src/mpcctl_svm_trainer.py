@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_123000
-File version: 1.0.0.14
+Date Revised: 20251028_150000
+File version: 1.0.0.15
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -36,7 +36,8 @@ from datetime import datetime
 def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                   mpcctl_dir: Path, db_config: Dict, experiment_id: int,
                   classifier_id: int, global_classifier_id: int,
-                  log_file: Optional[Path], verbose: bool, cache_size_mb: int):
+                  log_file: Optional[Path], verbose: bool, cache_size_mb: int,
+                  use_linear_svc: bool = False):
     """
     Worker process for SVM training using .mpcctl file-based coordination.
 
@@ -52,6 +53,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         log_file: Optional log file path
         verbose: Verbose output flag
         cache_size_mb: Cache size in MB for SVC kernel computations
+        use_linear_svc: Use LinearSVC for linear kernel (10-100x faster)
     """
     # Suppress all warnings
     warnings.filterwarnings('ignore')
@@ -251,9 +253,10 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 raise ValueError(f"Insufficient classes in training data: only {len(unique_train)} class(es) found")
 
             # Train SVM
-            # Use LinearSVC for linear kernel (10-100x faster than SVC)
-            # Use CalibratedClassifierCV with cv=2 for probability estimates (3 models vs 6)
-            if svm_params['kernel'] == 'linear':
+            # LinearSVC option: 10-100x faster than SVC for linear kernel, but different implementation
+            # User can choose between LinearSVC (fast) or SVC(kernel='linear') (consistent with rbf/poly)
+            if svm_params['kernel'] == 'linear' and use_linear_svc:
+                # Use LinearSVC (optimized linear solver)
                 base_svm = LinearSVC(
                     C=svm_params['C'],
                     class_weight='balanced',
@@ -263,8 +266,9 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 )
                 # Wrap in calibrator for probability estimates (cv=2 means 3 models total)
                 svm = CalibratedClassifierCV(base_svm, cv=2, method='sigmoid')
+                log(f"Using LinearSVC with calibration (fast linear solver)")
             else:
-                # Use SVC for non-linear kernels (rbf, poly)
+                # Use standard SVC for all kernels (linear, rbf, poly)
                 svm_kwargs = {
                     'kernel': svm_params['kernel'],
                     'C': svm_params['C'],
@@ -276,6 +280,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 if svm_params['kernel'] in ['rbf', 'poly'] and svm_params.get('gamma'):
                     svm_kwargs['gamma'] = svm_params['gamma']
                 svm = SVC(**svm_kwargs)
+                log(f"Using SVC(kernel='{svm_params['kernel']}')")
 
             svm.fit(X_train, y_train)
             training_time = time.time() - start_time
@@ -737,8 +742,15 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
     # Calculate cache size per worker
     cache_size_mb = max_memory_mb // workers_count
 
+    # Extract use_linear_svc flag from filters
+    use_linear_svc = filters.get('use_linear_svc', False)
+
     log(f"Manager started: Experiment {experiment_id}, Classifier {classifier_id}, Workers {workers_count}")
     log(f"Memory configuration: {max_memory_mb} MB total, {cache_size_mb} MB cache per worker")
+    if use_linear_svc:
+        log(f"Using LinearSVC for linear kernel (fast solver)")
+    else:
+        log(f"Using SVC for all kernels (consistent implementation)")
 
     try:
         # Create .mpcctl directory
@@ -936,7 +948,7 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
                 target=worker_process,
                 args=(worker_id, pause_flag, stop_flag, mpcctl_dir, db_config,
                       experiment_id, classifier_id, global_classifier_id,
-                      log_file, verbose, cache_size_mb)
+                      log_file, verbose, cache_size_mb, use_linear_svc)
             )
             worker.start()
             workers.append(worker)
