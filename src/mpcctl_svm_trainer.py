@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_004000
-File version: 1.0.0.13
+Date Revised: 20251028_123000
+File version: 1.0.0.14
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -237,6 +237,19 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
             X_test, y_test = load_split('test')
             X_verify, y_verify = load_split('verification')
 
+            # Diagnostic: Check label distribution
+            unique_train, counts_train = np.unique(y_train, return_counts=True)
+            unique_test, counts_test = np.unique(y_test, return_counts=True)
+            unique_verify, counts_verify = np.unique(y_verify, return_counts=True)
+
+            log(f"Label distribution - Train: {len(unique_train)} classes {dict(zip(unique_train, counts_train))}")
+            log(f"Label distribution - Test: {len(unique_test)} classes {dict(zip(unique_test, counts_test))}")
+            log(f"Label distribution - Verify: {len(unique_verify)} classes {dict(zip(unique_verify, counts_verify))}")
+
+            if len(unique_train) < 2:
+                log(f"ERROR: Training set has only {len(unique_train)} class(es)! Cannot train classifier.")
+                raise ValueError(f"Insufficient classes in training data: only {len(unique_train)} class(es) found")
+
             # Train SVM
             # Use LinearSVC for linear kernel (10-100x faster than SVC)
             # Use CalibratedClassifierCV with cv=2 for probability estimates (3 models vs 6)
@@ -271,6 +284,19 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
             y_pred_train = svm.predict(X_train)
             y_pred_test = svm.predict(X_test)
             y_pred_verify = svm.predict(X_verify)
+
+            # Diagnostic: Check prediction distribution
+            unique_pred_train = np.unique(y_pred_train)
+            unique_pred_test = np.unique(y_pred_test)
+            unique_pred_verify = np.unique(y_pred_verify)
+
+            log(f"Predictions - Train: {len(unique_pred_train)} unique classes {list(unique_pred_train)}")
+            log(f"Predictions - Test: {len(unique_pred_test)} unique classes {list(unique_pred_test)}")
+            log(f"Predictions - Verify: {len(unique_pred_verify)} unique classes {list(unique_pred_verify)}")
+
+            if len(unique_pred_test) == 1:
+                log(f"WARNING: Model predicting only 1 class on test set: {unique_pred_test[0]}")
+                log(f"  This may indicate: (1) severe class imbalance, (2) poor features, or (3) hyperparameter issues")
 
             y_proba_train = svm.predict_proba(X_train)
             y_proba_test = svm.predict_proba(X_test)
