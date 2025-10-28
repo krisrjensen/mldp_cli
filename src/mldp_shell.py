@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_004000
-File version: 2.0.10.12
+Date Revised: 20251028_140000
+File version: 2.0.10.13
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,8 +13,16 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 10)
 - CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (10.1):
-1. PHASE 4 ARCHITECTURAL CHANGE - Implemented MPCCTL architecture for SVM training
+Changes in this version (10.13):
+1. PHASE 4 RANDOM FOREST - Added Random Forest classifier training support
+   - v2.0.10.13: Added classifier-train-rf command with MPCCTL architecture
+                 Supports same configuration as SVM (decimation, data_type, amplitude, feature_set)
+                 RF hyperparameters: n_estimators, max_depth, min_samples_split, max_features
+                 Grid search: [50,100,200,500] trees × [10,20,30,None] depth × [2,5,10] split × ['sqrt','log2',None] features
+                 Uses same feature vectors as SVM for direct comparison
+                 Results stored in experiment_{exp}_classifier_{cls}_rf_results tables
+
+2. PHASE 4 ARCHITECTURAL CHANGE - Implemented MPCCTL architecture for SVM training
    - v2.0.10.1: COMPLETE REWRITE of classifier-train-svm using mpcctl architecture
                 Created new module: mpcctl_svm_trainer.py with file-based worker coordination
                 Manager creates .mpcctl/ directory with {PID}_todo.dat and {PID}_done.dat files
@@ -16827,6 +16835,323 @@ class MLDPShell:
             manager.join(timeout=5)
             if manager.is_alive():
                 print("[WARNING] Manager still running, detaching...")
+
+            cursor.close()
+
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] {e}")
+            print(traceback.format_exc())
+
+    def cmd_classifier_train_rf(self, args):
+        """
+        Train Random Forest classifier using distance-based feature vectors
+
+        Usage: classifier-train-rf [OPTIONS]
+
+        Trains Random Forest on feature vectors from Phase 3 using data splits from Phase 1.
+        Evaluates on train/test/verification splits with both 13-class and binary
+        arc detection metrics.
+
+        Options:
+            --workers <n>             Parallel workers (default: 7, max: 28)
+            --decimation-factor <n>   Train only this decimation factor
+            --data-type <id>          Train only this data type
+            --amplitude-method <id>   Train only this amplitude method
+            --feature-set <id>        Train only this feature set
+            --n-estimators <n>        Number of trees (default: grid search)
+            --max-depth <n>           Max tree depth (default: grid search)
+            --min-samples-split <n>   Min samples to split (default: grid search)
+            --max-features <val>      Max features per split (default: grid search)
+            --force                   Overwrite existing results
+
+        Examples:
+            classifier-train-rf
+            classifier-train-rf --workers 21
+            classifier-train-rf --decimation-factor 0 --data-type 4
+            classifier-train-rf --amplitude-method 2 --workers 20
+            classifier-train-rf --n-estimators 200 --max-depth 30
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        num_workers = 7
+        filter_dec = None
+        filter_dtype = None
+        filter_amp = None
+        filter_efs = None
+        n_estimators = None
+        max_depth = None
+        min_samples_split = None
+        max_features = None
+        force = False
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--workers':
+                if i + 1 < len(args):
+                    num_workers = int(args[i + 1])
+                    if num_workers < 1 or num_workers > 28:
+                        print("[ERROR] --workers must be between 1 and 28")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --workers requires a value")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a value")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires a value")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires a value")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires a value")
+                    return
+            elif args[i] == '--n-estimators':
+                if i + 1 < len(args):
+                    n_estimators = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --n-estimators requires a value")
+                    return
+            elif args[i] == '--max-depth':
+                if i + 1 < len(args):
+                    if args[i + 1].lower() == 'none':
+                        max_depth = None
+                    else:
+                        max_depth = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --max-depth requires a value")
+                    return
+            elif args[i] == '--min-samples-split':
+                if i + 1 < len(args):
+                    min_samples_split = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --min-samples-split requires a value")
+                    return
+            elif args[i] == '--max-features':
+                if i + 1 < len(args):
+                    val = args[i + 1].lower()
+                    if val == 'none':
+                        max_features = None
+                    elif val in ['sqrt', 'log2']:
+                        max_features = val
+                    else:
+                        try:
+                            max_features = int(val)
+                        except ValueError:
+                            print("[ERROR] --max-features must be 'sqrt', 'log2', 'none', or an integer")
+                            return
+                    i += 2
+                else:
+                    print("[ERROR] --max-features requires a value")
+                    return
+            elif args[i] == '--force':
+                force = True
+                i += 1
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        try:
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            print(f"\n[INFO] Training Random Forest for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Using {num_workers} parallel workers")
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id, classifier_name
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+
+            global_classifier_id, classifier_name = result
+            print(f"[INFO] Using classifier: {classifier_name}")
+
+            # Check if active configuration exists
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] No active configuration found for classifier {cls_id}")
+                print("Use 'classifier-config-activate <config_id>' to activate a configuration")
+                return
+
+            config_id, config_name = result
+            print(f"[INFO] Using configuration: {config_name}")
+
+            # Check if results tables exist
+            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_rf_results"
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (results_table_name,))
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                print(f"[ERROR] Results table {results_table_name} does not exist")
+                print(f"[INFO] Please create the RF results tables manually using the schema:")
+                print(f"[INFO] See: documentation/reference/rf_results_schema.sql")
+                return
+
+            # Check for existing results (simplified check)
+            if not force:
+                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
+                existing_count = cursor.fetchone()[0]
+                if existing_count > 0:
+                    print(f"[WARNING] Found {existing_count} existing results")
+                    print("[INFO] Use --force to overwrite existing results")
+                    return
+
+            # Import and prepare
+            from datetime import datetime
+            import multiprocessing as mp
+            from pathlib import Path
+            import sys
+            import time
+            import json
+
+            # Add mpcctl_rf_trainer to path
+            sys.path.insert(0, str(Path(__file__).parent))
+            from mpcctl_rf_trainer import manager_process
+
+            # Prepare mpcctl base directory
+            mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{exp_id:03d}')
+
+            # Prepare filter dictionary
+            filters = {
+                'decimation_factor': filter_dec,
+                'data_type': filter_dtype,
+                'amplitude_method': filter_amp,
+                'experiment_feature_set': filter_efs,
+                'n_estimators': n_estimators,
+                'max_depth': max_depth,
+                'min_samples_split': min_samples_split,
+                'max_features': max_features
+            }
+
+            # Create timestamped log file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_file = mpcctl_base_dir / f"rf_training_{timestamp}.log"
+
+            # Database config
+            db_config = {
+                'host': 'localhost',
+                'port': 5432,
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            print(f"\n[INFO] Starting parallel Random Forest training with {num_workers} workers...")
+            print("[INFO] Using MPCCTL architecture for deadlock-proof training")
+            print(f"[INFO] Log file: {log_file}\n")
+
+            # Spawn manager process in background
+            manager = mp.Process(
+                target=manager_process,
+                args=(exp_id, cls_id, num_workers, db_config, filters, log_file, True, mpcctl_base_dir)
+            )
+            manager.start()
+
+            print(f"[INFO] Training manager started in background (PID {manager.pid})")
+            print(f"[INFO] Waiting for initialization...\n")
+
+            # Wait for state file to be created
+            state_file = mpcctl_base_dir / ".mpcctl_state.json"
+            max_wait = 10
+            waited = 0
+            while not state_file.exists() and waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
+
+            if not state_file.exists():
+                print("[WARNING] State file not created yet")
+                print("Training is running in background")
+                print(f"Monitor progress: cat {state_file}")
+                return
+
+            print("[INFO] Live Progress Monitor (Press Ctrl+C to detach)\n")
+
+            # Live progress monitoring loop
+            try:
+                last_status = None
+                last_completed = 0
+                while True:
+                    try:
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
+
+                        progress = state.get('progress', {})
+                        status = state.get('status', 'unknown')
+                        completed = progress.get('completed_tasks', 0)
+
+                        if completed != last_completed or status != last_status:
+                            total = progress.get('total_tasks', 0)
+                            pct = progress.get('percent_complete', 0.0)
+                            rate = progress.get('configs_per_second', 0.0)
+                            eta = progress.get('estimated_time_remaining_seconds', 0)
+
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Progress: {completed}/{total} ({pct:.1f}%) | Rate: {rate:.2f} configs/s | ETA: {eta//60:.0f}m {eta%60:.0f}s")
+
+                            last_completed = completed
+                            last_status = status
+
+                        if status == 'completed':
+                            print("\n[INFO] Training completed successfully!")
+                            break
+
+                        time.sleep(2)
+
+                    except json.JSONDecodeError:
+                        time.sleep(0.5)
+                    except KeyboardInterrupt:
+                        print("\n\n[INFO] Detached from monitor (training continues in background)")
+                        print(f"[INFO] Manager PID: {manager.pid}")
+                        print(f"[INFO] Monitor progress: cat {state_file}")
+                        break
+
+            except Exception as e:
+                print(f"[ERROR] Monitor error: {e}")
 
             cursor.close()
 
