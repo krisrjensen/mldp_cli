@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_143124
-File version: 1.0.0.18
+Date Revised: 20251028_144123
+File version: 1.0.0.19
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -264,6 +264,34 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     max_iter=10000,
                     dual='auto'  # Let sklearn choose based on n_samples vs n_features
                 )
+
+                # Train base LinearSVC WITHOUT calibration first to check predictions
+                log(f"Training LinearSVC (no calibration) with C={svm_params['C']}")
+                base_svm.fit(X_train, y_train)
+
+                # Check predictions from base LinearSVC
+                y_pred_base_train = base_svm.predict(X_train)
+                y_pred_base_test = base_svm.predict(X_test)
+                unique_pred_base_train = np.unique(y_pred_base_train)
+                unique_pred_base_test = np.unique(y_pred_base_test)
+                log(f"LinearSVC base predictions - Train: {len(unique_pred_base_train)} classes {list(unique_pred_base_train)}")
+                log(f"LinearSVC base predictions - Test: {len(unique_pred_base_test)} classes {list(unique_pred_base_test)}")
+
+                if len(unique_pred_base_test) == 1:
+                    log(f"ERROR: LinearSVC base model predicting only 1 class: {unique_pred_base_test[0]}")
+                    log(f"  This is a LinearSVC bug - trying with different parameters")
+                    # Try without class_weight='balanced'
+                    base_svm = LinearSVC(
+                        C=svm_params['C'],
+                        random_state=42,
+                        max_iter=10000,
+                        dual='auto'
+                    )
+                    base_svm.fit(X_train, y_train)
+                    y_pred_retry = base_svm.predict(X_test)
+                    unique_pred_retry = np.unique(y_pred_retry)
+                    log(f"LinearSVC retry (no class_weight) - Test: {len(unique_pred_retry)} classes {list(unique_pred_retry)}")
+
                 # Wrap in calibrator for probability estimates (cv=2 means 3 models total)
                 svm = CalibratedClassifierCV(base_svm, cv=2, method='sigmoid')
                 log(f"Using LinearSVC with calibration (fast linear solver)")
