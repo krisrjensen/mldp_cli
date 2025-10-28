@@ -3,22 +3,30 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_144123
-File version: 2.0.10.18
+Date Revised: 20251028_152200
+File version: 2.0.10.19
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 18)
+- CHANGE: Tracks changes within current commit cycle (currently 19)
 
-Changes in this version (10.18):
-1. PHASE 4 BUG INVESTIGATION - Added diagnostic logging for LinearSVC steady-state bug
+Changes in this version (10.19):
+1. PHASE 4 CRITICAL BUG FIX - Fixed LinearSVC steady-state prediction bug
+   - v2.0.10.19: Removed CalibratedClassifierCV wrapper that destroyed predictions
+                 Base LinearSVC: predicts all 13 classes correctly ✓
+                 After CalibratedClassifierCV(cv=2): only 2-4 classes ✗
+                 Root cause: cv=2 insufficient for 13-class calibration
+                 Solution: Use base LinearSVC directly without calibration
+                 Added softmax(decision_function) for probability estimates
+                 LinearSVC now works correctly with 800MB memory usage
+2. PHASE 4 BUG INVESTIGATION - Added diagnostic logging for LinearSVC steady-state bug
    - v2.0.10.18: Train base LinearSVC without calibration to isolate bug
                  Log predictions from base model before CalibratedClassifierCV wrapper
                  Auto-retry without class_weight='balanced' if single-class detected
-                 Helps identify if bug is in LinearSVC or calibrator
+                 Successfully identified CalibratedClassifierCV as root cause
 2. PHASE 4 MEMORY OPTIMIZATION - Disabled SVC shrinking heuristic to increase cache usage
    - v2.0.10.17: Added shrinking=False to SVC to force full cache utilization
                  Should increase memory usage beyond 295MB cap (TESTED: still caps at 293MB)
@@ -475,7 +483,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.18"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.19"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

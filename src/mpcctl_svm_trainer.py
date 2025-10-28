@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_144123
-File version: 1.0.0.19
+Date Revised: 20251028_152200
+File version: 1.0.0.20
 Description: MPCCTL-based SVM training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -292,9 +292,14 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     unique_pred_retry = np.unique(y_pred_retry)
                     log(f"LinearSVC retry (no class_weight) - Test: {len(unique_pred_retry)} classes {list(unique_pred_retry)}")
 
-                # Wrap in calibrator for probability estimates (cv=2 means 3 models total)
-                svm = CalibratedClassifierCV(base_svm, cv=2, method='sigmoid')
-                log(f"Using LinearSVC with calibration (fast linear solver)")
+                # IMPORTANT: CalibratedClassifierCV with cv=2 destroys multi-class predictions!
+                # Base LinearSVC correctly predicts all 13 classes
+                # After calibration: only 2-4 classes predicted
+                # Root cause: cv=2 insufficient for 13-class calibration with small class counts
+                # Solution: Use base LinearSVC WITHOUT calibration
+                # Note: LinearSVC doesn't have probability=True, but we can use decision_function
+                svm = base_svm  # Use base LinearSVC directly without calibration
+                log(f"Using LinearSVC without calibration (calibration destroyed predictions)")
             else:
                 # Use standard SVC for all kernels (linear, rbf, poly)
                 # Enforce minimum cache sizes for kernel matrix operations
@@ -346,9 +351,18 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                 log(f"WARNING: Model predicting only 1 class on test set: {unique_pred_test[0]}")
                 log(f"  This may indicate: (1) severe class imbalance, (2) poor features, or (3) hyperparameter issues")
 
-            y_proba_train = svm.predict_proba(X_train)
-            y_proba_test = svm.predict_proba(X_test)
-            y_proba_verify = svm.predict_proba(X_verify)
+            # Get probability estimates (LinearSVC doesn't have predict_proba)
+            if hasattr(svm, 'predict_proba'):
+                y_proba_train = svm.predict_proba(X_train)
+                y_proba_test = svm.predict_proba(X_test)
+                y_proba_verify = svm.predict_proba(X_verify)
+            else:
+                # LinearSVC: use decision_function and apply softmax for probability estimates
+                from scipy.special import softmax
+                y_proba_train = softmax(svm.decision_function(X_train), axis=1)
+                y_proba_test = softmax(svm.decision_function(X_test), axis=1)
+                y_proba_verify = softmax(svm.decision_function(X_verify), axis=1)
+                log(f"Using decision_function with softmax for probability estimates (LinearSVC)")
 
             # Compute metrics
             def compute_multiclass_metrics(y_true, y_pred):
