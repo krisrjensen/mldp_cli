@@ -3,18 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_150000
-File version: 2.0.10.14
+Date Revised: 20251028_135401
+File version: 2.0.10.15
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 15)
 
-Changes in this version (10.14):
-1. PHASE 4 SVM CONFIGURATION - Added --use-linear-svc flag for algorithm choice
+Changes in this version (10.15):
+1. PHASE 4 VISUALIZATION - Added F1 threshold curves for SVM and RF trainers
+   - v2.0.10.15: Both SVM and RF trainers now generate F1 score vs threshold curves
+                 Shows optimal classification threshold for binary arc detection
+                 Generates 3 plots per split: train/test/verify
+2. PHASE 4 SVM CONFIGURATION - Added --use-linear-svc flag for algorithm choice
    - v2.0.10.14: Added --use-linear-svc flag to classifier-train-svm command
                  By default, uses SVC(kernel='linear') for consistency across all kernels
                  With --use-linear-svc, uses LinearSVC for 10-100x faster linear training
@@ -457,7 +461,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.12"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.15"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

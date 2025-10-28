@@ -3,8 +3,8 @@
 Filename: mpcctl_rf_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251028_120000
-Date Revised: 20251028_120000
-File version: 1.0.0.1
+Date Revised: 20251028_135401
+File version: 1.0.0.2
 Description: MPCCTL-based Random Forest training with summary generation and file export
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
@@ -436,6 +436,41 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                     plt.legend(loc="lower left")
                     plt.grid(True, alpha=0.3)
                     plt.savefig(f"{rf_viz_dir}/pr_curve_binary_{split_name}.png", dpi=150, bbox_inches='tight')
+                    plt.close()
+
+                    # F1 Score vs Threshold Curve
+                    # Calculate F1 scores at different thresholds
+                    thresholds = np.linspace(0, 1, 101)  # 101 points from 0.0 to 1.0
+                    f1_scores = []
+
+                    for threshold in thresholds:
+                        y_pred_threshold = (y_proba_arc >= threshold).astype(int)
+                        # Calculate F1 for this threshold
+                        if len(np.unique(y_pred_threshold)) > 1:  # At least 2 classes predicted
+                            prec, rec, f1, _ = precision_recall_fscore_support(
+                                y_true_binary, y_pred_threshold, average='binary', zero_division=0
+                            )
+                            f1_scores.append(f1)
+                        else:
+                            f1_scores.append(0.0)
+
+                    f1_scores = np.array(f1_scores)
+                    best_threshold_idx = np.argmax(f1_scores)
+                    best_threshold = thresholds[best_threshold_idx]
+                    best_f1 = f1_scores[best_threshold_idx]
+
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(thresholds, f1_scores, color='green', lw=2, label=f'F1 Score')
+                    plt.scatter([best_threshold], [best_f1], color='red', s=100, zorder=5,
+                               label=f'Best: F1={best_f1:.3f} @ threshold={best_threshold:.3f}')
+                    plt.xlim([0.0, 1.0])
+                    plt.ylim([0.0, 1.05])
+                    plt.xlabel('Classification Threshold')
+                    plt.ylabel('F1 Score')
+                    plt.title(f'F1 Score vs Threshold - Arc Detection ({split_name.title()})')
+                    plt.legend(loc="best")
+                    plt.grid(True, alpha=0.3)
+                    plt.savefig(f"{rf_viz_dir}/f1_threshold_curve_binary_{split_name}.png", dpi=150, bbox_inches='tight')
                     plt.close()
 
             # Convert numpy types to Python types
