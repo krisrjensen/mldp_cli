@@ -3,8 +3,8 @@
 Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
-Date Revised: 20251012_110000
-File version: 1.2.0.6
+Date Revised: 20251029_211500
+File version: 1.2.0.7
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -13,6 +13,8 @@ Description: Extract features from segments and generate feature filesets
              Fixed to use only CONFIGURED amplitude methods in feature file output
              Fixed to store method_id (not experiment_amplitude_id) in database
              Added BIGSERIAL id column and fixed foreign key reference
+             Added support for new feature function families (derivative, temporal, spectral, composite)
+             Updated _apply_statistic() to call wrapper functions from feature_functions modules
 """
 
 import psycopg2
@@ -25,6 +27,22 @@ import json
 import subprocess
 from datetime import datetime
 from tqdm import tqdm
+import sys
+
+# Add ml_code/src to path for importing new feature functions
+ml_code_path = Path(__file__).parent.parent.parent / 'ml_code' / 'src'
+if str(ml_code_path) not in sys.path:
+    sys.path.insert(0, str(ml_code_path))
+
+# Import new feature function families
+try:
+    from feature_functions.derivative_features import *
+    from feature_functions.temporal_features import *
+    from feature_functions.spectral_features import *
+    from feature_functions.composite_features import *
+except ImportError as e:
+    logging.warning(f"Could not import feature functions: {e}")
+    logging.warning("New feature functions will not be available")
 
 logger = logging.getLogger(__name__)
 
@@ -726,6 +744,7 @@ class ExperimentFeatureExtractor:
         """
         comp_func = feature.get('computation_function')
         feature_name = feature.get('feature_name', 'unknown')
+        behavior_type = feature.get('behavior_type', 'aggregate')
 
         if not comp_func:
             # Legacy features or missing function - infer from feature name
@@ -759,6 +778,30 @@ class ExperimentFeatureExtractor:
             return float(np.median(chunk))
         elif comp_func == 'np.ptp':
             return float(np.ptp(chunk))
+        elif comp_func in globals():
+            # New feature functions from feature_functions modules
+            try:
+                func = globals()[comp_func]
+                result = func(chunk)
+
+                # Handle both scalar and array outputs
+                if np.isscalar(result):
+                    return float(result)
+                elif isinstance(result, np.ndarray):
+                    if behavior_type == 'aggregate':
+                        # For aggregate functions that accidentally return arrays,
+                        # take the mean as a scalar representation
+                        logger.warning(f"Feature {feature_name} (aggregate) returned array, taking mean")
+                        return float(np.mean(result))
+                    else:
+                        # For sample_wise functions in aggregate context,
+                        # take the mean across the array
+                        return float(np.mean(result))
+                else:
+                    return float(result)
+            except Exception as e:
+                logger.error(f"Error calling {comp_func} for {feature_name}: {e}")
+                raise ValueError(f"Failed to compute {comp_func}: {e}")
         else:
             raise ValueError(f"Unsupported computation function: {comp_func}")
 
