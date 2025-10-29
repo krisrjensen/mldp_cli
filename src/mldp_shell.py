@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_204500
-File version: 2.0.10.21
+Date Revised: 20251028_210000
+File version: 2.0.10.22
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,12 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 10)
 - CHANGE: Tracks changes within current commit cycle (currently 19)
 
-Changes in this version (10.21):
+Changes in this version (10.22):
+1. PHASE 4 ENHANCEMENT - Improved heatmap visualization formatting
+   - v2.0.10.22: Changed metric precision from 3 to 2 decimal places (0.95 instead of 0.950)
+                 Removed global colorbar limits (vmin=0, vmax=1) for local scaling per subplot
+                 Each heatmap now uses full color spectrum based on its own data range
+                 Reduced annotation font size to 8pt for better readability
 1. PHASE 4 BUGFIX - Fixed table name in classifier query builder
    - v2.0.10.21: Fixed ml_feature_set_lut → ml_feature_sets_lut (plural)
                  Corrected JOIN in classifier_query_builder.py
@@ -497,7 +502,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.21"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.22"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17528,25 +17533,24 @@ class MLDPShell:
                                     pr_val = pivot_pr.loc[y_val, x_val]
 
                                     if pd.notna(f1_val):
-                                        text = f"ROC:{roc_val:.3f}\nF1:{f1_val:.3f}\nPR:{pr_val:.3f}"
+                                        text = f"ROC:{roc_val:.2f}\nF1:{f1_val:.2f}\nPR:{pr_val:.2f}"
                                     else:
                                         text = ""
                                     row.append(text)
                                 annot_array.append(row)
 
-                            # Create heatmap
+                            # Create heatmap with local color scaling
                             sns.heatmap(
                                 pivot_f1,
                                 annot=annot_array,
                                 fmt='',
                                 cmap='RdYlGn',
-                                vmin=0,
-                                vmax=1,
                                 cbar_kws={'label': 'F1 Score'},
                                 linewidths=0.5,
                                 linecolor='gray',
                                 ax=ax,
-                                cbar=True
+                                cbar=True,
+                                annot_kws={'fontsize': 8}
                             )
 
                             # Set subplot title using classifier config formatters
