@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_203000
-File version: 2.0.10.20
+Date Revised: 20251028_204500
+File version: 2.0.10.21
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,10 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 10)
 - CHANGE: Tracks changes within current commit cycle (currently 19)
 
-Changes in this version (10.20):
+Changes in this version (10.21):
+1. PHASE 4 BUGFIX - Fixed table name in classifier query builder
+   - v2.0.10.21: Fixed ml_feature_set_lut → ml_feature_sets_lut (plural)
+                 Corrected JOIN in classifier_query_builder.py
 1. PHASE 4 VISUALIZATION - Added classifier results visualization with extensible registry pattern
    - v2.0.10.20: Added classifier-plot-results command with registry-based architecture
                  Created classifier_configs.py with ClassifierRegistry pattern for extensibility
@@ -494,7 +497,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.20"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.21"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

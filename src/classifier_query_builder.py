@@ -3,8 +3,8 @@
 Filename: classifier_query_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251028_153500
-Date Revised: 20251028_153500
-File version: 1.0.0.1
+Date Revised: 20251028_204500
+File version: 1.0.0.2
 Description: SQL query builder for classifier results (classifier-agnostic)
 
 This module provides SQL query building logic that works with any classifier type
@@ -70,7 +70,7 @@ class ClassifierQueryBuilder:
                 ON r.amplitude_processing_method_id = am.method_id
             JOIN ml_experiments_feature_sets efs
                 ON r.experiment_feature_set_id = efs.experiment_feature_set_id
-            JOIN ml_feature_set_lut fsl
+            JOIN ml_feature_sets_lut fsl
                 ON efs.feature_set_id = fsl.feature_set_id
             WHERE 1=1
                 {self._build_filter_clause(filters)}
