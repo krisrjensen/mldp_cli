@@ -52,13 +52,12 @@
 - [x] Verify 6 feature sets created (COUNT query)
 
 ### Experiment Linking
-- [x] Link feature sets to experiment 41, both channels (source_current,load_voltage)
-- [x] Created 6 experiment_feature_set links (IDs 6-11)
-- [x] Verify links created (COUNT query)
-- [x] Document feature_set_ids for reference
+- [x] Create CLI command reference document for future experiment linking
+- [x] Document feature_set_ids for reference (15-20)
+- [x] Verify no auto-linking to existing experiments
 
 **Completion Date:** 2025-10-29
-**Note:** Used multi-channel approach ('source_current,load_voltage') instead of separate links due to unique constraint on (experiment_id, feature_set_id)
+**Note:** Feature sets are registered but NOT linked to any experiment. User will link when creating new experiment using CLI commands in link_new_features_cli_commands.md
 
 ---
 
@@ -202,16 +201,16 @@
 - ✅ Project documentation created
 - ✅ All 64 features registered in database (IDs 31-94)
 - ✅ 6 feature sets created (IDs 15-20)
-- ✅ Feature sets linked to experiment 41 (both channels)
+- ✅ CLI command reference document created
 - ✅ Feature extractor modified to support new functions
 - ✅ Import paths configured for feature_functions modules
 - ✅ _apply_statistic() updated to handle wrapper functions
 
 **What's Next:**
-- 🎯 **Immediate:** Commit mldp_cli changes
-- 🎯 **Immediate:** Update main repo submodule references
-- 🎯 **User Testing:** Run feature extraction on test segments
-- 🎯 **User Testing:** Verify feature extraction works end-to-end
+- 🎯 **User Action:** Create new experiment for testing new features
+- 🎯 **User Action:** Link feature sets using commands in link_new_features_cli_commands.md
+- 🎯 **User Action:** Run feature extraction on test segments
+- 🎯 **User Action:** Verify feature extraction works end-to-end
 - 🎯 **Future:** Train SVM with new features (Phase 5)
 
 **Blocking Items:**

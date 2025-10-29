@@ -222,39 +222,25 @@ ORDER BY fsl.feature_set_name;
 
 
 -- ============================================================================
--- PART 2: LINK FEATURE SETS TO EXPERIMENT 41
+-- PART 2: LINK FEATURE SETS TO EXPERIMENT (EXAMPLE - DO NOT EXECUTE)
+-- ============================================================================
+-- NOTE: These are EXAMPLE commands only. Do NOT link features to existing experiments.
+-- When creating a new experiment, use the CLI commands provided in the documentation.
 -- ============================================================================
 
--- ----------------------------------------------------------------------------
--- Link to load_voltage channel (priority_order: 20-25)
--- Experiment Feature Set IDs: 6-11
--- ----------------------------------------------------------------------------
-
+-- EXAMPLE: Link to multi-channel (source_current,load_voltage)
+-- DO NOT EXECUTE - Use CLI commands instead
+/*
 INSERT INTO ml_experiments_feature_sets
-(experiment_feature_set_id, experiment_id, feature_set_id, data_channel, n_value, priority_order)
+(experiment_id, feature_set_id, data_channel, n_value, priority_order)
 VALUES
-(6, 41, 15, 'load_voltage', NULL, 20),  -- derivative_volatility
-(7, 41, 16, 'load_voltage', NULL, 21),  -- stft_basic
-(8, 41, 17, 'load_voltage', NULL, 22),  -- stft_volatility_composite
-(9, 41, 18, 'load_voltage', NULL, 23),  -- pink_noise_stft_tmr
-(10, 41, 19, 'load_voltage', NULL, 24), -- pink_noise_stft_bandpower
-(11, 41, 20, 'load_voltage', NULL, 25); -- new_features_comprehensive
-
-
--- ----------------------------------------------------------------------------
--- Link to source_current channel (priority_order: 30-35)
--- Experiment Feature Set IDs: 12-17
--- ----------------------------------------------------------------------------
-
-INSERT INTO ml_experiments_feature_sets
-(experiment_feature_set_id, experiment_id, feature_set_id, data_channel, n_value, priority_order)
-VALUES
-(12, 41, 15, 'source_current', NULL, 30), -- derivative_volatility
-(13, 41, 16, 'source_current', NULL, 31), -- stft_basic
-(14, 41, 17, 'source_current', NULL, 32), -- stft_volatility_composite
-(15, 41, 18, 'source_current', NULL, 33), -- pink_noise_stft_tmr
-(16, 41, 19, 'source_current', NULL, 34), -- pink_noise_stft_bandpower
-(17, 41, 20, 'source_current', NULL, 35); -- new_features_comprehensive
+(<EXPERIMENT_ID>, 15, 'source_current,load_voltage', NULL, 20),  -- derivative_volatility
+(<EXPERIMENT_ID>, 16, 'source_current,load_voltage', NULL, 21),  -- stft_basic
+(<EXPERIMENT_ID>, 17, 'source_current,load_voltage', NULL, 22),  -- stft_volatility_composite
+(<EXPERIMENT_ID>, 18, 'source_current,load_voltage', NULL, 23),  -- pink_noise_stft_tmr
+(<EXPERIMENT_ID>, 19, 'source_current,load_voltage', NULL, 24),  -- pink_noise_stft_bandpower
+(<EXPERIMENT_ID>, 20, 'source_current,load_voltage', NULL, 25);  -- new_features_comprehensive
+*/
 
 
 -- ============================================================================
