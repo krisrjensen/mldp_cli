@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_152200
-File version: 2.0.10.19
+Date Revised: 20251028_203000
+File version: 2.0.10.20
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,18 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 10)
 - CHANGE: Tracks changes within current commit cycle (currently 19)
 
-Changes in this version (10.19):
+Changes in this version (10.20):
+1. PHASE 4 VISUALIZATION - Added classifier results visualization with extensible registry pattern
+   - v2.0.10.20: Added classifier-plot-results command with registry-based architecture
+                 Created classifier_configs.py with ClassifierRegistry pattern for extensibility
+                 Created classifier_query_builder.py for classifier-agnostic SQL queries
+                 Supports any classifier type (SVM, RF, future: XGBoost, etc.)
+                 Generates heatmap plots with configurable X/Y axes and subplot layouts
+                 Default layout: 6 subplots (3 feature sets × 2 amplitude methods)
+                 Heatmap boxes colored by F1 score, annotated with ROC/F1/PR metrics
+                 Groups results by hyperparameter (e.g., C parameter: C0_1/, C1_0/, C10_0/)
+                 Generates plots for all three data splits (train/test/verify)
+                 Future classifiers can be added by creating config and registering
 1. PHASE 4 CRITICAL BUG FIX - Fixed LinearSVC steady-state prediction bug
    - v2.0.10.19: Removed CalibratedClassifierCV wrapper that destroyed predictions
                  Base LinearSVC: predicts all 13 classes correctly ✓
@@ -483,7 +494,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.19"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.20"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1440,6 +1451,8 @@ class MLDPShell:
             'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
             'classifier-train-svm': self.cmd_classifier_train_svm,
             'classifier-test-svm-single': self.cmd_classifier_test_svm_single,
+            'classifier-train-rf': self.cmd_classifier_train_rf,
+            'classifier-plot-results': self.cmd_plot_classifier_results,
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
         }
@@ -17201,6 +17214,367 @@ class MLDPShell:
                 print(f"[ERROR] Monitor error: {e}")
 
             cursor.close()
+
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] {e}")
+            print(traceback.format_exc())
+
+    def cmd_plot_classifier_results(self, args):
+        """
+        Plot classifier training results with performance comparison heatmaps
+
+        Usage: plot-classifier-results --X <col> --Y <col> --subplot-axes <cols> --group-by <col> [OPTIONS]
+
+        Generates performance heatmaps for classifier results. Data is organized by --group-by
+        parameter into separate directories, with subplots defined by --subplot-axes.
+
+        Required Arguments:
+            --X <column>              X-axis column (e.g., decimation_factor)
+            --Y <column>              Y-axis column (e.g., data_type_id)
+            --subplot-axes <cols>     Subplot facet columns, comma-separated
+                                     (e.g., experiment_feature_set_id,amplitude_processing_method_id)
+            --group-by <column>       Directory grouping column (e.g., svm_c_parameter)
+
+        Optional Arguments:
+            --classifier-type <type>  Classifier type: svm, rf (default: svm)
+            --split <name>            Data split: train, test, verify, all (default: all)
+            --output-dir <path>       Output directory (default: experiment_dir/classifier_files/plots)
+            --filter-<col> <value>    Filter by specific column value (can use multiple)
+
+        Examples:
+            # Plot SVM results grouped by C parameter
+            plot-classifier-results --X decimation_factor --Y data_type_id \\
+                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
+                --group-by svm_c_parameter
+
+            # Plot RF results grouped by n_estimators, test split only
+            plot-classifier-results --classifier-type rf --X decimation_factor --Y data_type_id \\
+                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
+                --group-by rf_n_estimators --split test
+
+            # Plot with filters
+            plot-classifier-results --X decimation_factor --Y data_type_id \\
+                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
+                --group-by svm_c_parameter --filter-decimation_factor 0
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse required arguments
+        x_axis = None
+        y_axis = None
+        subplot_axes = None
+        group_by = None
+        classifier_type = 'svm'
+        split = 'all'
+        output_dir = None
+        filters = {}
+
+        i = 0
+        while i < len(args):
+            if args[i] == '--X':
+                if i + 1 < len(args):
+                    x_axis = args[i + 1]
+                    i += 2
+                else:
+                    print("[ERROR] --X requires a value")
+                    return
+            elif args[i] == '--Y':
+                if i + 1 < len(args):
+                    y_axis = args[i + 1]
+                    i += 2
+                else:
+                    print("[ERROR] --Y requires a value")
+                    return
+            elif args[i] == '--subplot-axes':
+                if i + 1 < len(args):
+                    subplot_axes = args[i + 1].split(',')
+                    i += 2
+                else:
+                    print("[ERROR] --subplot-axes requires a value")
+                    return
+            elif args[i] == '--group-by':
+                if i + 1 < len(args):
+                    group_by = args[i + 1]
+                    i += 2
+                else:
+                    print("[ERROR] --group-by requires a value")
+                    return
+            elif args[i] == '--classifier-type':
+                if i + 1 < len(args):
+                    classifier_type = args[i + 1]
+                    i += 2
+                else:
+                    print("[ERROR] --classifier-type requires a value")
+                    return
+            elif args[i] == '--split':
+                if i + 1 < len(args):
+                    split = args[i + 1]
+                    i += 2
+                else:
+                    print("[ERROR] --split requires a value")
+                    return
+            elif args[i] == '--output-dir':
+                if i + 1 < len(args):
+                    output_dir = Path(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --output-dir requires a value")
+                    return
+            elif args[i].startswith('--filter-'):
+                # Filter arguments: --filter-<column> <value>
+                filter_col = args[i][9:]  # Remove '--filter-' prefix
+                if i + 1 < len(args):
+                    filters[filter_col] = args[i + 1]
+                    i += 2
+                else:
+                    print(f"[ERROR] {args[i]} requires a value")
+                    return
+            else:
+                print(f"[ERROR] Unknown option: {args[i]}")
+                return
+
+        # Validate required arguments
+        if not x_axis:
+            print("[ERROR] --X is required")
+            return
+        if not y_axis:
+            print("[ERROR] --Y is required")
+            return
+        if not subplot_axes:
+            print("[ERROR] --subplot-axes is required")
+            return
+        if not group_by:
+            print("[ERROR] --group-by is required")
+            return
+
+        # Validate split
+        valid_splits = ['train', 'test', 'verify', 'all']
+        if split not in valid_splits:
+            print(f"[ERROR] --split must be one of: {', '.join(valid_splits)}")
+            return
+
+        # Determine which splits to process
+        if split == 'all':
+            splits_to_process = ['train', 'test', 'verify']
+        else:
+            splits_to_process = [split]
+
+        try:
+            # Import classifier configuration modules
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent))
+            from classifier_configs import ClassifierRegistry
+            from classifier_query_builder import ClassifierQueryBuilder
+
+            # Get classifier configuration from registry
+            registry = ClassifierRegistry()
+            try:
+                classifier_config = registry.get(classifier_type)
+            except ValueError as e:
+                print(f"[ERROR] {e}")
+                return
+
+            print(f"\n[INFO] Plotting {classifier_config.display_name} results")
+            print(f"[INFO] Experiment: {self.current_experiment}, Classifier: {self.current_classifier_id}")
+
+            # Connect to database
+            cursor = self.db_conn.cursor()
+
+            # Check if results table exists
+            query_builder = ClassifierQueryBuilder(classifier_config)
+            if not query_builder.check_table_exists(cursor, self.current_experiment, self.current_classifier_id):
+                table_name = classifier_config.get_table_name(self.current_experiment, self.current_classifier_id)
+                print(f"[ERROR] Results table '{table_name}' does not exist")
+                print(f"[INFO] Run classifier training first to generate results")
+                cursor.close()
+                return
+
+            # Build and execute query
+            print(f"[INFO] Fetching data from database...")
+            query = query_builder.build_query(self.current_experiment, self.current_classifier_id, filters)
+            cursor.execute(query)
+
+            # Fetch all results
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            cursor.close()
+
+            if len(rows) == 0:
+                print("[ERROR] No data found matching the criteria")
+                return
+
+            print(f"[INFO] Loaded {len(rows)} model configurations")
+
+            # Convert to pandas DataFrame for easier manipulation
+            import pandas as pd
+            import numpy as np
+            df = pd.DataFrame(rows, columns=columns)
+
+            # Determine output directory
+            if not output_dir:
+                output_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/classifier_files/plots/classifier_{self.current_classifier_id:03d}_results')
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[INFO] Output directory: {output_dir}")
+
+            # Get unique values for group-by column
+            group_values = sorted(df[group_by].unique())
+            print(f"[INFO] Group-by '{group_by}': {len(group_values)} unique values")
+
+            # Get unique values for subplot-axes
+            subplot_values = {}
+            for subplot_col in subplot_axes:
+                subplot_values[subplot_col] = sorted(df[subplot_col].unique())
+                print(f"[INFO] Subplot axis '{subplot_col}': {subplot_values[subplot_col]}")
+
+            # Import plotting libraries
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+
+            # Create directories and generate plots for each group-by value
+            total_plots = 0
+            for group_value in group_values:
+                # Format directory name using classifier config
+                dir_name = classifier_config.format_group_value(group_by, group_value)
+                group_dir = output_dir / dir_name
+                group_dir.mkdir(parents=True, exist_ok=True)
+
+                # Filter data for this group
+                group_data = df[df[group_by] == group_value]
+
+                print(f"\n[PROGRESS] Generating plots for {dir_name}...")
+
+                # Generate plots for each split
+                for split_name in splits_to_process:
+                    # Create figure with subplots
+                    n_subplots = len(subplot_values[subplot_axes[0]]) * len(subplot_values[subplot_axes[1]])
+                    n_rows = len(subplot_values[subplot_axes[1]])
+                    n_cols = len(subplot_values[subplot_axes[0]])
+
+                    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 7, n_rows * 5))
+                    if n_rows == 1 and n_cols == 1:
+                        axes = np.array([[axes]])
+                    elif n_rows == 1:
+                        axes = axes.reshape(1, -1)
+                    elif n_cols == 1:
+                        axes = axes.reshape(-1, 1)
+
+                    fig.suptitle(f'{classifier_config.display_name} Results | {group_by}={group_value} | {split_name.title()} Split',
+                                fontsize=16, fontweight='bold', y=0.995)
+
+                    # Iterate through subplot combinations
+                    for row_idx, row_value in enumerate(subplot_values[subplot_axes[1]]):
+                        for col_idx, col_value in enumerate(subplot_values[subplot_axes[0]]):
+                            ax = axes[row_idx, col_idx]
+
+                            # Filter data for this subplot
+                            subplot_data = group_data[
+                                (group_data[subplot_axes[0]] == col_value) &
+                                (group_data[subplot_axes[1]] == row_value)
+                            ]
+
+                            if len(subplot_data) == 0:
+                                # No data for this combination
+                                ax.text(0.5, 0.5, 'No Data', ha='center', va='center',
+                                       transform=ax.transAxes, fontsize=14, color='gray')
+                                ax.set_xticks([])
+                                ax.set_yticks([])
+                                ax.set_xlabel('')
+                                ax.set_ylabel('')
+                                continue
+
+                            # Create pivot table for heatmap
+                            pivot_f1 = subplot_data.pivot_table(
+                                values=f'arc_f1_{split_name}',
+                                index=y_axis,
+                                columns=x_axis,
+                                aggfunc='first'
+                            )
+
+                            # Create pivot tables for other metrics
+                            pivot_roc = subplot_data.pivot_table(
+                                values=f'arc_roc_auc_{split_name}',
+                                index=y_axis,
+                                columns=x_axis,
+                                aggfunc='first'
+                            )
+                            pivot_pr = subplot_data.pivot_table(
+                                values=f'arc_pr_auc_{split_name}',
+                                index=y_axis,
+                                columns=x_axis,
+                                aggfunc='first'
+                            )
+
+                            # Create annotation array with all three metrics
+                            annot_array = []
+                            for y_val in pivot_f1.index:
+                                row = []
+                                for x_val in pivot_f1.columns:
+                                    f1_val = pivot_f1.loc[y_val, x_val]
+                                    roc_val = pivot_roc.loc[y_val, x_val]
+                                    pr_val = pivot_pr.loc[y_val, x_val]
+
+                                    if pd.notna(f1_val):
+                                        text = f"ROC:{roc_val:.3f}\nF1:{f1_val:.3f}\nPR:{pr_val:.3f}"
+                                    else:
+                                        text = ""
+                                    row.append(text)
+                                annot_array.append(row)
+
+                            # Create heatmap
+                            sns.heatmap(
+                                pivot_f1,
+                                annot=annot_array,
+                                fmt='',
+                                cmap='RdYlGn',
+                                vmin=0,
+                                vmax=1,
+                                cbar_kws={'label': 'F1 Score'},
+                                linewidths=0.5,
+                                linecolor='gray',
+                                ax=ax,
+                                cbar=True
+                            )
+
+                            # Set subplot title using classifier config formatters
+                            title_parts = []
+                            for subplot_col, val in zip(subplot_axes, [col_value, row_value]):
+                                formatted = classifier_config.format_group_value(subplot_col, val)
+                                title_parts.append(formatted)
+                            ax.set_title(' - '.join(title_parts), fontsize=11, fontweight='bold')
+
+                            # Configure axes labels
+                            ax.set_xlabel(x_axis.replace('_', ' ').title(), fontsize=9)
+                            ax.set_ylabel(y_axis.replace('_', ' ').title(), fontsize=9)
+
+                    # Adjust layout and save
+                    plt.tight_layout()
+                    filename = f"{split_name}.png"
+                    filepath = group_dir / filename
+                    fig.savefig(filepath, dpi=150, bbox_inches='tight')
+                    plt.close(fig)
+
+                    print(f"  ✓ {filepath.name}")
+                    total_plots += 1
+
+            print(f"\n[COMPLETE] Generated {total_plots} plots in {len(group_values)} directories")
+            print(f"[INFO] Output directory: {output_dir}")
+
+            # Print directory structure summary
+            print("\nDirectory structure:")
+            for group_value in group_values:
+                dir_name = classifier_config.format_group_value(group_by, group_value)
+                print(f"├── {dir_name}/ ({len(splits_to_process)} plots)")
 
         except Exception as e:
             import traceback
