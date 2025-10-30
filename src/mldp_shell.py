@@ -512,7 +512,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.22"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.23"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17963,7 +17963,7 @@ class MLDPShell:
         Reports status either way.
         """
         try:
-            from .noise_floor_calculator import NoiseFloorCalculator
+            from noise_floor_calculator import NoiseFloorCalculator
 
             # Get database connection params
             db_params = {
@@ -18001,7 +18001,7 @@ class MLDPShell:
         Shows all noise floor values with data type, segments used, and calculation date.
         """
         try:
-            from .noise_floor_calculator import NoiseFloorCalculator
+            from noise_floor_calculator import NoiseFloorCalculator
 
             db_params = {
                 'host': 'localhost',
@@ -18055,7 +18055,7 @@ class MLDPShell:
         Uses spectral PSD method with 10th percentile noise floor estimation.
         """
         try:
-            from .noise_floor_calculator import NoiseFloorCalculator
+            from noise_floor_calculator import NoiseFloorCalculator
 
             # Parse arguments
             data_type_id = None
@@ -18125,7 +18125,7 @@ class MLDPShell:
         Requires user confirmation for all delete operations.
         """
         try:
-            from .noise_floor_calculator import NoiseFloorCalculator
+            from noise_floor_calculator import NoiseFloorCalculator
 
             # Parse arguments
             if not args:
