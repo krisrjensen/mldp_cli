@@ -334,39 +334,47 @@ mldp_cli/
 
 ## Current Status
 
-**Overall Progress:** 95% (Implementation complete, testing pending)
+**Overall Progress:** 95% (Implementation complete, SQL query fixed, testing pending)
 
 **Completed:**
-- ✅ adc_scaling technical specification
-- ✅ adc_scaling SQL registration script
-- ✅ noise_floor technical specification
-- ✅ noise_floor CLI command reference
-- ✅ noise_floor SQL registration script
-- ✅ Implementation plan (this document)
+- ✅ Phase 1: Database setup (adc_scaling and noise_floor tables/methods registered)
+- ✅ Phase 2: adc_scaling implementation in AmplitudeProcessor
+- ✅ Phase 3: noise_floor implementation
+  - ✅ NoiseFloorCalculator module created (v1.0.0.1)
+  - ✅ AmplitudeProcessor integration (v0.0.1.0)
+  - ✅ CLI commands in mldp_shell.py (v2.0.10.23)
+  - ✅ SQL query fixed for experiment_041 schema
+- ✅ Phase 4: Documentation updates
+  - ✅ adc_scaling technical specification
+  - ✅ adc_scaling SQL registration script
+  - ✅ noise_floor technical specification
+  - ✅ noise_floor CLI command reference
+  - ✅ noise_floor SQL registration script
+  - ✅ Implementation plan (this document)
+- ✅ Phase 5: Version control (commits and pushes completed)
 
-**In Progress:**
-- ⏸️ Database setup (Phase 1)
+**Bug Fixes Completed:**
+- ✅ Fixed VERSION constant in mldp_shell.py (2.0.10.23)
+- ✅ Fixed import errors (relative → absolute imports)
+- ✅ Fixed SQL query to use experiment_041_feature_fileset schema
 
 **Pending:**
-- adc_scaling implementation (Phase 2)
-- noise_floor implementation (Phase 3)
-- Testing (embedded in Phases 2-3)
-- Documentation updates (Phase 4)
-- Version control (Phase 5)
+- Testing (Phase 3.4): Unit tests and integration tests
+  - test_noise_floor_calculator.py
+  - test_noise_floor_scaler.py
+  - Integration test: init → calculate → show → use
 
 ---
 
 ## Next Steps
 
-1. Execute SQL registration scripts on database
-2. Implement adc_scaling scaler in AmplitudeProcessor
-3. Test adc_scaling implementation
-4. Implement noise_floor calculator module
-5. Implement noise_floor scaler in AmplitudeProcessor
-6. Implement 4 CLI commands in mldp_shell.py
-7. Test noise_floor implementation (unit + integration)
-8. Update documentation
-9. Commit and push changes
+1. Test noise-floor-calculate command with real data
+2. Verify segments load correctly from experiment_041 structure
+3. Verify PSD calculation produces valid results
+4. Test noise-floor-show displays results correctly
+5. Create unit tests (test_noise_floor_calculator.py, test_noise_floor_scaler.py)
+6. Integration test: complete workflow from init to feature extraction
+7. Update status documentation
 
 ---
 
