@@ -4,16 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.30
+File version: 2.0.10.31
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 30)
+- CHANGE: Tracks changes within current commit cycle (currently 31)
 
-Changes in this version (10.30):
+Changes in this version (10.31):
+1. NOISE FLOOR SCALERS - Added range validation for requantized data
+   - v2.0.10.31: Updated noise_floor_calculator.py to v1.0.0.10
+                 Added validation that all ADC values are within expected range
+                 adc6: [0,63], adc8: [0,255], adc10: [0,1023], adc12: [0,4095]
+                 Skips segments with invalid data
+
+Changes in previous versions (10.30):
 1. NOISE FLOOR SCALERS - Fixed f-string syntax error
    - v2.0.10.30: Fixed SyntaxError: f-string expression part cannot include a backslash
                  Moved complex list comprehension outside f-string to separate variable
@@ -573,7 +580,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.30"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.31"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

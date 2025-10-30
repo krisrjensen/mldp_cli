@@ -3,10 +3,32 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.8
-Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
+File version: 1.0.0.10
+Description: Calculates noise floor values from approved steady-state segments using standard deviation
 
 Changelog:
+v1.0.0.10 (2025-10-29):
+  - Added range validation for requantized data in _load_segment_data()
+  - Validates all values are within expected range for each bit depth:
+    * adc6: [0, 63]
+    * adc8: [0, 255]
+    * adc10: [0, 1023]
+    * adc12: [0, 4095]
+  - Skips segments with values outside valid range
+  - Logs warning with count of invalid values
+
+v1.0.0.9 (2025-10-29):
+  - MAJOR FIX: Changed from PSD method to direct standard deviation calculation
+  - Previous PSD method gave values that were too low (~0.049 instead of 1+ counts)
+  - New method:
+    * Calculate standard deviation for each channel separately
+    * Take median across channels as the noise floor
+    * Returns noise floor in ADC counts (RMS)
+    * No longer uses Welch's method or FFT
+  - Removed nperseg parameter issue
+  - Removed scipy.signal import (no longer needed)
+  - Results now in proper range for ADC quantization noise (1+ counts)
+
 v1.0.0.8 (2025-10-29):
   - Fixed f-string syntax error on line 355
   - Moved complex expression outside f-string (can't use backslash in f-string)
@@ -250,6 +272,17 @@ class NoiseFloorCalculator:
                 # Use numpy right shift to ensure proper unsigned handling
                 quantized_data = np.right_shift(segment_data, shift_amount).astype(np.uint32)
 
+            # Validate quantized data range
+            # adc6: [0, 63], adc8: [0, 255], adc10: [0, 1023], adc12: [0, 4095]
+            max_value = (2 ** bit_depth) - 1
+            if np.any(quantized_data < 0) or np.any(quantized_data > max_value):
+                invalid_count = np.sum((quantized_data < 0) | (quantized_data > max_value))
+                logger.warning(
+                    f"Segment {segment_id} ({data_type_name}) contains {invalid_count} "
+                    f"values outside valid range [0, {max_value}]. Skipping segment."
+                )
+                return None
+
             logger.debug(
                 f"Loaded segment {segment_id} ({data_type_name}): "
                 f"shape={quantized_data.shape}, dtype={quantized_data.dtype}, "
@@ -268,54 +301,38 @@ class NoiseFloorCalculator:
         sampling_rate: float = 250000.0
     ) -> float:
         """
-        Calculate noise floor for a single segment using spectral PSD method
+        Calculate noise floor for a single segment using standard deviation method
 
         Method:
-          1. Compute Power Spectral Density using Welch's method
-          2. Take 10th percentile of PSD (excludes signal peaks, focuses on noise)
-          3. Convert to RMS units
+          1. Process each channel separately
+          2. Calculate standard deviation for each channel (RMS noise)
+          3. Take median across channels
 
         Args:
-            data: Segment time-series data (1D array)
-            sampling_rate: Sampling rate in Hz
+            data: Segment time-series data, shape (N, channels) or (N,)
+            sampling_rate: Sampling rate in Hz (not used in this method)
 
         Returns:
-            Noise floor value in RMS units
+            Noise floor value in ADC counts (RMS)
         """
-        # Flatten if 2D
-        if data.ndim > 1:
-            data = data.flatten()
-
-        # Compute PSD using Welch's method
-        nperseg = min(1024, len(data) // 4)
-
         try:
-            freqs, psd = signal.welch(
-                data,
-                fs=sampling_rate,
-                nperseg=nperseg,
-                window='hann',
-                scaling='density'
-            )
+            # Ensure float type for calculations
+            data_float = data.astype(np.float64)
 
-            # Exclude DC component (freq = 0)
-            psd = psd[freqs > 0]
-            freqs = freqs[freqs > 0]
+            if data_float.ndim == 1:
+                # Single channel data
+                noise_floor_rms = np.std(data_float)
+            else:
+                # Multi-channel data: calculate std for each channel
+                channel_stds = np.std(data_float, axis=0)
+                # Use median across channels as the noise floor
+                noise_floor_rms = np.median(channel_stds)
 
-            # Calculate 10th percentile of PSD
-            psd_10th = np.percentile(psd, 10)
-
-            # Take all PSD values at or below 10th percentile
-            noise_psd = psd[psd <= psd_10th]
-
-            # Convert to RMS: sqrt(mean(psd))
-            noise_floor_rms = np.sqrt(np.mean(noise_psd))
-
-            logger.debug(f"Segment noise floor: {noise_floor_rms:.6e} RMS")
+            logger.debug(f"Segment noise floor: {noise_floor_rms:.6f} ADC counts (RMS)")
             return noise_floor_rms
 
         except Exception as e:
-            logger.error(f"Failed to calculate PSD: {e}")
+            logger.error(f"Failed to calculate noise floor: {e}")
             raise
 
     def calculate_noise_floor(
