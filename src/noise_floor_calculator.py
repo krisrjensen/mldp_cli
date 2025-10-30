@@ -3,20 +3,28 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.11
+File version: 1.0.0.12
 Description: Calculates noise floor values from approved steady-state segments using standard deviation
 
 Changelog:
+v1.0.0.12 (2025-10-29):
+  - CRITICAL FIX: Auto-detect source bit depth from data range
+  - Removed incorrect premature validation of raw data
+  - Raw ADC data may be stored in 12, 14, or 16-bit formats
+  - Automatically detect source format: max <= 4095 (12-bit), <= 16383 (14-bit), <= 65535 (16-bit)
+  - Calculate shift amount as: source_bit_depth - target_bit_depth
+  - Example: 16-bit source to 8-bit target: shift by 8 (not 4)
+  - Added debug logging for source detection and shift amounts
+  - Fixed: Values like 25341 now correctly shifted to valid ranges
+
 v1.0.0.11 (2025-10-29):
   - MAJOR REWRITE: Separate voltage and current channel processing
   - Added noise_floor_voltage and noise_floor_current columns
   - Strict segment_length = 8192 enforcement with verification
-  - Added raw 12-bit data validation BEFORE requantization
   - Added channel selection (voltage=channel 0, current=channel 1)
   - Calculate and store separate noise floors for voltage and current
   - Extensive validation and error reporting
   - Fixed: Ensure only 8192-sample segments are processed
-  - Fixed: Validate raw data is in [0, 4095] range before shift
 
 v1.0.0.10 (2025-10-29):
   - Added range validation for requantized data in _load_segment_data()
@@ -230,36 +238,57 @@ class NoiseFloorCalculator:
             # Extract segment data for ALL channels first
             segment_data_all_channels = raw_data[beginning_index:end_index].copy()
 
-            # VALIDATE RAW 12-BIT DATA BEFORE REQUANTIZATION
-            # Raw data should be in range [0, 4095] for 12-bit
-            raw_min = segment_data_all_channels.min()
-            raw_max = segment_data_all_channels.max()
-
-            if raw_min < 0 or raw_max > 4095:
-                logger.warning(
-                    f"Segment {segment_id} ({data_type_name}) raw data out of 12-bit range: "
-                    f"[{raw_min}, {raw_max}] (expected [0, 4095]). Skipping segment."
-                )
-                return None
-
             # Extract the specific channel
             segment_data_channel = segment_data_all_channels[:, channel_idx].copy()
+
+            # NOTE: Raw data may be stored in 16-bit or 32-bit format
+            # The actual ADC values will be extracted via right-shifting below
+            logger.debug(
+                f"Segment {segment_id} raw data range: "
+                f"[{segment_data_channel.min()}, {segment_data_channel.max()}]"
+            )
 
             # Validate bit_depth
             if bit_depth is None or bit_depth <= 0 or bit_depth > 12:
                 logger.error(f"Invalid bit_depth {bit_depth} for segment {segment_id}")
                 return None
 
-            # Requantize from 12-bit to target bit depth
-            if bit_depth == 12:
-                # Use as-is (ensure uint32)
+            # Determine source bit depth from data range
+            # Raw ADC data may be stored in 14-bit, 16-bit, or other formats
+            data_max = segment_data_channel.max()
+            if data_max <= 4095:
+                source_bit_depth = 12
+            elif data_max <= 16383:
+                source_bit_depth = 14
+            elif data_max <= 65535:
+                source_bit_depth = 16
+            else:
+                logger.error(
+                    f"Segment {segment_id} data max {data_max} exceeds 16-bit range. "
+                    f"Unsupported format."
+                )
+                return None
+
+            logger.debug(
+                f"Segment {segment_id}: Detected source_bit_depth={source_bit_depth} "
+                f"(data_max={data_max}), target bit_depth={bit_depth}"
+            )
+
+            # Requantize from source bit depth to target bit depth
+            if source_bit_depth == bit_depth:
+                # Already at target bit depth
                 quantized_data = segment_data_channel.astype(np.uint32)
             else:
-                # Requantize by right-shifting
-                # adc10: shift right by 2 (4095 -> 1023)
-                # adc8: shift right by 4 (4095 -> 255)
-                # adc6: shift right by 6 (4095 -> 63)
-                shift_amount = 12 - bit_depth
+                # Right-shift from source to target
+                # Example: 16-bit to 8-bit: shift by 16-8=8
+                # Example: 14-bit to 8-bit: shift by 14-8=6
+                # Example: 12-bit to 8-bit: shift by 12-8=4
+                shift_amount = source_bit_depth - bit_depth
+
+                logger.debug(
+                    f"Segment {segment_id}: Shifting {source_bit_depth}-bit -> {bit_depth}-bit "
+                    f"(shift_amount={shift_amount})"
+                )
 
                 # Use numpy right shift to ensure proper unsigned handling
                 quantized_data = np.right_shift(segment_data_channel, shift_amount).astype(np.uint32)

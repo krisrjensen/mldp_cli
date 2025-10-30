@@ -4,24 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.32
+File version: 2.0.10.33
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 32)
+- CHANGE: Tracks changes within current commit cycle (currently 33)
 
-Changes in this version (10.32):
-1. NOISE FLOOR SCALERS - MAJOR REWRITE with voltage/current separation
-   - v2.0.10.32: Updated noise_floor_calculator.py to v1.0.0.11
-                 Separated voltage and current channel processing
-                 Added noise_floor_voltage and noise_floor_current columns
-                 Strict segment_length=8192 enforcement with verification
-                 Added raw 12-bit data validation BEFORE requantization
-                 Updated noise-floor-show to display both voltage and current
-                 Channel selection: voltage=channel 0, current=channel 1
+Changes in this version (10.33):
+1. NOISE FLOOR SCALERS - CRITICAL FIX for raw data bit depth detection
+   - v2.0.10.33: Updated noise_floor_calculator.py to v1.0.0.12
+                 Auto-detect source bit depth from data range (12, 14, or 16-bit)
+                 Removed incorrect premature raw data validation
+                 Fixed shift amount calculation: source_bit_depth - target_bit_depth
+                 Example: 16-bit source (25341) -> 8-bit target: shift by 8, result 98 ✓
+                 Added debug logging for source detection and shift amounts
 
 Changes in previous versions (10.30):
 1. NOISE FLOOR SCALERS - Fixed f-string syntax error
@@ -583,7 +582,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.32"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.33"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
