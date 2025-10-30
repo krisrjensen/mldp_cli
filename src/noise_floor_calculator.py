@@ -3,10 +3,16 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.12
+File version: 1.0.0.13
 Description: Calculates noise floor values from approved steady-state segments using standard deviation
 
 Changelog:
+v1.0.0.13 (2025-10-29):
+  - Fixed psycopg2 error with numpy types
+  - Convert numpy.float64 to Python float before database insert
+  - Error was: "schema 'np' does not exist" (psycopg2 tried to interpret np.float64 as SQL)
+  - Now explicitly converts: float(final_voltage_nf), float(final_current_nf)
+
 v1.0.0.12 (2025-10-29):
   - CRITICAL FIX: Auto-detect source bit depth from data range
   - Removed incorrect premature validation of raw data
@@ -469,8 +475,13 @@ class NoiseFloorCalculator:
                 'data_type_name': data_type_name
             }
 
-            # Save to database
-            self._save_noise_floor(dt_id, final_voltage_nf, final_current_nf, len(voltage_noise_floors))
+            # Save to database (convert numpy types to Python native types)
+            self._save_noise_floor(
+                dt_id,
+                float(final_voltage_nf),  # Convert numpy.float64 to Python float
+                float(final_current_nf),  # Convert numpy.float64 to Python float
+                len(voltage_noise_floors)
+            )
 
         return results
 
