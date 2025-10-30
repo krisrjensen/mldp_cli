@@ -3,10 +3,16 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.0
+File version: 1.0.0.1
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.1 (2025-10-29):
+  - Fixed SQL query to use experiment_041_feature_fileset instead of experiment_status
+  - Added feature_file_path to query SELECT
+  - Updated _load_segment_data() to use feature_file_path field
+  - Fixed table joins to properly access data_type_id
+
 v1.0.0.0 (2025-10-29):
   - Initial implementation
   - Spectral PSD calculation using Welch's method
@@ -55,13 +61,15 @@ class NoiseFloorCalculator:
 
     def _query_approved_segments(
         self,
-        data_type_id: Optional[int] = None
+        data_type_id: Optional[int] = None,
+        experiment_id: int = 41
     ) -> List[Dict]:
         """
-        Query approved steady-state segments from database
+        Query segments from approved files with feature extraction data
 
         Args:
             data_type_id: Specific data type ID or None for all
+            experiment_id: Experiment ID (default 41)
 
         Returns:
             List of segment records with file paths and metadata
@@ -69,39 +77,40 @@ class NoiseFloorCalculator:
         conn = self._get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Query approved segments with file status check
-                query = """
-                    SELECT
-                        es.segment_id,
-                        es.file_id,
-                        es.data_type_id,
+                # Query segments from feature_fileset table (has data_type_id)
+                # Only include segments from approved files (experiment_status.status=true)
+                feature_table = f"experiment_{experiment_id:03d}_feature_fileset"
+                file_training_table = f"experiment_{experiment_id:03d}_file_training_data"
+
+                query = f"""
+                    SELECT DISTINCT
+                        ff.segment_id,
+                        ff.data_type_id,
                         dt.data_type_name,
-                        es.segment_path,
-                        f.file_path,
-                        f.sampling_rate
-                    FROM experiment_status es
-                    JOIN ml_data_types_lut dt ON es.data_type_id = dt.data_type_id
-                    JOIN files f ON es.file_id = f.file_id
+                        ds.segment_length,
+                        f.sampling_rate,
+                        ft.file_id,
+                        ff.decimation_factor,
+                        ff.feature_file_path
+                    FROM {feature_table} ff
+                    JOIN ml_data_types_lut dt ON ff.data_type_id = dt.data_type_id
+                    JOIN data_segments ds ON ff.segment_id = ds.segment_id
+                    JOIN {file_training_table} ft ON ds.experiment_file_id = ft.file_id
+                    JOIN files f ON ft.file_id = f.file_id
+                    JOIN experiment_status es ON ft.file_id = es.file_id
                     WHERE es.status = true
-                      AND es.segment_type = 'steady_state'
-                      AND EXISTS (
-                          SELECT 1
-                          FROM experiment_status es2
-                          WHERE es2.file_id = es.file_id
-                            AND es2.segment_id IS NULL
-                            AND es2.status = true
-                      )
+                      AND ff.decimation_factor = 0
                 """
 
                 if data_type_id is not None:
-                    query += " AND es.data_type_id = %s"
+                    query += " AND ff.data_type_id = %s"
                     cur.execute(query, (data_type_id,))
                 else:
                     cur.execute(query)
 
                 segments = cur.fetchall()
 
-                logger.info(f"Found {len(segments)} approved steady-state segments")
+                logger.info(f"Found {len(segments)} segments from approved files")
                 return segments
 
         finally:
@@ -117,21 +126,24 @@ class NoiseFloorCalculator:
         Returns:
             Segment data array or None if not found
         """
-        # Try fileset first, then adc_data
-        segment_path = Path(segment['segment_path'])
+        # Get file path from feature_file_path field
+        feature_file_path = segment.get('feature_file_path')
+
+        if not feature_file_path:
+            logger.error(f"No feature_file_path for segment {segment['segment_id']}")
+            return None
+
+        segment_path = Path(feature_file_path)
 
         # Check if absolute path exists
         if segment_path.exists():
             data_path = segment_path
         else:
-            # Try relative to fileset
-            fileset_path = self.fileset_dir / segment_path.name
-            adc_data_path = self.adc_data_dir / segment_path.name
+            # Try relative to data_root
+            relative_path = self.data_root / segment_path
 
-            if fileset_path.exists():
-                data_path = fileset_path
-            elif adc_data_path.exists():
-                data_path = adc_data_path
+            if relative_path.exists():
+                data_path = relative_path
             else:
                 logger.warning(f"Segment not found: {segment_path}")
                 return None
