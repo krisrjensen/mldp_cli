@@ -3,10 +3,15 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.7
+File version: 1.0.0.8
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.8 (2025-10-29):
+  - Fixed f-string syntax error on line 355
+  - Moved complex expression outside f-string (can't use backslash in f-string)
+  - Changed from inline list comprehension to separate type_summary variable
+
 v1.0.0.7 (2025-10-29):
   - Added SQL filter: bit_depth <= 12 to exclude adc14 and adc24
   - Raw files are 12-bit maximum, can't requantize to 14 or 24-bit
@@ -352,7 +357,9 @@ class NoiseFloorCalculator:
                 segments_by_type[dt_id] = []
             segments_by_type[dt_id].append(seg)
 
-        print(f"Processing {len(segments_by_type)} data types: {', '.join([f'{v[0][\"data_type_name\"]}({len(v)})' for v in segments_by_type.values()])}\n")
+        # Build data type summary
+        type_summary = ', '.join([f"{v[0]['data_type_name']}({len(v)})" for v in segments_by_type.values()])
+        print(f"Processing {len(segments_by_type)} data types: {type_summary}\n")
 
         results = {}
 
