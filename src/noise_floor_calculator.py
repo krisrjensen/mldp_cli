@@ -3,10 +3,21 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.2
+File version: 1.0.0.3
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.3 (2025-10-29):
+  - CRITICAL FIX: Changed to load RAW segment files instead of processed feature files
+  - Updated __init__ to use segment_files/ directory instead of fileset/adc_data
+  - Rewrote _query_approved_segments() to query data_segments directly
+  - Added CROSS JOIN with ml_data_types_lut to get all data type combinations
+  - Filter for is_quantized=true to get only ADC data types
+  - Rewrote _load_segment_data() to construct raw segment file paths
+  - Path format: segment_files/S{length}/T{type}/D000000/SID{id}_F{file}_D000000_T{type}_S{length}_R*.npy
+  - Use glob pattern matching for R* suffix
+  - Default segment_length=8192 to match available segment_files/ data
+
 v1.0.0.2 (2025-10-29):
   - Fixed store_noise_floor() to convert numpy types to Python native types
   - Prevents PostgreSQL "schema 'np' does not exist" error
@@ -48,17 +59,16 @@ class NoiseFloorCalculator:
 
         Args:
             db_connection_params: Database connection parameters (host, database, user, password)
-            data_root: Root directory containing fileset/ and adc_data/ folders
+            data_root: Root directory containing segment_files/ folder
         """
         self.db_params = db_connection_params
         self.data_root = Path(data_root)
 
-        # Verify data directories exist
-        self.fileset_dir = self.data_root / 'fileset'
-        self.adc_data_dir = self.data_root / 'adc_data'
+        # Verify segment_files directory exists
+        self.segment_files_dir = self.data_root / 'segment_files'
 
-        if not self.fileset_dir.exists() and not self.adc_data_dir.exists():
-            logger.warning(f"Neither {self.fileset_dir} nor {self.adc_data_dir} exist")
+        if not self.segment_files_dir.exists():
+            logger.warning(f"Segment files directory does not exist: {self.segment_files_dir}")
 
     def _get_db_connection(self):
         """Get database connection"""
@@ -67,55 +77,58 @@ class NoiseFloorCalculator:
     def _query_approved_segments(
         self,
         data_type_id: Optional[int] = None,
-        experiment_id: int = 41
+        experiment_id: int = 41,
+        segment_length: int = 8192
     ) -> List[Dict]:
         """
-        Query segments from approved files with feature extraction data
+        Query raw segments from approved files
 
         Args:
             data_type_id: Specific data type ID or None for all
             experiment_id: Experiment ID (default 41)
+            segment_length: Segment length to use (default 8192, matches segment_files/)
 
         Returns:
-            List of segment records with file paths and metadata
+            List of segment records with metadata for constructing file paths
         """
         conn = self._get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Query segments from feature_fileset table (has data_type_id)
+                # Query raw segments from data_segments table
                 # Only include segments from approved files (experiment_status.status=true)
-                feature_table = f"experiment_{experiment_id:03d}_feature_fileset"
                 file_training_table = f"experiment_{experiment_id:03d}_file_training_data"
 
+                # Query segments cross-joined with data types
+                # This gives us one row per (segment, data_type) combination
                 query = f"""
                     SELECT DISTINCT
-                        ff.segment_id,
-                        ff.data_type_id,
+                        ds.segment_id,
+                        dt.data_type_id,
                         dt.data_type_name,
                         ds.segment_length,
                         f.sampling_rate,
-                        ft.file_id,
-                        ff.decimation_factor,
-                        ff.feature_file_path
-                    FROM {feature_table} ff
-                    JOIN ml_data_types_lut dt ON ff.data_type_id = dt.data_type_id
-                    JOIN data_segments ds ON ff.segment_id = ds.segment_id
+                        ft.file_id
+                    FROM data_segments ds
                     JOIN {file_training_table} ft ON ds.experiment_file_id = ft.file_id
                     JOIN files f ON ft.file_id = f.file_id
                     JOIN experiment_status es ON ft.file_id = es.file_id
+                    CROSS JOIN ml_data_types_lut dt
                     WHERE es.status = true
-                      AND ff.decimation_factor = 0
+                      AND ds.segment_length = %s
+                      AND dt.is_quantized = true
                 """
 
+                params = [segment_length]
+
                 if data_type_id is not None:
-                    query += " AND ff.data_type_id = %s"
-                    cur.execute(query, (data_type_id,))
-                else:
-                    cur.execute(query)
+                    query += " AND dt.data_type_id = %s"
+                    params.append(data_type_id)
+
+                cur.execute(query, params)
 
                 segments = cur.fetchall()
 
-                logger.info(f"Found {len(segments)} segments from approved files")
+                logger.info(f"Found {len(segments)} segment/data_type combinations from approved files")
                 return segments
 
         finally:
@@ -123,7 +136,7 @@ class NoiseFloorCalculator:
 
     def _load_segment_data(self, segment: Dict) -> Optional[np.ndarray]:
         """
-        Load segment data from filesystem
+        Load raw segment data from filesystem
 
         Args:
             segment: Segment record from database
@@ -131,36 +144,42 @@ class NoiseFloorCalculator:
         Returns:
             Segment data array or None if not found
         """
-        # Get file path from feature_file_path field
-        feature_file_path = segment.get('feature_file_path')
+        import glob
 
-        if not feature_file_path:
-            logger.error(f"No feature_file_path for segment {segment['segment_id']}")
+        # Construct path to raw segment file
+        # Format: segment_files/S{length}/T{type}/D000000/SID{id}_F{file}_D000000_T{type}_S{length}_R*.npy
+        segment_id = segment['segment_id']
+        file_id = segment['file_id']
+        data_type_name = segment['data_type_name'].upper()
+        segment_length = segment['segment_length']
+
+        # Build directory path
+        dir_path = self.segment_files_dir / f"S{segment_length:06d}" / f"T{data_type_name}" / "D000000"
+
+        # Build file pattern (use glob for R* part)
+        file_pattern = f"SID{segment_id:08d}_F{file_id:08d}_D000000_T{data_type_name}_S{segment_length:06d}_R*.npy"
+        full_pattern = str(dir_path / file_pattern)
+
+        # Find matching files
+        matching_files = glob.glob(full_pattern)
+
+        if not matching_files:
+            logger.warning(f"Segment file not found: {full_pattern}")
             return None
 
-        segment_path = Path(feature_file_path)
+        if len(matching_files) > 1:
+            logger.warning(f"Multiple files match pattern {full_pattern}, using first")
 
-        # Check if absolute path exists
-        if segment_path.exists():
-            data_path = segment_path
-        else:
-            # Try relative to data_root
-            relative_path = self.data_root / segment_path
-
-            if relative_path.exists():
-                data_path = relative_path
-            else:
-                logger.warning(f"Segment not found: {segment_path}")
-                return None
+        data_path = Path(matching_files[0])
 
         try:
             # Load .npy file
             data = np.load(data_path)
-            logger.debug(f"Loaded segment {segment['segment_id']}: shape={data.shape}")
+            logger.debug(f"Loaded segment {segment_id} ({data_type_name}): shape={data.shape}")
             return data
 
         except Exception as e:
-            logger.error(f"Failed to load segment {segment['segment_id']}: {e}")
+            logger.error(f"Failed to load segment {segment_id}: {e}")
             return None
 
     def _calculate_segment_noise_floor(

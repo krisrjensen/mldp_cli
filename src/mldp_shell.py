@@ -4,16 +4,25 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.24
+File version: 2.0.10.25
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 24)
+- CHANGE: Tracks changes within current commit cycle (currently 25)
 
-Changes in this version (10.24):
+Changes in this version (10.25):
+1. NOISE FLOOR SCALERS - CRITICAL FIX: Load raw ADC segment data
+   - v2.0.10.25: Fixed noise_floor_calculator.py to load RAW segment files instead of processed features
+                 Changed from feature_fileset to data_segments query with CROSS JOIN to data types
+                 Updated path construction to use segment_files/S{length}/T{type}/D000000/
+                 Filters for is_quantized=true to get only ADC data types
+                 Default segment_length=8192 to match available data
+                 Updated noise_floor_calculator.py to v1.0.0.3
+
+Changes in previous versions (10.24):
 1. NOISE FLOOR SCALERS - Fixed numpy type conversion bug
    - v2.0.10.24: Fixed noise_floor_calculator.py to convert numpy types to Python native types
                  Prevents PostgreSQL "schema 'np' does not exist" error
@@ -519,7 +528,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.24"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.25"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
