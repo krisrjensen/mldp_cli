@@ -4,21 +4,24 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.31
+File version: 2.0.10.32
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 31)
+- CHANGE: Tracks changes within current commit cycle (currently 32)
 
-Changes in this version (10.31):
-1. NOISE FLOOR SCALERS - Added range validation for requantized data
-   - v2.0.10.31: Updated noise_floor_calculator.py to v1.0.0.10
-                 Added validation that all ADC values are within expected range
-                 adc6: [0,63], adc8: [0,255], adc10: [0,1023], adc12: [0,4095]
-                 Skips segments with invalid data
+Changes in this version (10.32):
+1. NOISE FLOOR SCALERS - MAJOR REWRITE with voltage/current separation
+   - v2.0.10.32: Updated noise_floor_calculator.py to v1.0.0.11
+                 Separated voltage and current channel processing
+                 Added noise_floor_voltage and noise_floor_current columns
+                 Strict segment_length=8192 enforcement with verification
+                 Added raw 12-bit data validation BEFORE requantization
+                 Updated noise-floor-show to display both voltage and current
+                 Channel selection: voltage=channel 0, current=channel 1
 
 Changes in previous versions (10.30):
 1. NOISE FLOOR SCALERS - Fixed f-string syntax error
@@ -580,7 +583,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.31"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.32"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18088,19 +18091,20 @@ class MLDPShell:
 
             # Display table
             print("\nNoise Floor Values:")
-            print("-" * 80)
-            print(f"{'Data Type':<12} {'ID':<4} {'Noise Floor':<15} {'Segments':<10} {'Calculated':<20} {'Method':<15}")
-            print("-" * 80)
+            print("-" * 100)
+            print(f"{'Data Type':<12} {'ID':<4} {'Voltage (RMS)':<18} {'Current (RMS)':<18} {'Segs':<6} {'Calculated':<20} {'Method':<10}")
+            print("-" * 100)
 
             for entry in entries:
                 dt_name = entry['data_type_name']
                 dt_id = entry['data_type_id']
-                nf = entry['noise_floor']
+                nf_v = entry['noise_floor_voltage']
+                nf_c = entry['noise_floor_current']
                 num_seg = entry['num_segments_used'] or 0
                 calc_date = entry['last_calculated'].strftime('%Y-%m-%d %H:%M') if entry['last_calculated'] else 'N/A'
                 method = entry['calculation_method'] or 'N/A'
 
-                print(f"{dt_name:<12} {dt_id:<4} {nf:<15.6e} {num_seg:<10} {calc_date:<20} {method:<15}")
+                print(f"{dt_name:<12} {dt_id:<4} {nf_v:<18.6f} {nf_c:<18.6f} {num_seg:<6} {calc_date:<20} {method:<10}")
 
             print()
 

@@ -3,112 +3,39 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.10
+File version: 1.0.0.11
 Description: Calculates noise floor values from approved steady-state segments using standard deviation
 
 Changelog:
+v1.0.0.11 (2025-10-29):
+  - MAJOR REWRITE: Separate voltage and current channel processing
+  - Added noise_floor_voltage and noise_floor_current columns
+  - Strict segment_length = 8192 enforcement with verification
+  - Added raw 12-bit data validation BEFORE requantization
+  - Added channel selection (voltage=channel 0, current=channel 1)
+  - Calculate and store separate noise floors for voltage and current
+  - Extensive validation and error reporting
+  - Fixed: Ensure only 8192-sample segments are processed
+  - Fixed: Validate raw data is in [0, 4095] range before shift
+
 v1.0.0.10 (2025-10-29):
   - Added range validation for requantized data in _load_segment_data()
-  - Validates all values are within expected range for each bit depth:
-    * adc6: [0, 63]
-    * adc8: [0, 255]
-    * adc10: [0, 1023]
-    * adc12: [0, 4095]
+  - Validates all values are within expected range for each bit depth
   - Skips segments with values outside valid range
-  - Logs warning with count of invalid values
 
 v1.0.0.9 (2025-10-29):
   - MAJOR FIX: Changed from PSD method to direct standard deviation calculation
-  - Previous PSD method gave values that were too low (~0.049 instead of 1+ counts)
-  - New method:
-    * Calculate standard deviation for each channel separately
-    * Take median across channels as the noise floor
-    * Returns noise floor in ADC counts (RMS)
-    * No longer uses Welch's method or FFT
-  - Removed nperseg parameter issue
-  - Removed scipy.signal import (no longer needed)
-  - Results now in proper range for ADC quantization noise (1+ counts)
-
-v1.0.0.8 (2025-10-29):
-  - Fixed f-string syntax error on line 355
-  - Moved complex expression outside f-string (can't use backslash in f-string)
-  - Changed from inline list comprehension to separate type_summary variable
-
-v1.0.0.7 (2025-10-29):
-  - Added SQL filter: bit_depth <= 12 to exclude adc14 and adc24
-  - Raw files are 12-bit maximum, can't requantize to 14 or 24-bit
-  - Added comprehensive progress output to calculate_noise_floor():
-    * Query status messages
-    * Summary of data types and segment counts
-    * Per-data-type progress: [1/4] Processing adc6...
-    * Progress updates every 100 segments with percentage
-    * Success/failed counters
-    * Final summary with noise floor value
-  - User-friendly output with ✓ and ❌ symbols
-
-v1.0.0.6 (2025-10-29):
-  - Fixed signed integer handling in _load_segment_data()
-  - Added dtype check and conversion to uint32
-  - Handle signed data by masking with 0xFFFFFFFF before conversion
-  - Added bit_depth validation (must be 1-12)
-  - Use np.right_shift() instead of >> operator for proper unsigned handling
-  - Explicit .astype(np.uint32) after all operations
-  - Prevents "Python integer -12 out of bounds for uint32" error
-
-v1.0.0.5 (2025-10-29):
-  - MAJOR REWRITE: Load from raw ADC files in adc_data/ instead of pre-extracted segments
-  - Changed __init__ to use adc_data/ directory (all segments available)
-  - Updated _query_approved_segments() to include beginning_index, bit_depth
-  - Rewrote _load_segment_data() to:
-    * Load raw ADC file from adc_data/{file_id:08d}.npy
-    * Extract segment using beginning_index and segment_length
-    * Requantize from 12-bit to target bit_depth (6, 8, 10, 12)
-    * Requantization uses right-shift: adc10>>2, adc8>>4, adc6>>6
-  - Fixes issue where segment_files/ don't exist for all segments
-
-v1.0.0.4 (2025-10-29):
-  - Fixed path construction: Added experiment_id parameter to __init__
-  - Path now correctly built as: data_root/experiment{id:03d}/segment_files/
-  - Fixed SQL query: Changed is_quantized to is_raw = false (correct column name)
-  - All 4 CLI commands now pass self.current_experiment to calculator
-
-v1.0.0.3 (2025-10-29):
-  - CRITICAL FIX: Changed to load RAW segment files instead of processed feature files
-  - Updated __init__ to use segment_files/ directory instead of fileset/adc_data
-  - Rewrote _query_approved_segments() to query data_segments directly
-  - Added CROSS JOIN with ml_data_types_lut to get all data type combinations
-  - Filter for is_quantized=true to get only ADC data types
-  - Rewrote _load_segment_data() to construct raw segment file paths
-  - Path format: segment_files/S{length}/T{type}/D000000/SID{id}_F{file}_D000000_T{type}_S{length}_R*.npy
-  - Use glob pattern matching for R* suffix
-  - Default segment_length=8192 to match available segment_files/ data
-
-v1.0.0.2 (2025-10-29):
-  - Fixed store_noise_floor() to convert numpy types to Python native types
-  - Prevents PostgreSQL "schema 'np' does not exist" error
-  - Converts np.float64 to float and np.int64 to int before SQL insert
-
-v1.0.0.1 (2025-10-29):
-  - Fixed SQL query to use experiment_041_feature_fileset instead of experiment_status
-  - Added feature_file_path to query SELECT
-  - Updated _load_segment_data() to use feature_file_path field
-  - Fixed table joins to properly access data_type_id
-
-v1.0.0.0 (2025-10-29):
-  - Initial implementation
-  - Spectral PSD calculation using Welch's method
-  - 10th percentile noise floor estimation
-  - Multi-segment averaging
-  - Database storage in experiment_noise_floor table
+  - New method: Calculate std per channel, take median across channels
+  - Returns noise floor in ADC counts (RMS)
 """
 
 import numpy as np
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from scipy import signal
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from pathlib import Path
+from typing import Dict, Optional, List, Tuple
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -116,26 +43,32 @@ logger = logging.getLogger(__name__)
 class NoiseFloorCalculator:
     """
     Calculates noise floor values from approved steady-state segments
+
+    Uses direct standard deviation calculation on raw ADC data
+    Processes voltage and current channels separately
     """
 
-    def __init__(self, db_connection_params: Dict[str, str], data_root: str, experiment_id: int = 41):
+    def __init__(self, db_params: Dict, data_root: str, experiment_id: int):
         """
         Initialize noise floor calculator
 
         Args:
-            db_connection_params: Database connection parameters (host, database, user, password)
-            data_root: Root directory containing adc_data/ folder
-            experiment_id: Experiment ID (default 41)
+            db_params: Database connection parameters
+            data_root: Root directory for data files
+            experiment_id: Experiment ID (e.g., 41)
         """
-        self.db_params = db_connection_params
+        self.db_params = db_params
         self.data_root = Path(data_root)
         self.experiment_id = experiment_id
 
         # Path to raw ADC data files
-        self.adc_data_dir = self.data_root / 'adc_data'
+        self.adc_data_dir = self.data_root / "adc_data"
 
         if not self.adc_data_dir.exists():
-            logger.warning(f"ADC data directory does not exist: {self.adc_data_dir}")
+            raise ValueError(f"ADC data directory does not exist: {self.adc_data_dir}")
+
+        logger.info(f"Initialized NoiseFloorCalculator for experiment {experiment_id}")
+        logger.info(f"ADC data directory: {self.adc_data_dir}")
 
     def _get_db_connection(self):
         """Get database connection"""
@@ -148,12 +81,12 @@ class NoiseFloorCalculator:
         segment_length: int = 8192
     ) -> List[Dict]:
         """
-        Query raw segments from approved files
+        Query raw segments from approved files with STRICT segment_length filtering
 
         Args:
             data_type_id: Specific data type ID or None for all
             experiment_id: Experiment ID (default 41)
-            segment_length: Segment length to use (default 8192)
+            segment_length: REQUIRED segment length (default 8192, STRICTLY enforced)
 
         Returns:
             List of segment records with metadata for extracting from raw ADC files
@@ -161,13 +94,9 @@ class NoiseFloorCalculator:
         conn = self._get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Query raw segments from data_segments table
-                # Only include segments from approved files (experiment_status.status=true)
                 file_training_table = f"experiment_{experiment_id:03d}_file_training_data"
 
-                # Query segments cross-joined with data types
-                # This gives us one row per (segment, data_type) combination
-                # Only include data types with bit_depth <= 12 (raw files are 12-bit max)
+                # STRICT segment_length filter - ONLY 8192-sample segments
                 query = f"""
                     SELECT DISTINCT
                         ds.segment_id,
@@ -195,26 +124,41 @@ class NoiseFloorCalculator:
                     query += " AND dt.data_type_id = %s"
                     params.append(data_type_id)
 
-                cur.execute(query, params)
+                # Add ORDER BY to ensure consistent processing
+                query += " ORDER BY ds.segment_id, dt.data_type_id"
 
+                cur.execute(query, params)
                 segments = cur.fetchall()
 
-                logger.info(f"Found {len(segments)} segment/data_type combinations from approved files")
+                # VERIFY segment_length is actually 8192 for ALL segments
+                invalid_lengths = [s for s in segments if s['segment_length'] != segment_length]
+                if invalid_lengths:
+                    logger.error(f"Found {len(invalid_lengths)} segments with wrong length!")
+                    for s in invalid_lengths[:5]:  # Show first 5
+                        logger.error(f"  Segment {s['segment_id']}: length={s['segment_length']} (expected {segment_length})")
+                    raise ValueError(f"Query returned segments with wrong length! Expected {segment_length}")
+
+                logger.info(f"Found {len(segments)} segment/data_type combinations (segment_length={segment_length})")
                 return segments
 
         finally:
             conn.close()
 
-    def _load_segment_data(self, segment: Dict) -> Optional[np.ndarray]:
+    def _load_segment_data(
+        self,
+        segment: Dict,
+        channel_type: str
+    ) -> Optional[np.ndarray]:
         """
-        Load and extract segment data from raw ADC file
+        Load and extract segment data from raw ADC file for specific channel
 
         Args:
             segment: Segment record from database with file_id, beginning_index,
                     segment_length, bit_depth
+            channel_type: 'voltage' or 'current'
 
         Returns:
-            Requantized segment data array or None if not found
+            Requantized segment data array (1D) for specified channel or None if invalid
         """
         segment_id = segment['segment_id']
         file_id = segment['file_id']
@@ -222,6 +166,24 @@ class NoiseFloorCalculator:
         segment_length = segment['segment_length']
         bit_depth = segment['bit_depth']
         data_type_name = segment['data_type_name']
+
+        # STRICT: Verify segment_length is 8192
+        if segment_length != 8192:
+            logger.error(
+                f"Segment {segment_id} has wrong length {segment_length} (expected 8192). "
+                f"This should have been filtered by query!"
+            )
+            return None
+
+        # Determine channel index
+        # Assuming raw data shape is (N, 4) with channels: [voltage, current, ?, ?]
+        # User said "select the proper voltage or current channel"
+        if channel_type == 'voltage':
+            channel_idx = 0
+        elif channel_type == 'current':
+            channel_idx = 1
+        else:
+            raise ValueError(f"Invalid channel_type: {channel_type}. Must be 'voltage' or 'current'")
 
         # Construct path to raw ADC file
         adc_file_path = self.adc_data_dir / f"{file_id:08d}.npy"
@@ -234,10 +196,25 @@ class NoiseFloorCalculator:
             # Load raw ADC data file (12-bit data)
             raw_data = np.load(adc_file_path)
 
+            # Validate shape
+            if raw_data.ndim != 2:
+                logger.error(
+                    f"Raw data has wrong shape {raw_data.shape} for file {file_id}. "
+                    f"Expected 2D array (N, channels)"
+                )
+                return None
+
+            num_channels = raw_data.shape[1]
+            if channel_idx >= num_channels:
+                logger.error(
+                    f"Channel index {channel_idx} out of bounds for file {file_id} "
+                    f"with {num_channels} channels"
+                )
+                return None
+
             # Ensure unsigned integer type (handle signed data)
             if raw_data.dtype != np.uint32:
                 logger.debug(f"Converting {raw_data.dtype} to uint32 for file {file_id}")
-                # If signed, mask to positive values and convert
                 if np.issubdtype(raw_data.dtype, np.signedinteger):
                     raw_data = np.bitwise_and(raw_data, 0xFFFFFFFF).astype(np.uint32)
                 else:
@@ -250,7 +227,23 @@ class NoiseFloorCalculator:
                 logger.error(f"Segment extends beyond file: {end_index} > {len(raw_data)}")
                 return None
 
-            segment_data = raw_data[beginning_index:end_index].copy()
+            # Extract segment data for ALL channels first
+            segment_data_all_channels = raw_data[beginning_index:end_index].copy()
+
+            # VALIDATE RAW 12-BIT DATA BEFORE REQUANTIZATION
+            # Raw data should be in range [0, 4095] for 12-bit
+            raw_min = segment_data_all_channels.min()
+            raw_max = segment_data_all_channels.max()
+
+            if raw_min < 0 or raw_max > 4095:
+                logger.warning(
+                    f"Segment {segment_id} ({data_type_name}) raw data out of 12-bit range: "
+                    f"[{raw_min}, {raw_max}] (expected [0, 4095]). Skipping segment."
+                )
+                return None
+
+            # Extract the specific channel
+            segment_data_channel = segment_data_all_channels[:, channel_idx].copy()
 
             # Validate bit_depth
             if bit_depth is None or bit_depth <= 0 or bit_depth > 12:
@@ -258,10 +251,9 @@ class NoiseFloorCalculator:
                 return None
 
             # Requantize from 12-bit to target bit depth
-            # Raw data is 12-bit (0-4095), shape (N, 4) for 4 channels
             if bit_depth == 12:
                 # Use as-is (ensure uint32)
-                quantized_data = segment_data.astype(np.uint32)
+                quantized_data = segment_data_channel.astype(np.uint32)
             else:
                 # Requantize by right-shifting
                 # adc10: shift right by 2 (4095 -> 1023)
@@ -270,7 +262,7 @@ class NoiseFloorCalculator:
                 shift_amount = 12 - bit_depth
 
                 # Use numpy right shift to ensure proper unsigned handling
-                quantized_data = np.right_shift(segment_data, shift_amount).astype(np.uint32)
+                quantized_data = np.right_shift(segment_data_channel, shift_amount).astype(np.uint32)
 
             # Validate quantized data range
             # adc6: [0, 63], adc8: [0, 255], adc10: [0, 1023], adc12: [0, 4095]
@@ -278,13 +270,13 @@ class NoiseFloorCalculator:
             if np.any(quantized_data < 0) or np.any(quantized_data > max_value):
                 invalid_count = np.sum((quantized_data < 0) | (quantized_data > max_value))
                 logger.warning(
-                    f"Segment {segment_id} ({data_type_name}) contains {invalid_count} "
+                    f"Segment {segment_id} ({data_type_name}, {channel_type}) contains {invalid_count} "
                     f"values outside valid range [0, {max_value}]. Skipping segment."
                 )
                 return None
 
             logger.debug(
-                f"Loaded segment {segment_id} ({data_type_name}): "
+                f"Loaded segment {segment_id} ({data_type_name}, {channel_type}): "
                 f"shape={quantized_data.shape}, dtype={quantized_data.dtype}, "
                 f"range=[{quantized_data.min()}, {quantized_data.max()}]"
             )
@@ -304,12 +296,10 @@ class NoiseFloorCalculator:
         Calculate noise floor for a single segment using standard deviation method
 
         Method:
-          1. Process each channel separately
-          2. Calculate standard deviation for each channel (RMS noise)
-          3. Take median across channels
+          - Calculate standard deviation (RMS noise) for the channel
 
         Args:
-            data: Segment time-series data, shape (N, channels) or (N,)
+            data: Segment time-series data, shape (N,) for single channel
             sampling_rate: Sampling rate in Hz (not used in this method)
 
         Returns:
@@ -319,14 +309,8 @@ class NoiseFloorCalculator:
             # Ensure float type for calculations
             data_float = data.astype(np.float64)
 
-            if data_float.ndim == 1:
-                # Single channel data
-                noise_floor_rms = np.std(data_float)
-            else:
-                # Multi-channel data: calculate std for each channel
-                channel_stds = np.std(data_float, axis=0)
-                # Use median across channels as the noise floor
-                noise_floor_rms = np.median(channel_stds)
+            # Calculate standard deviation (RMS noise)
+            noise_floor_rms = np.std(data_float)
 
             logger.debug(f"Segment noise floor: {noise_floor_rms:.6f} ADC counts (RMS)")
             return noise_floor_rms
@@ -340,7 +324,7 @@ class NoiseFloorCalculator:
         data_type_id: Optional[int] = None
     ) -> Dict[int, Dict]:
         """
-        Calculate noise floors for one or all data types
+        Calculate noise floors for one or all data types (voltage and current separately)
 
         Args:
             data_type_id: Specific data type ID or None for all
@@ -349,22 +333,23 @@ class NoiseFloorCalculator:
             Dict mapping data_type_id to noise floor results:
                 {
                     data_type_id: {
-                        'noise_floor': float,
+                        'noise_floor_voltage': float,
+                        'noise_floor_current': float,
                         'num_segments': int,
                         'data_type_name': str
                     }
                 }
         """
-        # Query approved segments
-        print("Querying approved segments from database...")
-        segments = self._query_approved_segments(data_type_id)
+        # Query approved segments (STRICT segment_length = 8192)
+        print("Querying approved segments from database (segment_length=8192 ONLY)...")
+        segments = self._query_approved_segments(data_type_id, segment_length=8192)
 
         if not segments:
-            print("⚠️  No approved steady-state segments found")
+            print("⚠️  No approved steady-state segments found with length 8192")
             logger.warning("No approved steady-state segments found")
             return {}
 
-        print(f"Found {len(segments)} segment/data_type combinations")
+        print(f"✓ Found {len(segments)} segment/data_type combinations (all with length=8192)")
 
         # Group segments by data_type_id
         segments_by_type = {}
@@ -388,100 +373,167 @@ class NoiseFloorCalculator:
             print(f"[{dt_idx}/{len(segments_by_type)}] Processing {data_type_name} (ID {dt_id}): {len(dt_segments)} segments")
             logger.info(f"Processing {len(dt_segments)} segments for data_type_id {dt_id}")
 
-            noise_floors = []
-            successful = 0
-            failed = 0
+            # Process voltage and current channels separately
+            voltage_noise_floors = []
+            current_noise_floors = []
+            successful_voltage = 0
+            successful_current = 0
+            failed_voltage = 0
+            failed_current = 0
 
             for i, seg in enumerate(dt_segments):
-                # Load segment data
-                data = self._load_segment_data(seg)
+                # Process VOLTAGE channel
+                voltage_data = self._load_segment_data(seg, channel_type='voltage')
+                if voltage_data is not None:
+                    try:
+                        nf_v = self._calculate_segment_noise_floor(voltage_data, sampling_rate)
+                        voltage_noise_floors.append(nf_v)
+                        successful_voltage += 1
+                    except Exception as e:
+                        failed_voltage += 1
+                        logger.error(f"Failed to calculate voltage noise floor for segment {seg['segment_id']}: {e}")
+                else:
+                    failed_voltage += 1
 
-                if data is None:
-                    failed += 1
-                    continue
-
-                # Calculate noise floor for this segment
-                try:
-                    nf = self._calculate_segment_noise_floor(data, sampling_rate)
-                    noise_floors.append(nf)
-                    successful += 1
-                except Exception as e:
-                    failed += 1
-                    logger.error(f"Failed to calculate noise floor for segment {seg['segment_id']}: {e}")
-                    continue
+                # Process CURRENT channel
+                current_data = self._load_segment_data(seg, channel_type='current')
+                if current_data is not None:
+                    try:
+                        nf_c = self._calculate_segment_noise_floor(current_data, sampling_rate)
+                        current_noise_floors.append(nf_c)
+                        successful_current += 1
+                    except Exception as e:
+                        failed_current += 1
+                        logger.error(f"Failed to calculate current noise floor for segment {seg['segment_id']}: {e}")
+                else:
+                    failed_current += 1
 
                 # Progress updates every 100 segments
                 if (i + 1) % 100 == 0:
-                    percent = (i + 1) / len(dt_segments) * 100
-                    print(f"  Progress: {i + 1}/{len(dt_segments)} ({percent:.1f}%) - Success: {successful}, Failed: {failed}")
+                    pct = int((i + 1) / len(dt_segments) * 100)
+                    print(f"  Progress: {i+1}/{len(dt_segments)} ({pct}%) - V:{successful_voltage}✓/{failed_voltage}❌, C:{successful_current}✓/{failed_current}❌")
 
-            if not noise_floors:
-                print(f"  ❌ No valid noise floor calculations for {data_type_name} (all {failed} segments failed)")
-                logger.warning(f"No valid noise floor calculations for data_type_id {dt_id}")
+            # Calculate final noise floors (median across all segments)
+            if len(voltage_noise_floors) > 0:
+                final_voltage_nf = np.median(voltage_noise_floors)
+            else:
+                print(f"  ❌ Failed: No valid voltage segments for {data_type_name}")
+                logger.error(f"No valid voltage segments for data_type_id {dt_id}")
                 continue
 
-            # Average noise floors across segments
-            avg_noise_floor = np.mean(noise_floors)
+            if len(current_noise_floors) > 0:
+                final_current_nf = np.median(current_noise_floors)
+            else:
+                print(f"  ❌ Failed: No valid current segments for {data_type_name}")
+                logger.error(f"No valid current segments for data_type_id {dt_id}")
+                continue
 
-            print(f"  ✓ Completed: {successful} successful, {failed} failed")
-            print(f"  → Noise floor: {avg_noise_floor:.6e} (averaged from {len(noise_floors)} segments)\n")
+            print(f"  ✓ Success: V:{successful_voltage} segs, C:{successful_current} segs")
+            print(f"  Voltage noise floor: {final_voltage_nf:.6f} ADC counts (RMS)")
+            print(f"  Current noise floor: {final_current_nf:.6f} ADC counts (RMS)")
 
-            logger.info(
-                f"Data type {data_type_name} (ID {dt_id}): "
-                f"noise_floor={avg_noise_floor:.6e} ({len(noise_floors)} segments)"
-            )
-
+            # Store result
             results[dt_id] = {
-                'noise_floor': avg_noise_floor,
-                'num_segments': len(noise_floors),
+                'noise_floor_voltage': final_voltage_nf,
+                'noise_floor_current': final_current_nf,
+                'num_segments': len(voltage_noise_floors),  # Should be same for both
                 'data_type_name': data_type_name
             }
 
+            # Save to database
+            self._save_noise_floor(dt_id, final_voltage_nf, final_current_nf, len(voltage_noise_floors))
+
         return results
 
-    def store_noise_floor(self, data_type_id: int, noise_floor: float, num_segments: int):
+    def _save_noise_floor(
+        self,
+        data_type_id: int,
+        noise_floor_voltage: float,
+        noise_floor_current: float,
+        num_segments: int
+    ):
         """
-        Store noise floor value in database
+        Save noise floor to database
 
         Args:
             data_type_id: Data type ID
-            noise_floor: Calculated noise floor value
+            noise_floor_voltage: Calculated voltage noise floor
+            noise_floor_current: Calculated current noise floor
             num_segments: Number of segments used in calculation
         """
         conn = self._get_db_connection()
         try:
             with conn.cursor() as cur:
-                # INSERT or UPDATE using ON CONFLICT
+                # Upsert noise floor
                 query = """
                     INSERT INTO experiment_noise_floor
-                    (data_type_id, noise_floor, calculation_method, num_segments_used, last_calculated)
-                    VALUES (%s, %s, 'spectral_psd', %s, NOW())
+                    (data_type_id, noise_floor_voltage, noise_floor_current,
+                     calculation_method, num_segments_used, last_calculated)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (data_type_id)
                     DO UPDATE SET
-                        noise_floor = EXCLUDED.noise_floor,
+                        noise_floor_voltage = EXCLUDED.noise_floor_voltage,
+                        noise_floor_current = EXCLUDED.noise_floor_current,
                         calculation_method = EXCLUDED.calculation_method,
                         num_segments_used = EXCLUDED.num_segments_used,
-                        last_calculated = NOW()
+                        last_calculated = EXCLUDED.last_calculated
                 """
 
-                # Convert numpy types to Python native types for PostgreSQL
-                noise_floor_py = float(noise_floor)
-                num_segments_py = int(num_segments)
+                cur.execute(query, (
+                    data_type_id,
+                    noise_floor_voltage,
+                    noise_floor_current,
+                    'std_dev',
+                    num_segments,
+                    datetime.now()
+                ))
 
-                cur.execute(query, (data_type_id, noise_floor_py, num_segments_py))
                 conn.commit()
+                logger.info(f"Saved noise floor for data_type_id {data_type_id}")
 
-                logger.info(f"Stored noise floor for data_type_id {data_type_id}: {noise_floor_py:.6e}")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to save noise floor for data_type_id {data_type_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+    def get_noise_floor(self, data_type_id: int) -> Optional[Tuple[float, float]]:
+        """
+        Get noise floor from database
+
+        Args:
+            data_type_id: Data type ID
+
+        Returns:
+            Tuple of (voltage_noise_floor, current_noise_floor) or None if not found
+        """
+        conn = self._get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                query = """
+                    SELECT noise_floor_voltage, noise_floor_current
+                    FROM experiment_noise_floor
+                    WHERE data_type_id = %s
+                """
+
+                cur.execute(query, (data_type_id,))
+                result = cur.fetchone()
+
+                if result:
+                    return (result['noise_floor_voltage'], result['noise_floor_current'])
+                else:
+                    return None
 
         finally:
             conn.close()
 
     def get_noise_floors(self) -> List[Dict]:
         """
-        Retrieve all noise floor values from database
+        Get all noise floor entries from database
 
         Returns:
-            List of noise floor records
+            List of noise floor entries with data type information
         """
         conn = self._get_db_connection()
         try:
@@ -490,89 +542,20 @@ class NoiseFloorCalculator:
                     SELECT
                         nf.data_type_id,
                         dt.data_type_name,
-                        nf.noise_floor,
+                        nf.noise_floor_voltage,
+                        nf.noise_floor_current,
                         nf.calculation_method,
                         nf.num_segments_used,
-                        nf.last_calculated,
-                        nf.notes
+                        nf.last_calculated
                     FROM experiment_noise_floor nf
                     JOIN ml_data_types_lut dt ON nf.data_type_id = dt.data_type_id
                     ORDER BY dt.data_type_name
                 """
 
                 cur.execute(query)
-                return cur.fetchall()
+                results = cur.fetchall()
 
-        finally:
-            conn.close()
-
-    def clear_noise_floor(self, data_type_id: Optional[int] = None) -> int:
-        """
-        Clear noise floor entries from database
-
-        Args:
-            data_type_id: Specific data type ID or None for all
-
-        Returns:
-            Number of rows deleted
-        """
-        conn = self._get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                if data_type_id is None:
-                    # Clear all
-                    cur.execute("DELETE FROM experiment_noise_floor")
-                else:
-                    # Clear specific
-                    cur.execute(
-                        "DELETE FROM experiment_noise_floor WHERE data_type_id = %s",
-                        (data_type_id,)
-                    )
-
-                rows_deleted = cur.rowcount
-                conn.commit()
-
-                logger.info(f"Cleared {rows_deleted} noise floor entries")
-                return rows_deleted
-
-        finally:
-            conn.close()
-
-    def table_exists(self) -> bool:
-        """
-        Check if experiment_noise_floor table exists
-
-        Returns:
-            True if table exists
-        """
-        conn = self._get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables
-                        WHERE table_schema = 'public'
-                          AND table_name = 'experiment_noise_floor'
-                    )
-                """)
-
-                return cur.fetchone()[0]
-
-        finally:
-            conn.close()
-
-    def get_entry_count(self) -> int:
-        """
-        Get number of entries in experiment_noise_floor table
-
-        Returns:
-            Number of entries
-        """
-        conn = self._get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM experiment_noise_floor")
-                return cur.fetchone()[0]
+                return results
 
         finally:
             conn.close()

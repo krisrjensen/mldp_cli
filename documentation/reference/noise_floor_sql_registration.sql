@@ -26,8 +26,9 @@
 
 CREATE TABLE IF NOT EXISTS experiment_noise_floor (
     data_type_id INTEGER PRIMARY KEY,
-    noise_floor DOUBLE PRECISION NOT NULL,
-    calculation_method VARCHAR(50) DEFAULT 'spectral_psd',
+    noise_floor_voltage DOUBLE PRECISION NOT NULL,
+    noise_floor_current DOUBLE PRECISION NOT NULL,
+    calculation_method VARCHAR(50) DEFAULT 'std_dev',
     num_segments_used INTEGER,
     last_calculated TIMESTAMP DEFAULT NOW(),
     notes TEXT,
@@ -43,9 +44,10 @@ ON experiment_noise_floor(data_type_id);
 -- Add column comments for documentation
 COMMENT ON TABLE experiment_noise_floor IS 'Stores pre-calculated noise floor values per data type for amplitude normalization';
 COMMENT ON COLUMN experiment_noise_floor.data_type_id IS 'Links to ml_data_types_lut (ADC6, ADC8, ADC10, etc.)';
-COMMENT ON COLUMN experiment_noise_floor.noise_floor IS 'Calculated noise floor value in RMS units';
-COMMENT ON COLUMN experiment_noise_floor.calculation_method IS 'Method used for calculation (default: spectral_psd)';
-COMMENT ON COLUMN experiment_noise_floor.num_segments_used IS 'Number of approved steady-state segments used in calculation';
+COMMENT ON COLUMN experiment_noise_floor.noise_floor_voltage IS 'Voltage channel noise floor in ADC counts (RMS)';
+COMMENT ON COLUMN experiment_noise_floor.noise_floor_current IS 'Current channel noise floor in ADC counts (RMS)';
+COMMENT ON COLUMN experiment_noise_floor.calculation_method IS 'Method used for calculation (default: std_dev)';
+COMMENT ON COLUMN experiment_noise_floor.num_segments_used IS 'Number of approved steady-state segments (8192 samples) used in calculation';
 COMMENT ON COLUMN experiment_noise_floor.last_calculated IS 'Timestamp of when noise floor was calculated';
 COMMENT ON COLUMN experiment_noise_floor.notes IS 'Optional notes about calculation or data quality';
 
