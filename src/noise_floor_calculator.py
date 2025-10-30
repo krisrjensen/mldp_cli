@@ -3,10 +3,15 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.1
+File version: 1.0.0.2
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.2 (2025-10-29):
+  - Fixed store_noise_floor() to convert numpy types to Python native types
+  - Prevents PostgreSQL "schema 'np' does not exist" error
+  - Converts np.float64 to float and np.int64 to int before SQL insert
+
 v1.0.0.1 (2025-10-29):
   - Fixed SQL query to use experiment_041_feature_fileset instead of experiment_status
   - Added feature_file_path to query SELECT
@@ -323,10 +328,14 @@ class NoiseFloorCalculator:
                         last_calculated = NOW()
                 """
 
-                cur.execute(query, (data_type_id, noise_floor, num_segments))
+                # Convert numpy types to Python native types for PostgreSQL
+                noise_floor_py = float(noise_floor)
+                num_segments_py = int(num_segments)
+
+                cur.execute(query, (data_type_id, noise_floor_py, num_segments_py))
                 conn.commit()
 
-                logger.info(f"Stored noise floor for data_type_id {data_type_id}: {noise_floor:.6e}")
+                logger.info(f"Stored noise floor for data_type_id {data_type_id}: {noise_floor_py:.6e}")
 
         finally:
             conn.close()
