@@ -3,10 +3,22 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.6
+File version: 1.0.0.7
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.7 (2025-10-29):
+  - Added SQL filter: bit_depth <= 12 to exclude adc14 and adc24
+  - Raw files are 12-bit maximum, can't requantize to 14 or 24-bit
+  - Added comprehensive progress output to calculate_noise_floor():
+    * Query status messages
+    * Summary of data types and segment counts
+    * Per-data-type progress: [1/4] Processing adc6...
+    * Progress updates every 100 segments with percentage
+    * Success/failed counters
+    * Final summary with noise floor value
+  - User-friendly output with ✓ and ❌ symbols
+
 v1.0.0.6 (2025-10-29):
   - Fixed signed integer handling in _load_segment_data()
   - Added dtype check and conversion to uint32
@@ -128,6 +140,7 @@ class NoiseFloorCalculator:
 
                 # Query segments cross-joined with data types
                 # This gives us one row per (segment, data_type) combination
+                # Only include data types with bit_depth <= 12 (raw files are 12-bit max)
                 query = f"""
                     SELECT DISTINCT
                         ds.segment_id,
@@ -146,6 +159,7 @@ class NoiseFloorCalculator:
                     WHERE es.status = true
                       AND ds.segment_length = %s
                       AND dt.is_raw = false
+                      AND dt.bit_depth <= 12
                 """
 
                 params = [segment_length]
@@ -320,11 +334,15 @@ class NoiseFloorCalculator:
                 }
         """
         # Query approved segments
+        print("Querying approved segments from database...")
         segments = self._query_approved_segments(data_type_id)
 
         if not segments:
+            print("⚠️  No approved steady-state segments found")
             logger.warning("No approved steady-state segments found")
             return {}
+
+        print(f"Found {len(segments)} segment/data_type combinations")
 
         # Group segments by data_type_id
         segments_by_type = {}
@@ -334,41 +352,55 @@ class NoiseFloorCalculator:
                 segments_by_type[dt_id] = []
             segments_by_type[dt_id].append(seg)
 
+        print(f"Processing {len(segments_by_type)} data types: {', '.join([f'{v[0][\"data_type_name\"]}({len(v)})' for v in segments_by_type.values()])}\n")
+
         results = {}
 
         # Calculate noise floor for each data type
-        for dt_id, dt_segments in segments_by_type.items():
+        for dt_idx, (dt_id, dt_segments) in enumerate(segments_by_type.items(), 1):
+            data_type_name = dt_segments[0]['data_type_name']
+            sampling_rate = dt_segments[0].get('sampling_rate', 250000.0)
+
+            print(f"[{dt_idx}/{len(segments_by_type)}] Processing {data_type_name} (ID {dt_id}): {len(dt_segments)} segments")
             logger.info(f"Processing {len(dt_segments)} segments for data_type_id {dt_id}")
 
             noise_floors = []
-            data_type_name = dt_segments[0]['data_type_name']
-            sampling_rate = dt_segments[0].get('sampling_rate', 250000.0)
+            successful = 0
+            failed = 0
 
             for i, seg in enumerate(dt_segments):
                 # Load segment data
                 data = self._load_segment_data(seg)
 
                 if data is None:
+                    failed += 1
                     continue
 
                 # Calculate noise floor for this segment
                 try:
                     nf = self._calculate_segment_noise_floor(data, sampling_rate)
                     noise_floors.append(nf)
+                    successful += 1
                 except Exception as e:
+                    failed += 1
                     logger.error(f"Failed to calculate noise floor for segment {seg['segment_id']}: {e}")
                     continue
 
-                # Progress logging
-                if (i + 1) % 50 == 0:
-                    logger.info(f"  Processed {i + 1}/{len(dt_segments)} segments")
+                # Progress updates every 100 segments
+                if (i + 1) % 100 == 0:
+                    percent = (i + 1) / len(dt_segments) * 100
+                    print(f"  Progress: {i + 1}/{len(dt_segments)} ({percent:.1f}%) - Success: {successful}, Failed: {failed}")
 
             if not noise_floors:
+                print(f"  ❌ No valid noise floor calculations for {data_type_name} (all {failed} segments failed)")
                 logger.warning(f"No valid noise floor calculations for data_type_id {dt_id}")
                 continue
 
             # Average noise floors across segments
             avg_noise_floor = np.mean(noise_floors)
+
+            print(f"  ✓ Completed: {successful} successful, {failed} failed")
+            print(f"  → Noise floor: {avg_noise_floor:.6e} (averaged from {len(noise_floors)} segments)\n")
 
             logger.info(
                 f"Data type {data_type_name} (ID {dt_id}): "
