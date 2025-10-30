@@ -4,16 +4,25 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.26
+File version: 2.0.10.27
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 26)
+- CHANGE: Tracks changes within current commit cycle (currently 27)
 
-Changes in this version (10.26):
+Changes in this version (10.27):
+1. NOISE FLOOR SCALERS - MAJOR REWRITE: Load from raw ADC files
+   - v2.0.10.27: Rewrote noise_floor_calculator.py to load from adc_data/ directory
+                 Loads raw 12-bit ADC files and extracts segments using database offsets
+                 Requantizes to target bit depth (adc6, adc8, adc10, adc12)
+                 Fixes issue where segment_files/ don't exist for all segments
+                 All segments now accessible from raw ADC data
+                 Updated noise_floor_calculator.py to v1.0.0.5
+
+Changes in previous versions (10.26):
 1. NOISE FLOOR SCALERS - Fixed path and SQL query bugs
    - v2.0.10.26: Fixed path construction to include experiment ID
                  NoiseFloorCalculator now accepts experiment_id parameter
@@ -537,7 +546,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.26"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.27"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

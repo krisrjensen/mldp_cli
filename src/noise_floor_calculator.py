@@ -3,10 +3,21 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.4
+File version: 1.0.0.5
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.5 (2025-10-29):
+  - MAJOR REWRITE: Load from raw ADC files in adc_data/ instead of pre-extracted segments
+  - Changed __init__ to use adc_data/ directory (all segments available)
+  - Updated _query_approved_segments() to include beginning_index, bit_depth
+  - Rewrote _load_segment_data() to:
+    * Load raw ADC file from adc_data/{file_id:08d}.npy
+    * Extract segment using beginning_index and segment_length
+    * Requantize from 12-bit to target bit_depth (6, 8, 10, 12)
+    * Requantization uses right-shift: adc10>>2, adc8>>4, adc6>>6
+  - Fixes issue where segment_files/ don't exist for all segments
+
 v1.0.0.4 (2025-10-29):
   - Fixed path construction: Added experiment_id parameter to __init__
   - Path now correctly built as: data_root/experiment{id:03d}/segment_files/
@@ -65,19 +76,18 @@ class NoiseFloorCalculator:
 
         Args:
             db_connection_params: Database connection parameters (host, database, user, password)
-            data_root: Root directory containing experiment folders
+            data_root: Root directory containing adc_data/ folder
             experiment_id: Experiment ID (default 41)
         """
         self.db_params = db_connection_params
         self.data_root = Path(data_root)
         self.experiment_id = experiment_id
 
-        # Construct path to segment files: data_root/experiment{id}/segment_files/
-        experiment_dir = self.data_root / f'experiment{experiment_id:03d}'
-        self.segment_files_dir = experiment_dir / 'segment_files'
+        # Path to raw ADC data files
+        self.adc_data_dir = self.data_root / 'adc_data'
 
-        if not self.segment_files_dir.exists():
-            logger.warning(f"Segment files directory does not exist: {self.segment_files_dir}")
+        if not self.adc_data_dir.exists():
+            logger.warning(f"ADC data directory does not exist: {self.adc_data_dir}")
 
     def _get_db_connection(self):
         """Get database connection"""
@@ -95,10 +105,10 @@ class NoiseFloorCalculator:
         Args:
             data_type_id: Specific data type ID or None for all
             experiment_id: Experiment ID (default 41)
-            segment_length: Segment length to use (default 8192, matches segment_files/)
+            segment_length: Segment length to use (default 8192)
 
         Returns:
-            List of segment records with metadata for constructing file paths
+            List of segment records with metadata for extracting from raw ADC files
         """
         conn = self._get_db_connection()
         try:
@@ -112,9 +122,11 @@ class NoiseFloorCalculator:
                 query = f"""
                     SELECT DISTINCT
                         ds.segment_id,
+                        ds.beginning_index,
+                        ds.segment_length,
                         dt.data_type_id,
                         dt.data_type_name,
-                        ds.segment_length,
+                        dt.bit_depth,
                         f.sampling_rate,
                         ft.file_id
                     FROM data_segments ds
@@ -145,50 +157,64 @@ class NoiseFloorCalculator:
 
     def _load_segment_data(self, segment: Dict) -> Optional[np.ndarray]:
         """
-        Load raw segment data from filesystem
+        Load and extract segment data from raw ADC file
 
         Args:
-            segment: Segment record from database
+            segment: Segment record from database with file_id, beginning_index,
+                    segment_length, bit_depth
 
         Returns:
-            Segment data array or None if not found
+            Requantized segment data array or None if not found
         """
-        import glob
-
-        # Construct path to raw segment file
-        # Format: segment_files/S{length}/T{type}/D000000/SID{id}_F{file}_D000000_T{type}_S{length}_R*.npy
         segment_id = segment['segment_id']
         file_id = segment['file_id']
-        data_type_name = segment['data_type_name'].upper()
+        beginning_index = segment['beginning_index']
         segment_length = segment['segment_length']
+        bit_depth = segment['bit_depth']
+        data_type_name = segment['data_type_name']
 
-        # Build directory path
-        dir_path = self.segment_files_dir / f"S{segment_length:06d}" / f"T{data_type_name}" / "D000000"
+        # Construct path to raw ADC file
+        adc_file_path = self.adc_data_dir / f"{file_id:08d}.npy"
 
-        # Build file pattern (use glob for R* part)
-        file_pattern = f"SID{segment_id:08d}_F{file_id:08d}_D000000_T{data_type_name}_S{segment_length:06d}_R*.npy"
-        full_pattern = str(dir_path / file_pattern)
-
-        # Find matching files
-        matching_files = glob.glob(full_pattern)
-
-        if not matching_files:
-            logger.warning(f"Segment file not found: {full_pattern}")
+        if not adc_file_path.exists():
+            logger.warning(f"ADC file not found: {adc_file_path}")
             return None
 
-        if len(matching_files) > 1:
-            logger.warning(f"Multiple files match pattern {full_pattern}, using first")
-
-        data_path = Path(matching_files[0])
-
         try:
-            # Load .npy file
-            data = np.load(data_path)
-            logger.debug(f"Loaded segment {segment_id} ({data_type_name}): shape={data.shape}")
-            return data
+            # Load raw ADC data file (12-bit uint32 data)
+            raw_data = np.load(adc_file_path)
+
+            # Extract segment using beginning_index
+            end_index = beginning_index + segment_length
+
+            if end_index > len(raw_data):
+                logger.error(f"Segment extends beyond file: {end_index} > {len(raw_data)}")
+                return None
+
+            segment_data = raw_data[beginning_index:end_index]
+
+            # Requantize from 12-bit to target bit depth
+            # Raw data is 12-bit (0-4095), shape (N, 4) for 4 channels
+            if bit_depth == 12:
+                # Use as-is
+                quantized_data = segment_data
+            else:
+                # Requantize by right-shifting
+                # adc10: shift right by 2 (4095 -> 1023)
+                # adc8: shift right by 4 (4095 -> 255)
+                # adc6: shift right by 6 (4095 -> 63)
+                shift_amount = 12 - bit_depth
+                quantized_data = segment_data >> shift_amount
+
+            logger.debug(
+                f"Loaded segment {segment_id} ({data_type_name}): "
+                f"shape={quantized_data.shape}, range=[{quantized_data.min()}, {quantized_data.max()}]"
+            )
+
+            return quantized_data
 
         except Exception as e:
-            logger.error(f"Failed to load segment {segment_id}: {e}")
+            logger.error(f"Failed to load segment {segment_id} from file {file_id}: {e}")
             return None
 
     def _calculate_segment_noise_floor(
