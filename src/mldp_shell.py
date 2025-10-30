@@ -4,16 +4,26 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.27
+File version: 2.0.10.28
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 27)
+- CHANGE: Tracks changes within current commit cycle (currently 28)
 
-Changes in this version (10.27):
+Changes in this version (10.28):
+1. NOISE FLOOR SCALERS - Fixed signed integer handling
+   - v2.0.10.28: Fixed noise_floor_calculator.py to handle signed integers in raw data
+                 Added dtype check and conversion to uint32
+                 Handle signed data by masking with 0xFFFFFFFF
+                 Added bit_depth validation (1-12)
+                 Use np.right_shift() for proper unsigned handling
+                 Prevents "Python integer -12 out of bounds for uint32" error
+                 Updated noise_floor_calculator.py to v1.0.0.6
+
+Changes in previous versions (10.27):
 1. NOISE FLOOR SCALERS - MAJOR REWRITE: Load from raw ADC files
    - v2.0.10.27: Rewrote noise_floor_calculator.py to load from adc_data/ directory
                  Loads raw 12-bit ADC files and extracts segments using database offsets
@@ -546,7 +556,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.27"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.28"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

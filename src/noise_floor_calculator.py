@@ -3,10 +3,19 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.5
+File version: 1.0.0.6
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.6 (2025-10-29):
+  - Fixed signed integer handling in _load_segment_data()
+  - Added dtype check and conversion to uint32
+  - Handle signed data by masking with 0xFFFFFFFF before conversion
+  - Added bit_depth validation (must be 1-12)
+  - Use np.right_shift() instead of >> operator for proper unsigned handling
+  - Explicit .astype(np.uint32) after all operations
+  - Prevents "Python integer -12 out of bounds for uint32" error
+
 v1.0.0.5 (2025-10-29):
   - MAJOR REWRITE: Load from raw ADC files in adc_data/ instead of pre-extracted segments
   - Changed __init__ to use adc_data/ directory (all segments available)
@@ -181,8 +190,17 @@ class NoiseFloorCalculator:
             return None
 
         try:
-            # Load raw ADC data file (12-bit uint32 data)
+            # Load raw ADC data file (12-bit data)
             raw_data = np.load(adc_file_path)
+
+            # Ensure unsigned integer type (handle signed data)
+            if raw_data.dtype != np.uint32:
+                logger.debug(f"Converting {raw_data.dtype} to uint32 for file {file_id}")
+                # If signed, mask to positive values and convert
+                if np.issubdtype(raw_data.dtype, np.signedinteger):
+                    raw_data = np.bitwise_and(raw_data, 0xFFFFFFFF).astype(np.uint32)
+                else:
+                    raw_data = raw_data.astype(np.uint32)
 
             # Extract segment using beginning_index
             end_index = beginning_index + segment_length
@@ -191,24 +209,32 @@ class NoiseFloorCalculator:
                 logger.error(f"Segment extends beyond file: {end_index} > {len(raw_data)}")
                 return None
 
-            segment_data = raw_data[beginning_index:end_index]
+            segment_data = raw_data[beginning_index:end_index].copy()
+
+            # Validate bit_depth
+            if bit_depth is None or bit_depth <= 0 or bit_depth > 12:
+                logger.error(f"Invalid bit_depth {bit_depth} for segment {segment_id}")
+                return None
 
             # Requantize from 12-bit to target bit depth
             # Raw data is 12-bit (0-4095), shape (N, 4) for 4 channels
             if bit_depth == 12:
-                # Use as-is
-                quantized_data = segment_data
+                # Use as-is (ensure uint32)
+                quantized_data = segment_data.astype(np.uint32)
             else:
                 # Requantize by right-shifting
                 # adc10: shift right by 2 (4095 -> 1023)
                 # adc8: shift right by 4 (4095 -> 255)
                 # adc6: shift right by 6 (4095 -> 63)
                 shift_amount = 12 - bit_depth
-                quantized_data = segment_data >> shift_amount
+
+                # Use numpy right shift to ensure proper unsigned handling
+                quantized_data = np.right_shift(segment_data, shift_amount).astype(np.uint32)
 
             logger.debug(
                 f"Loaded segment {segment_id} ({data_type_name}): "
-                f"shape={quantized_data.shape}, range=[{quantized_data.min()}, {quantized_data.max()}]"
+                f"shape={quantized_data.shape}, dtype={quantized_data.dtype}, "
+                f"range=[{quantized_data.min()}, {quantized_data.max()}]"
             )
 
             return quantized_data
