@@ -4,21 +4,21 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.34
+File version: 2.0.10.35
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 34)
+- CHANGE: Tracks changes within current commit cycle (currently 35)
 
-Changes in this version (10.34):
-1. NOISE FLOOR SCALERS - Fixed numpy type conversion for database insert
-   - v2.0.10.34: Updated noise_floor_calculator.py to v1.0.0.13
-                 Fixed psycopg2 error: "schema 'np' does not exist"
-                 Convert numpy.float64 to Python float before database insert
-                 Now explicitly calls float() on median results
+Changes in this version (10.35):
+1. NOISE FLOOR SCALERS - Removed redundant database save code
+   - v2.0.10.35: Removed old code calling calculator.store_noise_floor()
+                 Method doesn't exist - calculate_noise_floor() already saves internally
+                 Fixed AttributeError: 'NoiseFloorCalculator' object has no attribute 'store_noise_floor'
+                 Verified data type ID mappings are correct (adc6=6, adc8=2, adc10=3, adc12=4)
 
 Changes in previous versions (10.30):
 1. NOISE FLOOR SCALERS - Fixed f-string syntax error
@@ -580,7 +580,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.34"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.35"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18164,15 +18164,8 @@ class MLDPShell:
                 print("Check that approved steady-state segments exist")
                 return
 
-            # Store results in database
-            for dt_id, result in results.items():
-                calculator.store_noise_floor(
-                    dt_id,
-                    result['noise_floor'],
-                    result['num_segments']
-                )
-
-            print(f"\n✓ Calculated {len(results)} noise floor values")
+            # Results already saved to database by calculate_noise_floor()
+            print(f"\n✓ Calculated and saved {len(results)} noise floor values")
 
             # Show results
             self.cmd_noise_floor_show([])
