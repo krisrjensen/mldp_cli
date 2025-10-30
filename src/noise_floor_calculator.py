@@ -3,10 +3,16 @@ Filename: noise_floor_calculator.py
 Author(s): Kristophor Jensen
 Date Created: 20251029_000000
 Date Revised: 20251029_000000
-File version: 1.0.0.3
+File version: 1.0.0.4
 Description: Calculates noise floor values from approved steady-state segments using spectral PSD methods
 
 Changelog:
+v1.0.0.4 (2025-10-29):
+  - Fixed path construction: Added experiment_id parameter to __init__
+  - Path now correctly built as: data_root/experiment{id:03d}/segment_files/
+  - Fixed SQL query: Changed is_quantized to is_raw = false (correct column name)
+  - All 4 CLI commands now pass self.current_experiment to calculator
+
 v1.0.0.3 (2025-10-29):
   - CRITICAL FIX: Changed to load RAW segment files instead of processed feature files
   - Updated __init__ to use segment_files/ directory instead of fileset/adc_data
@@ -53,19 +59,22 @@ class NoiseFloorCalculator:
     Calculates noise floor values from approved steady-state segments
     """
 
-    def __init__(self, db_connection_params: Dict[str, str], data_root: str):
+    def __init__(self, db_connection_params: Dict[str, str], data_root: str, experiment_id: int = 41):
         """
         Initialize noise floor calculator
 
         Args:
             db_connection_params: Database connection parameters (host, database, user, password)
-            data_root: Root directory containing segment_files/ folder
+            data_root: Root directory containing experiment folders
+            experiment_id: Experiment ID (default 41)
         """
         self.db_params = db_connection_params
         self.data_root = Path(data_root)
+        self.experiment_id = experiment_id
 
-        # Verify segment_files directory exists
-        self.segment_files_dir = self.data_root / 'segment_files'
+        # Construct path to segment files: data_root/experiment{id}/segment_files/
+        experiment_dir = self.data_root / f'experiment{experiment_id:03d}'
+        self.segment_files_dir = experiment_dir / 'segment_files'
 
         if not self.segment_files_dir.exists():
             logger.warning(f"Segment files directory does not exist: {self.segment_files_dir}")
@@ -115,7 +124,7 @@ class NoiseFloorCalculator:
                     CROSS JOIN ml_data_types_lut dt
                     WHERE es.status = true
                       AND ds.segment_length = %s
-                      AND dt.is_quantized = true
+                      AND dt.is_raw = false
                 """
 
                 params = [segment_length]

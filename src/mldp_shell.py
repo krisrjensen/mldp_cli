@@ -4,16 +4,25 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251029_000000
-File version: 2.0.10.25
+File version: 2.0.10.26
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 25)
+- CHANGE: Tracks changes within current commit cycle (currently 26)
 
-Changes in this version (10.25):
+Changes in this version (10.26):
+1. NOISE FLOOR SCALERS - Fixed path and SQL query bugs
+   - v2.0.10.26: Fixed path construction to include experiment ID
+                 NoiseFloorCalculator now accepts experiment_id parameter
+                 Path correctly built as data_root/experiment{id:03d}/segment_files/
+                 Fixed SQL query: is_quantized → is_raw = false (correct column name)
+                 All 4 CLI commands pass self.current_experiment to calculator
+                 Updated noise_floor_calculator.py to v1.0.0.4
+
+Changes in previous versions (10.25):
 1. NOISE FLOOR SCALERS - CRITICAL FIX: Load raw ADC segment data
    - v2.0.10.25: Fixed noise_floor_calculator.py to load RAW segment files instead of processed features
                  Changed from feature_fileset to data_segments query with CROSS JOIN to data types
@@ -528,7 +537,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.25"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.26"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17991,7 +18000,7 @@ class MLDPShell:
             # Get data root from experiment or use default
             data_root = '/Volumes/ArcData/V3_database'
 
-            calculator = NoiseFloorCalculator(db_params, data_root)
+            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
 
             # Check if table exists
             if calculator.table_exists():
@@ -18026,7 +18035,7 @@ class MLDPShell:
             }
             data_root = '/Volumes/ArcData/V3_database'
 
-            calculator = NoiseFloorCalculator(db_params, data_root)
+            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
             entries = calculator.get_noise_floors()
 
             if not entries:
@@ -18101,7 +18110,7 @@ class MLDPShell:
             }
             data_root = '/Volumes/ArcData/V3_database'
 
-            calculator = NoiseFloorCalculator(db_params, data_root)
+            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
 
             print("\nCalculating noise floors...")
             results = calculator.calculate_noise_floor(data_type_id)
@@ -18166,7 +18175,7 @@ class MLDPShell:
             }
             data_root = '/Volumes/ArcData/V3_database'
 
-            calculator = NoiseFloorCalculator(db_params, data_root)
+            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
 
             # Show current entries
             entries = calculator.get_noise_floors()
