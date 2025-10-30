@@ -3,17 +3,27 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251028_210000
-File version: 2.0.10.22
+Date Revised: 20251029_000000
+File version: 2.0.10.23
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 19)
+- CHANGE: Tracks changes within current commit cycle (currently 23)
 
-Changes in this version (10.22):
+Changes in this version (10.23):
+1. NOISE FLOOR SCALERS - Added 4 CLI commands for noise floor amplitude normalization
+   - v2.0.10.23: Added noise-floor-init command (check table exists, show entry count)
+                 Added noise-floor-show command (display all calculated values)
+                 Added noise-floor-calculate command (compute from approved steady-state segments)
+                 Added noise-floor-clear command (delete entries with confirmation)
+                 Created noise_floor_calculator.py module with spectral PSD calculations
+                 Uses Welch's method + 10th percentile for noise floor estimation
+                 Database table: experiment_noise_floor
+
+Changes in previous versions (10.22):
 1. PHASE 4 ENHANCEMENT - Improved heatmap visualization formatting
    - v2.0.10.22: Changed metric precision from 3 to 2 decimal places (0.95 instead of 0.950)
                  Removed global colorbar limits (vmin=0, vmax=1) for local scaling per subplot
@@ -1463,6 +1473,11 @@ class MLDPShell:
             'classifier-plot-results': self.cmd_plot_classifier_results,
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
+            # Noise floor amplitude normalization commands
+            'noise-floor-init': self.cmd_noise_floor_init,
+            'noise-floor-show': self.cmd_noise_floor_show,
+            'noise-floor-calculate': self.cmd_noise_floor_calculate,
+            'noise-floor-clear': self.cmd_noise_floor_clear,
         }
     
     def get_prompt(self):
@@ -17932,6 +17947,246 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to clean features: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    # ========== Noise Floor Amplitude Normalization Commands ==========
+
+    def cmd_noise_floor_init(self, args):
+        """
+        Initialize experiment_noise_floor table
+
+        Usage: noise-floor-init
+
+        Creates the experiment_noise_floor table if it doesn't exist.
+        Reports status either way.
+        """
+        try:
+            from .noise_floor_calculator import NoiseFloorCalculator
+
+            # Get database connection params
+            db_params = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+
+            # Get data root from experiment or use default
+            data_root = '/Volumes/ArcData/V3_database'
+
+            calculator = NoiseFloorCalculator(db_params, data_root)
+
+            # Check if table exists
+            if calculator.table_exists():
+                count = calculator.get_entry_count()
+                print(f"✓ experiment_noise_floor table already exists")
+                print(f"  Current entries: {count}")
+            else:
+                print("❌ experiment_noise_floor table does not exist")
+                print("Run the SQL registration script to create it:")
+                print("  psql -h localhost -U kjensen -d arc_detection -f noise_floor_sql_registration.sql")
+
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_noise_floor_show(self, args):
+        """
+        Display calculated noise floor values
+
+        Usage: noise-floor-show
+
+        Shows all noise floor values with data type, segments used, and calculation date.
+        """
+        try:
+            from .noise_floor_calculator import NoiseFloorCalculator
+
+            db_params = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            data_root = '/Volumes/ArcData/V3_database'
+
+            calculator = NoiseFloorCalculator(db_params, data_root)
+            entries = calculator.get_noise_floors()
+
+            if not entries:
+                print("\nNo noise floor values calculated yet")
+                print("Run 'noise-floor-calculate' to compute values")
+                return
+
+            # Display table
+            print("\nNoise Floor Values:")
+            print("-" * 80)
+            print(f"{'Data Type':<12} {'ID':<4} {'Noise Floor':<15} {'Segments':<10} {'Calculated':<20} {'Method':<15}")
+            print("-" * 80)
+
+            for entry in entries:
+                dt_name = entry['data_type_name']
+                dt_id = entry['data_type_id']
+                nf = entry['noise_floor']
+                num_seg = entry['num_segments_used'] or 0
+                calc_date = entry['last_calculated'].strftime('%Y-%m-%d %H:%M') if entry['last_calculated'] else 'N/A'
+                method = entry['calculation_method'] or 'N/A'
+
+                print(f"{dt_name:<12} {dt_id:<4} {nf:<15.6e} {num_seg:<10} {calc_date:<20} {method:<15}")
+
+            print()
+
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_noise_floor_calculate(self, args):
+        """
+        Calculate noise floor values from approved steady-state segments
+
+        Usage: noise-floor-calculate [OPTIONS]
+
+        Options:
+            --all              Calculate for all data types (default)
+            --type <id>        Calculate for specific data_type_id
+
+        Requires user confirmation before proceeding.
+        Uses spectral PSD method with 10th percentile noise floor estimation.
+        """
+        try:
+            from .noise_floor_calculator import NoiseFloorCalculator
+
+            # Parse arguments
+            data_type_id = None
+            if args:
+                if args[0] == '--all':
+                    data_type_id = None
+                elif args[0] == '--type' and len(args) > 1:
+                    data_type_id = int(args[1])
+                else:
+                    print("Usage: noise-floor-calculate [--all | --type <data_type_id>]")
+                    return
+
+            # Get user confirmation
+            if data_type_id is None:
+                response = input("\nCalculate noise floors for ALL data types? [y/N]: ")
+            else:
+                response = input(f"\nCalculate noise floor for data_type_id {data_type_id}? [y/N]: ")
+
+            if response.lower() != 'y':
+                print("Cancelled")
+                return
+
+            db_params = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            data_root = '/Volumes/ArcData/V3_database'
+
+            calculator = NoiseFloorCalculator(db_params, data_root)
+
+            print("\nCalculating noise floors...")
+            results = calculator.calculate_noise_floor(data_type_id)
+
+            if not results:
+                print("\n❌ No noise floor values calculated")
+                print("Check that approved steady-state segments exist")
+                return
+
+            # Store results in database
+            for dt_id, result in results.items():
+                calculator.store_noise_floor(
+                    dt_id,
+                    result['noise_floor'],
+                    result['num_segments']
+                )
+
+            print(f"\n✓ Calculated {len(results)} noise floor values")
+
+            # Show results
+            self.cmd_noise_floor_show([])
+
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def cmd_noise_floor_clear(self, args):
+        """
+        Clear noise floor entries from database
+
+        Usage:
+            noise-floor-clear              Show help
+            noise-floor-clear --all        Clear all entries
+            noise-floor-clear --type <id>  Clear specific data type
+
+        Requires user confirmation for all delete operations.
+        """
+        try:
+            from .noise_floor_calculator import NoiseFloorCalculator
+
+            # Parse arguments
+            if not args:
+                print("Usage:")
+                print("  noise-floor-clear --all              Clear all noise floor entries")
+                print("  noise-floor-clear --type <id>        Clear specific data type")
+                return
+
+            data_type_id = None
+            if args[0] == '--all':
+                data_type_id = None
+            elif args[0] == '--type' and len(args) > 1:
+                data_type_id = int(args[1])
+            else:
+                print("❌ Unknown option. Use --all or --type <id>")
+                return
+
+            db_params = {
+                'host': 'localhost',
+                'database': 'arc_detection',
+                'user': 'kjensen'
+            }
+            data_root = '/Volumes/ArcData/V3_database'
+
+            calculator = NoiseFloorCalculator(db_params, data_root)
+
+            # Show current entries
+            entries = calculator.get_noise_floors()
+
+            if not entries:
+                print("\nNo entries to clear")
+                return
+
+            # Filter if specific type
+            if data_type_id is not None:
+                entries = [e for e in entries if e['data_type_id'] == data_type_id]
+                if not entries:
+                    print(f"\nNo entry found for data_type_id {data_type_id}")
+                    return
+
+            # Show what will be deleted
+            print("\nCurrent noise floor entries:")
+            for e in entries:
+                print(f"  {e['data_type_name']}: {e['noise_floor']:.6e} ({e['num_segments_used']} segments)")
+
+            # Get confirmation
+            if data_type_id is None:
+                response = input(f"\nDelete all {len(entries)} entries? [y/N]: ")
+            else:
+                response = input(f"\nDelete this entry? [y/N]: ")
+
+            if response.lower() != 'y':
+                print("Cancelled")
+                return
+
+            # Clear entries
+            rows_deleted = calculator.clear_noise_floor(data_type_id)
+            print(f"\n✓ Cleared {rows_deleted} entries")
+
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
             import traceback
             traceback.print_exc()
 
