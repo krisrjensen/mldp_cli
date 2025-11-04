@@ -1,0 +1,106 @@
+# Example MLDP Script: Full ML Pipeline
+# Filename: example_full_pipeline.mldp
+# Author: Kristophor Jensen
+# Date Created: 20251104
+# Description: Complete workflow from experiment creation to classifier training
+#
+# Usage: source example_full_pipeline.mldp [--echo] [--continue]
+#
+# This script demonstrates the complete MLDP machine learning pipeline:
+# 1. Create experiment
+# 2. Link feature sets
+# 3. Select data
+# 4. Generate features
+# 5. Create and train classifier
+
+# ============================================================================
+# Phase 1: Experiment Setup
+# ============================================================================
+
+connect
+
+# Create new experiment
+experiment-create --name "full_pipeline_example" --description "Complete pipeline demonstration"
+
+# Set active experiment (adjust ID as needed)
+set experiment 42
+
+# Link feature sets (using notebook features)
+bulk-link-feature-sets 42 --sets 21,22,23
+
+# ============================================================================
+# Phase 2: Data Selection
+# ============================================================================
+
+# Select files
+select-files --max-files 50 --seed 42
+
+# Select segments
+select-segments --balance-positions --min-per-file 3
+
+# Generate segment pairs
+generate-segment-pairs --strategy all_pairs
+
+# Generate segment files
+generate-segment-fileset --workers 16
+
+# ============================================================================
+# Phase 3: Feature Extraction
+# ============================================================================
+
+# Extract features and save to disk
+# --feature-sets specifies which sets to compute
+# --parallel enables parallel processing
+generate-feature-fileset --feature-sets 21,22,23 --parallel 8
+
+# ============================================================================
+# Phase 4: Classifier Creation and Configuration
+# ============================================================================
+
+# Create a new classifier
+classifier-new --name "full_pipeline_svm" --description "SVM with notebook features" --type svm
+
+# Set as active classifier
+set classifier 1
+
+# Create configuration
+classifier-config-create --name "baseline_config" --active
+
+# Note: You'll need to get the experiment_feature_set IDs from show-feature-config
+# Then add them to the classifier config using:
+# classifier-config-add-feature-sets --config-id 1 --experiment-feature-sets <ids>
+
+# Set feature builder configuration
+# --include-original includes raw features without distance computations
+classifier-config-set-feature-builder --config-id 1 --include-original --no-compute-distances-inter --no-compute-distances-intra
+
+# Add hyperparameters for SVM training
+classifier-config-add-hyperparameters --config-id 1 --kernel linear --C 0.1,1.0,10.0,100.0
+
+# ============================================================================
+# Phase 5: Classifier Training
+# ============================================================================
+
+# Create splits table
+classifier-create-splits-table
+
+# Assign train/val/test splits
+classifier-assign-splits --strategy stratified --split-ratios 0.33,0.33,0.34
+
+# Build feature matrix
+classifier-build-features --amplitude-method 2
+
+# Train SVM classifiers
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+
+# ============================================================================
+# Phase 6: Results Visualization
+# ============================================================================
+
+# Plot training results
+classifier-plot-results
+
+# Show experiment summary
+experiment-summary 42
+
+# Pipeline execution complete!

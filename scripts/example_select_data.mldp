@@ -1,0 +1,35 @@
+# Example MLDP Script: Select Files and Segments
+# Filename: example_select_data.mldp
+# Author: Kristophor Jensen
+# Date Created: 20251104
+# Description: Example script showing file and segment selection workflow
+#
+# Prerequisites: Run example_new_experiment.mldp first
+# Usage: source example_select_data.mldp [--echo]
+
+# Ensure we're connected
+connect
+
+# Set the experiment (change 42 to your experiment ID)
+set experiment 42
+
+# Select files for training data
+# --max-files limits the number of files
+# --seed ensures reproducible selection
+select-files --max-files 50 --seed 42
+
+# Select segments from the chosen files
+# --balance-positions ensures equal representation
+# --min-per-file ensures minimum segments per file
+select-segments --balance-positions --min-per-file 3
+
+# Generate segment pairs for training
+# --strategy all_pairs creates all possible pairs
+generate-segment-pairs --strategy all_pairs
+
+# Generate physical segment files from raw data
+# --workers specifies parallel processing
+generate-segment-fileset --workers 16
+
+# Show summary
+experiment-summary 42

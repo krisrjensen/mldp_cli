@@ -1,0 +1,28 @@
+# Example MLDP Script: Create a New Experiment
+# Filename: example_new_experiment.mldp
+# Author: Kristophor Jensen
+# Date Created: 20251104
+# Description: Example script showing how to create and configure a new experiment
+#
+# Usage: source example_new_experiment.mldp [--echo]
+
+# Connect to database
+connect
+
+# Create a new experiment
+experiment-create --name "example_experiment_42" --description "Example experiment using notebook features"
+
+# Set the experiment as active
+set experiment 42
+
+# Link feature sets (using notebook feature sets 21-24)
+# Feature set 21: PSD spectral analysis (32 features)
+# Feature set 22: Sliding window volatility (8 features)
+# Feature set 23: Time-domain statistical (4 features)
+bulk-link-feature-sets 42 --sets 21,22,23
+
+# Show linked feature sets
+show-feature-config
+
+# Display experiment info
+experiment-info 42
