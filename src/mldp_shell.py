@@ -580,7 +580,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.10.35"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -798,6 +798,7 @@ class MLDPCompleter(Completer):
             'export': [],
             'time': [],
             'help': [],  # Will be populated with all command names
+            'source': ['--continue', '--echo'],
             'exit': [],
             'quit': [],
         }
@@ -1453,6 +1454,7 @@ class MLDPShell:
             'generate-segment-pairs': self.cmd_generate_segment_pairs,
             'generate-feature-fileset': self.cmd_generate_feature_fileset,
             'help': self.cmd_help,
+            'source': self.cmd_source,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
             # Server management commands
@@ -3128,6 +3130,7 @@ class MLDPShell:
   export <filename>                   Export query results (.csv or .json)
   time                                Show current time
   help [command]                      Show help
+  source <file> [--continue] [--echo] Execute commands from script file
   exit/quit                           Exit shell
 
 ⚡ BASH COMMANDS:
@@ -18690,7 +18693,142 @@ class MLDPShell:
             self.db_conn.close()
         print("\nGoodbye! Thank you for using MLDP.")
         self.running = False
-    
+
+    def cmd_source(self, args):
+        """Execute commands from a script file
+
+        Usage: source <filename> [--continue] [--echo]
+
+        Options:
+          --continue    Continue execution even if a command fails
+          --echo        Echo each command before executing it
+
+        File Format:
+          - One command per line
+          - Lines starting with # are comments
+          - Blank lines are ignored
+          - Arguments with spaces should be quoted
+
+        Search Path:
+          1. Current directory
+          2. ~/.mldp/ directory
+          3. User home directory
+
+        Examples:
+          source new_experiment.sh
+          source ~/.mldp/scripts/setup_exp42.sh --echo
+          source commands.txt --continue --echo
+        """
+        import shlex
+        from pathlib import Path
+
+        if not args:
+            print("Usage: source <filename> [--continue] [--echo]")
+            print("Type 'help source' for more information")
+            return
+
+        # Parse arguments
+        filename = args[0]
+        continue_on_error = '--continue' in args
+        echo_commands = '--echo' in args
+
+        # Build search path
+        search_paths = [
+            Path.cwd(),
+            Path.home() / '.mldp',
+            Path.home()
+        ]
+
+        # Find the file
+        script_path = None
+        for search_dir in search_paths:
+            candidate = search_dir / filename
+            if candidate.exists() and candidate.is_file():
+                script_path = candidate
+                break
+
+        if not script_path:
+            print(f"❌ Script file not found: {filename}")
+            print(f"   Searched in:")
+            for path in search_paths:
+                print(f"     - {path}")
+            return
+
+        print(f"📜 Executing script: {script_path}")
+        print(f"   Continue on error: {continue_on_error}")
+        print(f"   Echo commands: {echo_commands}")
+        print()
+
+        # Read and execute commands
+        total_commands = 0
+        executed_commands = 0
+        failed_commands = 0
+        skipped_lines = 0
+
+        try:
+            with open(script_path, 'r') as f:
+                for line_num, line in enumerate(f, 1):
+                    # Strip whitespace
+                    line = line.strip()
+
+                    # Skip empty lines and comments
+                    if not line or line.startswith('#'):
+                        skipped_lines += 1
+                        continue
+
+                    total_commands += 1
+
+                    # Echo if requested
+                    if echo_commands:
+                        print(f"[{line_num}] {line}")
+
+                    try:
+                        # Parse the command line using shlex to handle quoted arguments
+                        parts = shlex.split(line)
+                        if not parts:
+                            skipped_lines += 1
+                            continue
+
+                        cmd = parts[0]
+                        cmd_args = parts[1:]
+
+                        # Execute the command
+                        if cmd in self.commands:
+                            self.commands[cmd](cmd_args)
+                            executed_commands += 1
+                        else:
+                            print(f"❌ Unknown command at line {line_num}: {cmd}")
+                            failed_commands += 1
+                            if not continue_on_error:
+                                print(f"⏹️  Stopping execution (use --continue to continue on errors)")
+                                break
+
+                    except Exception as e:
+                        print(f"❌ Error at line {line_num}: {e}")
+                        failed_commands += 1
+                        if not continue_on_error:
+                            print(f"⏹️  Stopping execution (use --continue to continue on errors)")
+                            break
+
+        except FileNotFoundError:
+            print(f"❌ Could not open file: {script_path}")
+            return
+        except Exception as e:
+            print(f"❌ Error reading script: {e}")
+            return
+
+        # Print summary
+        print()
+        print("=" * 60)
+        print(f"📊 Script Execution Summary")
+        print("=" * 60)
+        print(f"   Total lines: {line_num}")
+        print(f"   Skipped (blank/comments): {skipped_lines}")
+        print(f"   Commands found: {total_commands}")
+        print(f"   Successfully executed: {executed_commands}")
+        print(f"   Failed: {failed_commands}")
+        print("=" * 60)
+
     # ========== Server Management Commands ==========
     
     def cmd_servers(self, args):
