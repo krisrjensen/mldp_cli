@@ -4,7 +4,7 @@ Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
 Date Revised: 20251105_000000
-File version: 1.2.0.8
+File version: 1.2.0.9
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -16,6 +16,7 @@ Description: Extract features from segments and generate feature filesets
              Added support for new feature function families (derivative, temporal, spectral, composite)
              Updated _apply_statistic() to call wrapper functions from feature_functions modules
              Added import of spectral_features module for SNR, PSD, slope, SFM calculations
+             Fixed KeyError accessing amplitude_data[0] - now uses first available method_id
 """
 
 import psycopg2
@@ -1055,7 +1056,9 @@ class ExperimentFeatureExtractor:
                 f"Expected 2D array"
             )
 
-        segment_length = len(amplitude_data[0]['source_current'])
+        # Get segment length from first available amplitude method
+        first_method_id = next(iter(amplitude_data.keys()))
+        segment_length = len(amplitude_data[first_method_id]['source_current'])
         num_amplitude_methods = len(amplitude_data)
 
         # Get windowing strategy
