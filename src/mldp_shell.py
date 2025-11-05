@@ -6245,18 +6245,22 @@ class MLDPShell:
             """, (self.current_experiment, func_id))
 
             if cursor.fetchone()[0] > 0:
-                print(f"⚠️  {func_name} ({display_name}) is already configured for experiment {self.current_experiment}")
+                print(f"WARNING: {func_name} ({display_name}) is already configured for experiment {self.current_experiment}")
                 return
+
+            # Get next experiment_distance_id
+            cursor.execute("SELECT COALESCE(MAX(experiment_distance_id), 0) + 1 FROM ml_experiments_distance_measurements")
+            next_id = cursor.fetchone()[0]
 
             # Add to experiment
             cursor.execute("""
-                INSERT INTO ml_experiments_distance_measurements (experiment_id, distance_function_id)
-                VALUES (%s, %s)
-            """, (self.current_experiment, func_id))
+                INSERT INTO ml_experiments_distance_measurements (experiment_distance_id, experiment_id, distance_function_id)
+                VALUES (%s, %s, %s)
+            """, (next_id, self.current_experiment, func_id))
 
             self.db_conn.commit()
 
-            print(f"✅ Added {func_name} ({display_name}) to experiment {self.current_experiment}")
+            print(f"SUCCESS: Added {func_name} ({display_name}) to experiment {self.current_experiment}")
 
         except Exception as e:
             print(f"❌ Error adding distance metric: {e}")

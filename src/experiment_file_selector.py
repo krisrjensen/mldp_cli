@@ -104,7 +104,7 @@ class ExperimentFileSelector:
                     f.original_filename as file_name,
                     f.original_path as file_path,
                     fy.label_id as file_label_id,
-                    el.label_text as file_label_name,
+                    el.experiment_label as file_label_name,
                     f.current_level,
                     f.voltage_level,
                     f.total_samples as file_length,
@@ -113,7 +113,7 @@ class ExperimentFileSelector:
                 LEFT JOIN files_y fy ON f.file_id = fy.file_id
                 LEFT JOIN experiment_labels el ON fy.label_id = el.label_id
                 WHERE f.total_samples > 0
-                ORDER BY el.label_text, f.file_id
+                ORDER BY el.experiment_label, f.file_id
             """)
             
             # Group by label
