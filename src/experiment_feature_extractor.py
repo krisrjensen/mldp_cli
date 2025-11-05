@@ -4,7 +4,7 @@ Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
 Date Revised: 20251105_000000
-File version: 1.2.0.10
+File version: 1.3.0.11
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -18,6 +18,8 @@ Description: Extract features from segments and generate feature filesets
              Added import of spectral_features module for SNR, PSD, slope, SFM calculations
              Fixed KeyError accessing amplitude_data[0] - now uses first available method_id
              Dynamic n_value for spectral features - automatically uses full segment length
+             CRITICAL FIX: Aggregate features now return scalars, not per-sample arrays
+             Output shape for aggregate features: (num_features,) not (segment_length, num_features)
 """
 
 import psycopg2
@@ -924,9 +926,9 @@ class ExperimentFeatureExtractor:
         feature: Dict,
         n_value: int,
         windowing_strategy: str = 'non_overlapping'
-    ) -> np.ndarray:
+    ):
         """
-        Extract single feature from channel data with per-index alignment
+        Extract single feature from channel data
 
         Args:
             channel_data: Input signal (segment_length,)
@@ -935,9 +937,9 @@ class ExperimentFeatureExtractor:
             windowing_strategy: 'non_overlapping' or 'sliding_window'
 
         Returns:
-            Array of shape (segment_length,) with:
-            - sample_wise: raw values
-            - chunk_statistic/aggregate: values repeated per chunk or sliding
+            - sample_wise: Array of shape (segment_length,) with raw values
+            - chunk_statistic: Array of shape (segment_length,) with values repeated per chunk or sliding
+            - aggregate: Scalar value computed from entire segment
         """
         behavior = feature.get('behavior_type')
 
@@ -945,13 +947,18 @@ class ExperimentFeatureExtractor:
             # Return channel data as-is (no windowing for sample-wise features)
             return channel_data
 
-        elif behavior in ['chunk_statistic', 'aggregate']:
+        elif behavior == 'chunk_statistic':
+            # Chunk statistics return per-sample arrays (values repeated per chunk)
             if windowing_strategy == 'non_overlapping':
                 return self._extract_non_overlapping(channel_data, feature, n_value)
             elif windowing_strategy == 'sliding_window':
                 return self._extract_sliding_window(channel_data, feature, n_value)
             else:
                 raise ValueError(f"Unknown windowing strategy: {windowing_strategy}")
+
+        elif behavior == 'aggregate':
+            # Aggregate features compute ONCE on entire segment and return a scalar
+            return self._apply_statistic(channel_data, feature)
 
         else:
             raise ValueError(f"Unknown behavior type: {behavior} for feature {feature['feature_name']}")
@@ -1114,29 +1121,47 @@ class ExperimentFeatureExtractor:
                     windowing_strategy
                 )
 
-                # Verify length
-                if len(feature_output) != segment_length:
-                    raise ValueError(
-                        f"Feature {feat['feature_name']} output length {len(feature_output)} "
-                        f"!= segment length {segment_length}"
-                    )
+                # Verify length for array outputs (sample_wise and chunk_statistic)
+                # Aggregate features return scalars, so skip verification
+                if feat.get('behavior_type') != 'aggregate':
+                    if len(feature_output) != segment_length:
+                        raise ValueError(
+                            f"Feature {feat['feature_name']} output length {len(feature_output)} "
+                            f"!= segment length {segment_length}"
+                        )
 
                 feature_amplitude_outputs.append(feature_output)
 
             # Add all amplitude method columns for this feature
             all_outputs.extend(feature_amplitude_outputs)
 
-        # Stack all columns: features × configured_amplitude_methods
-        # Final shape: (segment_length, num_features * num_configured_amplitude_methods)
-        output = np.column_stack(all_outputs)
-        num_features = len(feature_set_config['features'])
-        num_configured_methods = len(configured_method_ids)
+        # Determine output format based on first feature's behavior type
+        first_feature_behavior = feature_set_config['features'][0].get('behavior_type')
 
-        logger.debug(
-            f"Extracted feature set {feature_set_config['feature_set_name']}: "
-            f"shape {output.shape} (length × {num_configured_methods} configured amplitude methods), "
-            f"windowing={windowing_strategy}, method_ids={configured_method_ids}"
-        )
+        if first_feature_behavior == 'aggregate':
+            # Aggregate features: return 1D array of scalars
+            # Shape: (num_features * num_configured_amplitude_methods,)
+            output = np.array(all_outputs, dtype=np.float64)
+            num_features = len(feature_set_config['features'])
+            num_configured_methods = len(configured_method_ids)
+
+            logger.debug(
+                f"Extracted feature set {feature_set_config['feature_set_name']}: "
+                f"shape {output.shape} (aggregate: {num_features} features × {num_configured_methods} amplitude methods), "
+                f"windowing={windowing_strategy}, method_ids={configured_method_ids}"
+            )
+        else:
+            # Sample-wise or chunk_statistic features: return 2D array
+            # Shape: (segment_length, num_features * num_configured_amplitude_methods)
+            output = np.column_stack(all_outputs)
+            num_features = len(feature_set_config['features'])
+            num_configured_methods = len(configured_method_ids)
+
+            logger.debug(
+                f"Extracted feature set {feature_set_config['feature_set_name']}: "
+                f"shape {output.shape} (per-sample: length × {num_features} features × {num_configured_methods} methods), "
+                f"windowing={windowing_strategy}, method_ids={configured_method_ids}"
+            )
 
         return output
 
