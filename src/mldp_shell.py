@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.8
+File version: 2.0.11.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.8"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.9"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18820,6 +18820,48 @@ SETTINGS:
             self.db_conn.close()
         print("\nGoodbye! Thank you for using MLDP.")
         self.running = False
+
+    def cmd_reload_modules(self, args):
+        """Reload Python modules to pick up code changes
+
+        Usage: reload-modules
+
+        This reloads all imported MLDP modules so you don't have to restart
+        the shell when you make code changes. Useful during development.
+
+        Modules reloaded:
+        - experiment_file_selector
+        - experiment_segment_selector
+        - feature_extraction_manager
+        - ml_file_manager
+        - mpcctl_svm_trainer
+        """
+        import importlib
+        import sys
+
+        modules_to_reload = [
+            'experiment_file_selector',
+            'experiment_segment_selector',
+            'feature_extraction_manager',
+            'ml_file_manager',
+            'mpcctl_svm_trainer',
+        ]
+
+        print("Reloading Python modules...")
+        reloaded = 0
+        for module_name in modules_to_reload:
+            if module_name in sys.modules:
+                try:
+                    importlib.reload(sys.modules[module_name])
+                    print(f"  Reloaded: {module_name}")
+                    reloaded += 1
+                except Exception as e:
+                    print(f"  Failed to reload {module_name}: {e}")
+            else:
+                print(f"  Not loaded: {module_name}")
+
+        print(f"\n[SUCCESS] Reloaded {reloaded} modules")
+        print("Code changes are now active in the shell")
 
     def cmd_source(self, args):
         """Execute commands from a script file
