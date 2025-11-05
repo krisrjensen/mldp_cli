@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.12.0
+File version: 2.0.12.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.12.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.12.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1746,6 +1746,9 @@ class MLDPShell:
                         except Exception as e:
                             print(f"Error executing bash command: {e}")
                     continue
+
+                # Substitute variables before parsing
+                text = self._substitute_variables(text)
 
                 # Parse command
                 parts = shlex.split(text)
