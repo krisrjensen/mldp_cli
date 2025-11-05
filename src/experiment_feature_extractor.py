@@ -4,7 +4,7 @@ Filename: experiment_feature_extractor.py
 Author: Kristophor Jensen
 Date Created: 20250916_090000
 Date Revised: 20251105_000000
-File version: 1.2.0.9
+File version: 1.2.0.10
 Description: Extract features from segments and generate feature filesets
              Updated to support multi-column amplitude-processed segment files
              Updated to use normalized database schema with foreign keys
@@ -17,6 +17,7 @@ Description: Extract features from segments and generate feature filesets
              Updated _apply_statistic() to call wrapper functions from feature_functions modules
              Added import of spectral_features module for SNR, PSD, slope, SFM calculations
              Fixed KeyError accessing amplitude_data[0] - now uses first available method_id
+             Dynamic n_value for spectral features - automatically uses full segment length
 """
 
 import psycopg2
@@ -1097,11 +1098,19 @@ class ExperimentFeatureExtractor:
                 if isinstance(channel_data, dict):
                     channel_data = channel_data['source_current']
 
+                # For spectral features, override n_value to match segment length
+                # Spectral features (SNR, PSD, slope, SFM) need the ENTIRE segment for FFT
+                effective_n_value = n_value
+                comp_func = feat.get('computation_function', '').lower()
+                if any(keyword in comp_func for keyword in ['snr', 'psd', 'slope', 'sfm']):
+                    effective_n_value = len(channel_data)
+                    logger.debug(f"Spectral feature {feat['feature_name']}: using n_value={effective_n_value} (full segment)")
+
                 # Extract feature
                 feature_output = self._extract_single_feature(
                     channel_data,
                     feat,
-                    n_value,
+                    effective_n_value,
                     windowing_strategy
                 )
 
