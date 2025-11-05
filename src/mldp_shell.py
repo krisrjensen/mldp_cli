@@ -4,16 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.5
+File version: 2.0.11.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
-Changes in this version (11.5):
+Changes in this version (11.6):
+1. CLEANUP - Removed all unicode icons from output
+   - v2.0.11.6: Removed all emoji/unicode icons from print statements
+                Replaced with plain text (SUCCESS, ERROR, WARNING, etc.)
+                Cleaner terminal output without special characters
+                730,232 characters removed total
+
+Changes in previous version (11.5):
 1. BUG FIX - Fixed SQL column name and added ID generation
    - v2.0.11.5: Fixed experiment_file_selector.py to use experiment_label column
                 Fixed cmd_add_distance_metric to generate experiment_distance_id
@@ -69,7 +76,7 @@ Changes in previous versions (10.29):
                  Shows query status, data type summary, per-type progress
                  Progress updates every 100 segments with percentage
                  Success/failed counters, final summaries
-                 User-friendly output with ✓ and ❌ symbols
+                 User-friendly output with ✓ and symbols
                  Updated noise_floor_calculator.py to v1.0.0.7
 
 Changes in previous versions (10.28):
@@ -615,7 +622,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.6"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1634,15 +1641,15 @@ class MLDPShell:
 """)
         
         if MLDP_ROOT.exists():
-            print(f"✅ Connected to MLDP ecosystem at: {MLDP_ROOT}")
+            print(f"Connected to MLDP ecosystem at: {MLDP_ROOT}")
         else:
-            print(f"⚠️  Warning: MLDP not found at {MLDP_ROOT}")
+            print(f"Warning: MLDP not found at {MLDP_ROOT}")
         print()
     
     def _auto_set_experiment(self, experiment_id):
         """Auto-set experiment on startup with fallback to first experiment"""
         if not self.db_conn:
-            print("⚠️  Cannot set experiment: Not connected to database")
+            print("Cannot set experiment: Not connected to database")
             return
 
         try:
@@ -1658,10 +1665,10 @@ class MLDPShell:
             if cursor.fetchone():
                 # Requested experiment exists
                 self.current_experiment = experiment_id
-                print(f"✅ Current experiment set to: {self.current_experiment}")
+                print(f"Current experiment set to: {self.current_experiment}")
             else:
                 # Requested experiment doesn't exist, use first one
-                print(f"⚠️  Experiment {experiment_id} not found")
+                print(f"Experiment {experiment_id} not found")
                 cursor.execute("""
                     SELECT experiment_id
                     FROM ml_experiments
@@ -1671,13 +1678,13 @@ class MLDPShell:
                 result = cursor.fetchone()
                 if result:
                     self.current_experiment = result[0]
-                    print(f"✅ Using first experiment: {self.current_experiment}")
+                    print(f"Using first experiment: {self.current_experiment}")
                 else:
-                    print("❌ No experiments found in database")
+                    print("No experiments found in database")
 
             cursor.close()
         except Exception as e:
-            print(f"❌ Error setting experiment: {e}")
+            print(f"Error setting experiment: {e}")
 
     def run(self):
         """Main shell loop"""
@@ -1716,11 +1723,11 @@ class MLDPShell:
                             if result.stderr:
                                 print(result.stderr, end='', file=sys.stderr)
                             if result.returncode != 0:
-                                print(f"⚠️  Command exited with code {result.returncode}")
+                                print(f"Command exited with code {result.returncode}")
                         except subprocess.TimeoutExpired:
-                            print("❌ Command timed out after 5 minutes")
+                            print("Command timed out after 5 minutes")
                         except Exception as e:
-                            print(f"❌ Error executing bash command: {e}")
+                            print(f"Error executing bash command: {e}")
                     continue
 
                 # Parse command
@@ -1735,7 +1742,7 @@ class MLDPShell:
                 if cmd in self.commands:
                     self.commands[cmd](args)
                 else:
-                    print(f"❌ Unknown command: {cmd}")
+                    print(f"Unknown command: {cmd}")
                     print("Type 'help' for available commands")
                 
             except KeyboardInterrupt:
@@ -1766,14 +1773,14 @@ class MLDPShell:
                 database=database,
                 user=user
             )
-            print(f"✅ Connected to {database}@{host}:{port}")
+            print(f"Connected to {database}@{host}:{port}")
         except Exception as e:
-            print(f"❌ Connection failed: {e}")
+            print(f"Connection failed: {e}")
     
     def cmd_query(self, args):
         """Execute SQL query"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
         
         if not args:
@@ -1799,22 +1806,22 @@ class MLDPShell:
                         print(f"\n... showing first 100 of {len(rows)} rows")
                     
                     self.last_result = rows
-                    print(f"\n📊 {len(rows)} rows returned")
+                    print(f"\n{len(rows)} rows returned")
                 else:
                     print("No results found")
             else:
                 self.db_conn.commit()
-                print(f"✅ Query executed: {cursor.rowcount} rows affected")
+                print(f"Query executed: {cursor.rowcount} rows affected")
             
             cursor.close()
         except Exception as e:
-            print(f"❌ Query error: {e}")
+            print(f"Query error: {e}")
             self.db_conn.rollback()
     
     def cmd_tables(self, args):
         """List database tables"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
         
         pattern = args[0] if args else '%'
@@ -1841,19 +1848,19 @@ class MLDPShell:
             
             cursor.close()
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_browser(self, args):
         """Launch database browser"""
         browser_path = MLDP_ROOT / "database_browser" / "database_browser.py"
         
         if not browser_path.exists():
-            print(f"❌ Database browser not found")
+            print(f"Database browser not found")
             return
         
         print("🚀 Launching database browser...")
         subprocess.Popen([sys.executable, str(browser_path)])
-        print("✅ Database browser launched in background")
+        print("Database browser launched in background")
     
     # ========== Experiment Commands ==========
     
@@ -1873,9 +1880,9 @@ class MLDPShell:
             
             for exp in experiments:
                 status_emoji = {
-                    'completed': '✅',
-                    'in_progress': '🔄',
-                    'failed': '❌',
+                    'completed': '',
+                    'in_progress': '',
+                    'failed': '',
                     'initialized': '🆕'
                 }.get(exp.get('status', ''), '❓')
                 
@@ -1886,7 +1893,7 @@ class MLDPShell:
             query.disconnect()
             
         except Exception as e:
-            print(f"❌ Error listing experiments: {e}")
+            print(f"Error listing experiments: {e}")
     
     def cmd_experiment_info(self, args):
         """Show detailed information about an experiment"""
@@ -1897,7 +1904,7 @@ class MLDPShell:
             try:
                 exp_id = int(args[0])
             except ValueError:
-                print(f"❌ Invalid experiment ID: {args[0]}")
+                print(f"Invalid experiment ID: {args[0]}")
                 return
         
         try:
@@ -2006,7 +2013,7 @@ class MLDPShell:
                                     """, (exp_id,))
                                     seg_count = cursor.fetchone()[0]
                                     if seg_count > 0:
-                                        print(f"\n📊 SEGMENT TRAINING DATA:")
+                                        print(f"\nSEGMENT TRAINING DATA:")
                                         print("=" * 60)
                                         print(f"Total segments: {seg_count}")
 
@@ -2104,7 +2111,7 @@ class MLDPShell:
             query.disconnect()
             
         except Exception as e:
-            print(f"❌ Error getting experiment info: {e}")
+            print(f"Error getting experiment info: {e}")
     
     def cmd_experiment_config(self, args):
         """Get experiment configuration from database"""
@@ -2115,7 +2122,7 @@ class MLDPShell:
             try:
                 exp_id = int(args[0])
             except ValueError:
-                print(f"❌ Invalid experiment ID: {args[0]}")
+                print(f"Invalid experiment ID: {args[0]}")
                 return
         
         output_json = '--json' in args
@@ -2137,7 +2144,7 @@ class MLDPShell:
                 import json
                 print(json.dumps(config, indent=2))
             else:
-                print(f"\n📊 Configuration for Experiment {exp_id}:")
+                print(f"\nConfiguration for Experiment {exp_id}:")
                 print("-" * 60)
                 
                 # Show decimations
@@ -2173,9 +2180,9 @@ class MLDPShell:
             query.disconnect()
             
         except ValueError:
-            print(f"❌ Invalid experiment ID: {args[0]}")
+            print(f"Invalid experiment ID: {args[0]}")
         except Exception as e:
-            print(f"❌ Error getting experiment config: {e}")
+            print(f"Error getting experiment config: {e}")
     
     def cmd_experiment_summary(self, args):
         """Show experiment summary with junction table data"""
@@ -2231,13 +2238,13 @@ class MLDPShell:
             
             # Validate
             if not config.validate():
-                print("❌ Configuration validation failed")
+                print("Configuration validation failed")
                 builder.close()
                 return
             
             # Check dry-run
             if config.dry_run:
-                print("\n✅ Configuration validated (dry-run mode)")
+                print("\nConfiguration validated (dry-run mode)")
                 builder.close()
                 return
             
@@ -2246,7 +2253,7 @@ class MLDPShell:
             if not force:
                 response = input("\nCreate experiment? (y/n): ")
                 if response.lower() != 'y':
-                    print("❌ Creation cancelled")
+                    print("Creation cancelled")
                     builder.close()
                     return
             
@@ -2254,8 +2261,8 @@ class MLDPShell:
             creator = ExperimentCreator()
             experiment_id = creator.create_experiment(config)
             
-            print(f"\n✅ Successfully created experiment {experiment_id}")
-            print(f"📊 Experiment: {config.experiment_name}")
+            print(f"\nSuccessfully created experiment {experiment_id}")
+            print(f"Experiment: {config.experiment_name}")
             
             # Show what was created
             info = creator.get_experiment_info(experiment_id)
@@ -2268,7 +2275,7 @@ class MLDPShell:
             builder.close()
             
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -2313,13 +2320,13 @@ class MLDPShell:
                         config_data = json.load(f)
                     config = ExperimentGenerationConfig.from_dict(config_data)
                 except FileNotFoundError:
-                    print(f"❌ Configuration file not found: {config_name}")
+                    print(f"Configuration file not found: {config_name}")
                     return
                 except json.JSONDecodeError:
-                    print(f"❌ Invalid JSON in configuration file: {config_name}")
+                    print(f"Invalid JSON in configuration file: {config_name}")
                     return
             else:
-                print(f"❌ Unknown configuration: {config_name}")
+                print(f"Unknown configuration: {config_name}")
                 return
             
             # Set dry run mode
@@ -2327,7 +2334,7 @@ class MLDPShell:
             
             # Validate configuration
             if not config.validate():
-                print("❌ Configuration validation failed")
+                print("Configuration validation failed")
                 return
             
             # Display configuration summary
@@ -2337,13 +2344,13 @@ class MLDPShell:
             print("=" * 60)
             
             if dry_run:
-                print("\n🔍 DRY RUN MODE - No changes will be made")
+                print("\nDRY RUN MODE - No changes will be made")
             
             # Confirm generation
             if not dry_run:
                 response = input("\nGenerate experiment? (y/n): ")
                 if response.lower() != 'y':
-                    print("❌ Generation cancelled")
+                    print("Generation cancelled")
                     return
             
             # Connect to database
@@ -2356,16 +2363,16 @@ class MLDPShell:
             )
             
             if existing:
-                print(f"❌ Experiment '{config.experiment_name}' already exists (ID: {existing[0][0]})")
+                print(f"Experiment '{config.experiment_name}' already exists (ID: {existing[0][0]})")
                 return
             
-            print(f"\n✅ Configuration validated")
-            print(f"📊 Will create experiment: {config.experiment_name}")
+            print(f"\nConfiguration validated")
+            print(f"Will create experiment: {config.experiment_name}")
             print(f"📁 Target: {len(config.target_labels)} labels × {config.instances_per_label} instances")
             print(f"🎲 Selection: {config.selection_strategy} (seed={config.random_seed})")
             
             if dry_run:
-                print("\n✅ Dry run completed successfully")
+                print("\nDry run completed successfully")
             else:
                 # Create the experiment
                 try:
@@ -2374,8 +2381,8 @@ class MLDPShell:
                     creator = ExperimentCreator()
                     experiment_id = creator.create_experiment(config)
                     
-                    print(f"\n✅ Successfully created experiment {experiment_id}")
-                    print(f"📊 Experiment: {config.experiment_name}")
+                    print(f"\nSuccessfully created experiment {experiment_id}")
+                    print(f"Experiment: {config.experiment_name}")
                     
                     # Show what was created
                     info = creator.get_experiment_info(experiment_id)
@@ -2392,21 +2399,21 @@ class MLDPShell:
                     print(f"  4. View progress: experiment-info {experiment_id}")
                     
                 except ImportError as e:
-                    print(f"❌ Failed to import experiment creator: {e}")
+                    print(f"Failed to import experiment creator: {e}")
                 except Exception as e:
-                    print(f"❌ Failed to create experiment: {e}")
+                    print(f"Failed to create experiment: {e}")
             
         except ImportError as e:
-            print(f"❌ Failed to import required modules: {e}")
+            print(f"Failed to import required modules: {e}")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_calculate(self, args):
         """Calculate distances"""
         calculator_path = MLDP_ROOT / "mldp_exp18_distance" / "mpcctl_distance_calculator.py"
         
         if not calculator_path.exists():
-            print(f"❌ Distance calculator not found")
+            print(f"Distance calculator not found")
             return
         
         # Parse arguments
@@ -2437,24 +2444,24 @@ class MLDPShell:
         cmd.append(f'--{distance_type}')
         cmd.extend(['--workers', str(workers)])
         
-        print(f"🔄 Running distance calculation ({distance_type})...")
+        print(f"Running distance calculation ({distance_type})...")
         print(f"Command: {' '.join(cmd)}")
         
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
-                print("✅ Distance calculation complete!")
+                print("Distance calculation complete!")
             else:
-                print(f"❌ Distance calculation failed: {result.stderr}")
+                print(f"Distance calculation failed: {result.stderr}")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_insert_distances(self, args):
         """Insert distances to database"""
         insert_path = MLDP_ROOT / "mldp_distance_db_insert" / "mpcctl_distance_db_insert.py"
         
         if not insert_path.exists():
-            print(f"❌ Distance insert tool not found")
+            print(f"Distance insert tool not found")
             return
         
         # Parse arguments
@@ -2477,16 +2484,16 @@ class MLDPShell:
             cmd.extend(['--input-folder', input_folder])
         cmd.extend(['--distance-type', distance_type])
         
-        print("🔄 Inserting distances to database...")
+        print("Inserting distances to database...")
         
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
-                print("✅ Database insertion complete!")
+                print("Database insertion complete!")
             else:
-                print(f"❌ Insertion failed: {result.stderr}")
+                print(f"Insertion failed: {result.stderr}")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_heatmap(self, args):
         """Generate heatmap"""
@@ -2510,7 +2517,7 @@ class MLDPShell:
             heatmap_path = MLDP_ROOT / "experiment_generator" / "src" / "heatmaps" / "generate_exp18_heatmaps.py"
         
         if not heatmap_path.exists():
-            print(f"❌ Heatmap generator not found")
+            print(f"Heatmap generator not found")
             return
         
         cmd = [sys.executable, str(heatmap_path)]
@@ -2523,9 +2530,9 @@ class MLDPShell:
         
         try:
             subprocess.run(cmd, check=True)
-            print("✅ Heatmap generated!")
+            print("Heatmap generated!")
         except subprocess.CalledProcessError:
-            print("❌ Heatmap generation failed")
+            print("Heatmap generation failed")
     
     def cmd_histogram(self, args):
         """Generate histogram"""
@@ -2549,27 +2556,27 @@ class MLDPShell:
             histogram_path = MLDP_ROOT / "experiment_generator" / "src" / "heatmaps" / "simple_histogram_generator.py"
         
         if not histogram_path.exists():
-            print(f"❌ Histogram generator not found")
+            print(f"Histogram generator not found")
             return
         
         cmd = [sys.executable, str(histogram_path)]
         cmd.extend(['--distance-type', self.current_distance_type])
         cmd.extend(['--bins', str(bins)])
         
-        print(f"📊 Generating {self.current_distance_type} histogram...")
+        print(f"Generating {self.current_distance_type} histogram...")
         
         try:
             subprocess.run(cmd, check=True)
-            print("✅ Histogram generated!")
+            print("Histogram generated!")
         except subprocess.CalledProcessError:
-            print("❌ Histogram generation failed")
+            print("Histogram generation failed")
     
     def cmd_visualize(self, args):
         """Visualize segment"""
         visualizer_path = MLDP_ROOT / "segment_visualizer" / "segment_visualizer.py"
         
         if not visualizer_path.exists():
-            print(f"❌ Segment visualizer not found")
+            print(f"Segment visualizer not found")
             return
         
         segment_id = None
@@ -2596,17 +2603,17 @@ class MLDPShell:
         if file_id:
             cmd.extend(['--file-id', str(file_id)])
         
-        print("🔍 Launching segment visualizer...")
+        print("Launching segment visualizer...")
         
         try:
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError:
-            print("❌ Visualization failed")
+            print("Visualization failed")
     
     def cmd_stats(self, args):
         """Show distance statistics"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
         
         distance_type = args[0] if args else self.current_distance_type
@@ -2624,7 +2631,7 @@ class MLDPShell:
             """, (table_name,))
             
             if not cursor.fetchone()[0]:
-                print(f"❌ Table {table_name} does not exist")
+                print(f"Table {table_name} does not exist")
                 cursor.close()
                 return
             
@@ -2647,7 +2654,7 @@ class MLDPShell:
             
             stats = cursor.fetchone()
             
-            print(f"\n📊 Statistics for {table_name}:")
+            print(f"\nStatistics for {table_name}:")
             print(f"{'─' * 50}")
             print(f"  Total records:  {count:,}")
             print(f"  Min distance:   {stats[0]:.6f}")
@@ -2660,12 +2667,12 @@ class MLDPShell:
             
             cursor.close()
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_closest(self, args):
         """Find closest pairs"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
         
         n = int(args[0]) if args else 10
@@ -2688,12 +2695,12 @@ class MLDPShell:
             rows = cursor.fetchall()
             headers = ['Segment 1', 'Segment 2', 'Distance', 'File 1', 'File 2']
             
-            print(f"\n🔍 Top {n} closest pairs ({self.current_distance_type} distance):")
+            print(f"\nTop {n} closest pairs ({self.current_distance_type} distance):")
             print(tabulate(rows, headers=headers, tablefmt='grid'))
             
             cursor.close()
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     def cmd_set(self, args):
         """Set configuration"""
@@ -2771,12 +2778,12 @@ class MLDPShell:
     
     def cmd_show(self, args):
         """Show current settings"""
-        print("\n⚙️  Current Settings:")
+        print("\nCurrent Settings:")
         print(f"{'─' * 40}")
         print(f"  Experiment ID:  {self.current_experiment}")
         print(f"  Distance Type:  {self.current_distance_type}")
         print(f"  MLDP Root:      {MLDP_ROOT}")
-        print(f"  Database:       {'✅ Connected' if self.db_conn else '❌ Not connected'}")
+        print(f"  Database:       {'Connected' if self.db_conn else 'Not connected'}")
 
         if self.db_conn:
             try:
@@ -2804,7 +2811,7 @@ class MLDPShell:
 
     def cmd_verify(self, args):
         """Verify MLDP tools"""
-        print("\n🔍 Verifying MLDP tools...")
+        print("\nVerifying MLDP tools...")
         print(f"{'─' * 50}")
         
         tools = [
@@ -2823,19 +2830,19 @@ class MLDPShell:
         for tool_path, tool_name in tools:
             full_path = MLDP_ROOT / tool_path
             if full_path.exists():
-                print(f"  ✅ {tool_name:25s} Found")
+                print(f"  {tool_name:25s} Found")
                 found += 1
             else:
-                print(f"  ❌ {tool_name:25s} Not found")
+                print(f"  {tool_name:25s} Not found")
                 missing += 1
         
         print(f"{'─' * 50}")
         print(f"Summary: {found} found, {missing} missing")
         
         if missing == 0:
-            print("✅ All tools verified successfully!")
+            print("All tools verified successfully!")
         else:
-            print("⚠️  Some tools are missing")
+            print("Some tools are missing")
     
     def cmd_clear(self, args):
         """Clear screen"""
@@ -2845,7 +2852,7 @@ class MLDPShell:
     def cmd_export(self, args):
         """Export last query result"""
         if not self.last_result:
-            print("❌ No results to export. Run a query first.")
+            print("No results to export. Run a query first.")
             return
         
         if not args:
@@ -2864,9 +2871,9 @@ class MLDPShell:
                     writer = csv.writer(f)
                     writer.writerows(self.last_result)
             
-            print(f"✅ Exported {len(self.last_result)} rows to {filename}")
+            print(f"Exported {len(self.last_result)} rows to {filename}")
         except Exception as e:
-            print(f"❌ Export failed: {e}")
+            print(f"Export failed: {e}")
     
     def cmd_time(self, args):
         """Show current time"""
@@ -2882,14 +2889,14 @@ class MLDPShell:
                 print(f"\nHelp for '{cmd}':")
                 print(f"  {self.commands[cmd].__doc__}")
             else:
-                print(f"❌ Unknown command: {cmd}")
+                print(f"Unknown command: {cmd}")
         else:
             print("""
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                              MLDP Commands                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-📊 DATABASE COMMANDS:
+DATABASE COMMANDS:
   connect [host] [port] [db] [user]  Connect to PostgreSQL database
   query <SQL>                         Execute SQL query
   tables [pattern]                    List database tables
@@ -2928,7 +2935,7 @@ class MLDPShell:
   stats [distance_type]               Show distance statistics
   closest [N]                         Find N closest segment pairs
 
-🔄 MPCCTL DISTANCE PIPELINE:
+MPCCTL DISTANCE PIPELINE:
   mpcctl-distance-function            Calculate distances (--start/--status/--pause/--continue/--stop)
   mpcctl-distance-insert              Insert distances to DB (--start/--status/--pause/--continue/--stop)
   mpcctl-execute-experiment           Execute complete pipeline (--workers N --log --verbose)
@@ -2972,7 +2979,7 @@ class MLDPShell:
     classifier-list --include-archived
     classifier-remove --classifier-id 2 --confirm
 
-⚙️  CLASSIFIER CONFIGURATION (Phase 0b):
+CLASSIFIER CONFIGURATION (Phase 0b):
   classifier-config-create            Create a new configuration for current classifier
     --config-name <name>              Configuration name (required)
     --decimation-factors <list>       Comma-separated decimation factors or "all"
@@ -3057,7 +3064,7 @@ class MLDPShell:
     classifier-config-show    # Shows hyperparameters AND feature builder settings
     classifier-config-delete --config-name "test_config" --confirm
 
-⚙️  DATA SPLIT ASSIGNMENT (Phase 1):
+DATA SPLIT ASSIGNMENT (Phase 1):
   classifier-create-splits-table  Create data_splits table (one-time setup)
     [--force]                     Recreate table if exists
 
@@ -3083,7 +3090,7 @@ class MLDPShell:
     classifier-copy-splits-from --source-classifier 1
     classifier-show-splits --detail
 
-📊 REFERENCE SELECTION (Phase 2):
+REFERENCE SELECTION (Phase 2):
   classifier-select-references   Select reference segments using PCA + centroid
     [--force]                    Overwrite existing references
     [--plot]                     Generate PCA visualization plots
@@ -3156,14 +3163,14 @@ class MLDPShell:
   clean-segment-files                 Delete segment files (supports --dry-run, --force)
   clean-feature-files                 Delete feature files and truncate DB table
 
-🔍 SEGMENT COMMANDS:
+SEGMENT COMMANDS:
   segment-generate                    Generate segments from raw data
   show-segment-status                 Show segment generation status
   segment-test                        Test segment generation with small dataset
   validate-segments                   Validate generated segments
   segment-plot                        Plot segment data
 
-⚙️  SETTINGS:
+SETTINGS:
   set <param> <value>                 Set configuration (experiment, distance, classifier)
   show                                Show current settings
 
@@ -3213,7 +3220,7 @@ class MLDPShell:
             experiment_id = self.current_experiment
 
         if not experiment_id:
-            print("❌ No experiment specified. Use: select-segments <experiment_id> [options]")
+            print("No experiment specified. Use: select-segments <experiment_id> [options]")
             print("   Or set current experiment: set experiment <id>")
             return
 
@@ -3253,7 +3260,7 @@ class MLDPShell:
                 print("  --seed N                   Random seed (default: 42)")
                 print("  --clean                    Clear existing segment training data before selection")
                 print("  --force                    Skip confirmation prompts (for unattended execution)")
-                print("\n📊 BALANCED STRATEGY (recommended):")
+                print("\nBALANCED STRATEGY (recommended):")
                 print("  Per file: Groups segments by code type (L, R, C, Cm, Cl, Cr, etc.)")
                 print("  Example: File has L=45, R=40, C=5, Cm=25, Cl=3, Cr=2 segments")
                 print("  → Finds minimum: min(45,40,5,25,3,2) = 2")
@@ -3276,7 +3283,7 @@ class MLDPShell:
             self.cmd_clean_segment_table(cleanup_args)
             print()
 
-        print(f"🔄 Selecting segments for experiment {experiment_id}...")
+        print(f"Selecting segments for experiment {experiment_id}...")
         print(f"   Strategy: {strategy}")
         if strategy == 'fixed_per_type':
             print(f"   Segments per type: {segments_per_type}")
@@ -3293,7 +3300,7 @@ class MLDPShell:
                 # Fallback to original if v2 not available
                 from experiment_segment_selector import ExperimentSegmentSelector
                 use_v2 = False
-                print("⚠️  Using legacy selector. For better results, ensure experiment_segment_selector_v2.py is available.")
+                print("Using legacy selector. For better results, ensure experiment_segment_selector_v2.py is available.")
 
             # Database configuration
             db_config = {
@@ -3317,7 +3324,7 @@ class MLDPShell:
 
             # Display results
             if result and 'total_segments' in result:
-                print(f"\n✅ Successfully selected {result['total_segments']} segments")
+                print(f"\nSuccessfully selected {result['total_segments']} segments")
                 print(f"   From {result.get('total_files', 0)} files")
 
                 # Show average per file
@@ -3327,7 +3334,7 @@ class MLDPShell:
 
                 # Show segment type distribution from v2 selector
                 if 'segments_by_type' in result:
-                    print("\n📊 Segment type distribution:")
+                    print("\nSegment type distribution:")
                     for code_type, count in sorted(result['segments_by_type'].items()):
                         print(f"     {code_type}: {count} segments")
 
@@ -3335,18 +3342,18 @@ class MLDPShell:
                 if 'strategy' in result:
                     print(f"\n📋 Selection strategy: {result['strategy']}")
 
-                print(f"\n💾 Data saved to:")
+                print(f"\nData saved to:")
                 print(f"   experiment_{experiment_id:03d}_segment_training_data")
             else:
-                print(f"❌ Failed to select segments")
+                print(f"Failed to select segments")
                 if isinstance(result, dict) and 'error' in result:
                     print(f"   Error: {result['error']}")
 
         except ImportError as e:
-            print(f"❌ Could not import segment selector: {e}")
+            print(f"Could not import segment selector: {e}")
             print("Make sure experiment_segment_selector_v2.py is in the same directory")
         except Exception as e:
-            print(f"❌ Error during segment selection: {e}")
+            print(f"Error during segment selection: {e}")
 
     def cmd_clean_segment_table(self, args):
         """Clean (delete all rows from) the segment training data table for an experiment"""
@@ -3365,7 +3372,7 @@ class MLDPShell:
             experiment_id = self.current_experiment
 
         if not experiment_id:
-            print("❌ No experiment specified. Use: clean-segment-table <experiment_id> [--force]")
+            print("No experiment specified. Use: clean-segment-table <experiment_id> [--force]")
             print("   Or set current experiment: set experiment <id>")
             return
 
@@ -3373,7 +3380,7 @@ class MLDPShell:
 
         # Connect to database
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         try:
@@ -3404,21 +3411,21 @@ class MLDPShell:
                 return
 
             # Show what will be deleted
-            print(f"\n📊 Segment training data table: {table_name}")
+            print(f"\nSegment training data table: {table_name}")
             print(f"   Current rows: {count_before:,}")
 
             # Confirmation (skip if --force)
             if not force:
-                print(f"\n⚠️  WARNING: This will delete all {count_before:,} rows from {table_name}")
-                print(f"⚠️  This action CANNOT be undone!")
+                print(f"\nWARNING: This will delete all {count_before:,} rows from {table_name}")
+                print(f"This action CANNOT be undone!")
                 response = input(f"\nType 'DELETE' to confirm: ").strip()
 
                 if response != 'DELETE':
-                    print("❌ Cancelled")
+                    print("Cancelled")
                     cursor.close()
                     return
             else:
-                print("\n⚠️  --force flag set: Skipping confirmation")
+                print("\n--force flag set: Skipping confirmation")
 
             # Delete all rows
             print(f"\n🗑️  Deleting all rows from {table_name}...")
@@ -3430,15 +3437,15 @@ class MLDPShell:
             count_after = cursor.fetchone()[0]
 
             if count_after == 0:
-                print(f"✅ Deleted {count_before:,} rows")
-                print(f"✅ Table {table_name} is now empty")
+                print(f"Deleted {count_before:,} rows")
+                print(f"Table {table_name} is now empty")
             else:
-                print(f"⚠️  Warning: {count_after} rows remaining")
+                print(f"Warning: {count_after} rows remaining")
 
             cursor.close()
 
         except Exception as e:
-            print(f"❌ Error cleaning segment table: {e}")
+            print(f"Error cleaning segment table: {e}")
             if self.db_conn:
                 self.db_conn.rollback()
 
@@ -3452,7 +3459,7 @@ class MLDPShell:
         try:
             decimations = [int(arg) for arg in args]
         except ValueError:
-            print(f"❌ Invalid decimation values. Must be integers.")
+            print(f"Invalid decimation values. Must be integers.")
             return
 
         try:
@@ -3466,16 +3473,16 @@ class MLDPShell:
 
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
 
-            print(f"🔄 Updating decimations for experiment {self.current_experiment}...")
+            print(f"Updating decimations for experiment {self.current_experiment}...")
             if configurator.update_decimations(decimations):
-                print(f"✅ Decimations updated: {decimations}")
+                print(f"Decimations updated: {decimations}")
             else:
-                print(f"❌ Failed to update decimations")
+                print(f"Failed to update decimations")
 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error updating decimations: {e}")
+            print(f"Error updating decimations: {e}")
 
     def cmd_add_decimation(self, args):
         """Add a single decimation factor to current experiment"""
@@ -3487,7 +3494,7 @@ class MLDPShell:
         try:
             decimation = int(args[0])
         except ValueError:
-            print(f"❌ Invalid decimation value. Must be an integer.")
+            print(f"Invalid decimation value. Must be an integer.")
             return
 
         try:
@@ -3501,16 +3508,16 @@ class MLDPShell:
 
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
 
-            print(f"➕ Adding decimation {decimation} to experiment {self.current_experiment}...")
+            print(f"Adding decimation {decimation} to experiment {self.current_experiment}...")
             if configurator.add_decimation(decimation):
-                print(f"✅ Decimation {decimation} added successfully")
+                print(f"Decimation {decimation} added successfully")
             else:
-                print(f"⚠️  Decimation {decimation} already exists or failed to add")
+                print(f"Decimation {decimation} already exists or failed to add")
 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error adding decimation: {e}")
+            print(f"Error adding decimation: {e}")
 
     def cmd_remove_decimation(self, args):
         """Remove a single decimation factor from current experiment"""
@@ -3522,7 +3529,7 @@ class MLDPShell:
         try:
             decimation = int(args[0])
         except ValueError:
-            print(f"❌ Invalid decimation value. Must be an integer.")
+            print(f"Invalid decimation value. Must be an integer.")
             return
 
         try:
@@ -3536,16 +3543,16 @@ class MLDPShell:
 
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
 
-            print(f"➖ Removing decimation {decimation} from experiment {self.current_experiment}...")
+            print(f"Removing decimation {decimation} from experiment {self.current_experiment}...")
             if configurator.remove_decimation(decimation):
-                print(f"✅ Decimation {decimation} removed successfully")
+                print(f"Decimation {decimation} removed successfully")
             else:
-                print(f"⚠️  Decimation {decimation} not found in experiment or failed to remove")
+                print(f"Decimation {decimation} not found in experiment or failed to remove")
 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error removing decimation: {e}")
+            print(f"Error removing decimation: {e}")
 
     def cmd_update_segment_sizes(self, args):
         """Update segment sizes for current experiment"""
@@ -3557,7 +3564,7 @@ class MLDPShell:
         try:
             sizes = [int(arg) for arg in args]
         except ValueError:
-            print(f"❌ Invalid segment sizes. Must be integers.")
+            print(f"Invalid segment sizes. Must be integers.")
             return
         
         try:
@@ -3571,16 +3578,16 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Updating segment sizes for experiment {self.current_experiment}...")
+            print(f"Updating segment sizes for experiment {self.current_experiment}...")
             if configurator.update_segment_sizes(sizes):
-                print(f"✅ Segment sizes updated: {sizes}")
+                print(f"Segment sizes updated: {sizes}")
             else:
-                print(f"❌ Failed to update segment sizes")
+                print(f"Failed to update segment sizes")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error updating segment sizes: {e}")
+            print(f"Error updating segment sizes: {e}")
     
     def cmd_update_amplitude_methods(self, args):
         """Update amplitude methods for current experiment"""
@@ -3601,16 +3608,16 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Updating amplitude methods for experiment {self.current_experiment}...")
+            print(f"Updating amplitude methods for experiment {self.current_experiment}...")
             if configurator.update_amplitude_methods(args):
-                print(f"✅ Amplitude methods updated: {args}")
+                print(f"Amplitude methods updated: {args}")
             else:
-                print(f"❌ Failed to update amplitude methods")
+                print(f"Failed to update amplitude methods")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error updating amplitude methods: {e}")
+            print(f"Error updating amplitude methods: {e}")
     
     def cmd_create_feature_set(self, args):
         """Create a custom feature set for current experiment"""
@@ -3640,7 +3647,7 @@ class MLDPShell:
                     i += 1
             
             if not name or not features:
-                print("❌ Both --name and --features are required")
+                print("Both --name and --features are required")
                 return
             
             from experiment_configurator import ExperimentConfigurator
@@ -3653,21 +3660,21 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Creating feature set '{name}' for experiment {self.current_experiment}...")
+            print(f"Creating feature set '{name}' for experiment {self.current_experiment}...")
             feature_set_id = configurator.create_feature_set(name, features, n_value)
             
             if feature_set_id:
-                print(f"✅ Feature set created (ID: {feature_set_id})")
+                print(f"Feature set created (ID: {feature_set_id})")
                 print(f"   Name: {name}")
                 print(f"   Features: {', '.join(features)}")
                 print(f"   N value: {n_value}")
             else:
-                print(f"❌ Failed to create feature set")
+                print(f"Failed to create feature set")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error creating feature set: {e}")
+            print(f"Error creating feature set: {e}")
     
     def cmd_add_feature_set(self, args):
         """Add existing feature set(s) to current experiment"""
@@ -3709,7 +3716,7 @@ class MLDPShell:
                 elif args[i] == '--channel' and i + 1 < len(args):
                     data_channel = args[i + 1]
                     if data_channel not in ['source_current', 'load_voltage']:
-                        print(f"❌ Invalid channel: {data_channel}")
+                        print(f"Invalid channel: {data_channel}")
                         print("   Must be 'source_current' or 'load_voltage'")
                         return
                     i += 2
@@ -3724,7 +3731,7 @@ class MLDPShell:
                 # Multiple feature sets
                 feature_set_ids = [int(id.strip()) for id in ids_arg.split(',')]
                 
-                print(f"🔄 Adding {len(feature_set_ids)} feature sets to experiment {self.current_experiment}...")
+                print(f"Adding {len(feature_set_ids)} feature sets to experiment {self.current_experiment}...")
                 print(f"   Data channel: {data_channel}")
                 if n_value:
                     print(f"   Using N value: {n_value}")
@@ -3733,34 +3740,34 @@ class MLDPShell:
                 
                 # Report results
                 success_count = sum(1 for success in results.values() if success)
-                print(f"\n✅ Successfully added {success_count}/{len(feature_set_ids)} feature sets")
+                print(f"\nSuccessfully added {success_count}/{len(feature_set_ids)} feature sets")
                 
                 for fs_id, success in results.items():
                     if not success:
-                        print(f"   ⚠️  Feature set {fs_id} was already linked or doesn't exist")
+                        print(f"   Feature set {fs_id} was already linked or doesn't exist")
             else:
                 # Single feature set
                 feature_set_id = int(ids_arg)
                 
-                print(f"🔄 Adding feature set {feature_set_id} to experiment {self.current_experiment}...")
+                print(f"Adding feature set {feature_set_id} to experiment {self.current_experiment}...")
                 print(f"   Data channel: {data_channel}")
                 if n_value:
                     print(f"   Using N value: {n_value}")
                 
                 if config.add_feature_set(feature_set_id, n_value, data_channel):
-                    print(f"✅ Feature set {feature_set_id} added successfully")
+                    print(f"Feature set {feature_set_id} added successfully")
                 else:
-                    print(f"⚠️  Feature set {feature_set_id} is already linked or doesn't exist")
+                    print(f"Feature set {feature_set_id} is already linked or doesn't exist")
             
             config.disconnect()
             
         except ValueError as e:
-            print(f"❌ Invalid input: {e}")
+            print(f"Invalid input: {e}")
             print("Feature set IDs and N value must be integers")
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error adding feature set: {e}")
+            print(f"Error adding feature set: {e}")
     
     def cmd_remove_feature_set(self, args):
         """Remove a feature set from current experiment"""
@@ -3772,7 +3779,7 @@ class MLDPShell:
         try:
             feature_set_id = int(args[0])
         except ValueError:
-            print(f"❌ Invalid feature set ID: {args[0]}")
+            print(f"Invalid feature set ID: {args[0]}")
             return
         
         try:
@@ -3786,20 +3793,20 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Removing feature set {feature_set_id} from experiment {self.current_experiment}...")
+            print(f"Removing feature set {feature_set_id} from experiment {self.current_experiment}...")
             if configurator.remove_feature_set(feature_set_id):
-                print(f"✅ Feature set {feature_set_id} removed")
+                print(f"Feature set {feature_set_id} removed")
             else:
-                print(f"❌ Failed to remove feature set")
+                print(f"Failed to remove feature set")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error removing feature set: {e}")
+            print(f"Error removing feature set: {e}")
     
     def cmd_clear_feature_sets(self, args):
         """Remove all feature sets from current experiment"""
-        response = input(f"⚠️  Remove ALL feature sets from experiment {self.current_experiment}? (y/n): ")
+        response = input(f"Remove ALL feature sets from experiment {self.current_experiment}? (y/n): ")
         if response.lower() != 'y':
             print("Cancelled.")
             return
@@ -3815,16 +3822,16 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Clearing all feature sets from experiment {self.current_experiment}...")
+            print(f"Clearing all feature sets from experiment {self.current_experiment}...")
             if configurator.clear_all_feature_sets():
-                print(f"✅ All feature sets cleared")
+                print(f"All feature sets cleared")
             else:
-                print(f"❌ Failed to clear feature sets")
+                print(f"Failed to clear feature sets")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error clearing feature sets: {e}")
+            print(f"Error clearing feature sets: {e}")
 
     def cmd_remove_data_type(self, args):
         """Remove a data type from current experiment"""
@@ -3843,7 +3850,7 @@ class MLDPShell:
         try:
             data_type_id = int(args[0])
         except ValueError:
-            print(f"❌ Invalid data type ID: {args[0]}")
+            print(f"Invalid data type ID: {args[0]}")
             return
 
         try:
@@ -3857,16 +3864,16 @@ class MLDPShell:
 
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
 
-            print(f"🔄 Removing data type {data_type_id} from experiment {self.current_experiment}...")
+            print(f"Removing data type {data_type_id} from experiment {self.current_experiment}...")
             if configurator.remove_data_type(data_type_id):
-                print(f"✅ Data type {data_type_id} removed")
+                print(f"Data type {data_type_id} removed")
             else:
-                print(f"❌ Failed to remove data type")
+                print(f"Failed to remove data type")
 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error removing data type: {e}")
+            print(f"Error removing data type: {e}")
 
     def cmd_add_data_type(self, args):
         """Add a data type to current experiment"""
@@ -3885,7 +3892,7 @@ class MLDPShell:
         try:
             data_type_id = int(args[0])
         except ValueError:
-            print(f"❌ Invalid data type ID: {args[0]}")
+            print(f"Invalid data type ID: {args[0]}")
             return
 
         try:
@@ -3899,16 +3906,16 @@ class MLDPShell:
 
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
 
-            print(f"🔄 Adding data type {data_type_id} to experiment {self.current_experiment}...")
+            print(f"Adding data type {data_type_id} to experiment {self.current_experiment}...")
             if configurator.add_data_type(data_type_id):
-                print(f"✅ Data type {data_type_id} added")
+                print(f"Data type {data_type_id} added")
             else:
-                print(f"❌ Data type already exists or failed to add")
+                print(f"Data type already exists or failed to add")
 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error adding data type: {e}")
+            print(f"Error adding data type: {e}")
 
     def cmd_list_data_types(self, args):
         """List data types for current experiment"""
@@ -3934,10 +3941,10 @@ class MLDPShell:
             data_types = cursor.fetchall()
 
             if not data_types:
-                print(f"\n❌ No data types configured for experiment {self.current_experiment}")
+                print(f"\nNo data types configured for experiment {self.current_experiment}")
                 return
 
-            print(f"\n📊 Data Types for Experiment {self.current_experiment}:")
+            print(f"\nData Types for Experiment {self.current_experiment}:")
             print(f"\n{'ID':<5} {'Name':<15} {'Description':<50}")
             print("-" * 72)
             for dt_id, dt_name, dt_desc in data_types:
@@ -3951,7 +3958,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error listing data types: {e}")
+            print(f"Error listing data types: {e}")
 
     def cmd_list_all_data_types(self, args):
         """List ALL available data types from ml_data_types_lut"""
@@ -3975,10 +3982,10 @@ class MLDPShell:
             data_types = cursor.fetchall()
 
             if not data_types:
-                print(f"\n❌ No data types found in ml_data_types_lut")
+                print(f"\nNo data types found in ml_data_types_lut")
                 return
 
-            print(f"\n📊 All Available Data Types:")
+            print(f"\nAll Available Data Types:")
             print(f"\n{'ID':<5} {'Name':<15} {'Description':<50}")
             print("-" * 72)
             for dt_id, dt_name, dt_desc in data_types:
@@ -3992,7 +3999,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error listing all data types: {e}")
+            print(f"Error listing all data types: {e}")
 
     def cmd_list_amplitude_methods(self, args):
         """List amplitude methods for current experiment"""
@@ -4018,10 +4025,10 @@ class MLDPShell:
             methods = cursor.fetchall()
 
             if not methods:
-                print(f"\n❌ No amplitude methods configured for experiment {self.current_experiment}")
+                print(f"\nNo amplitude methods configured for experiment {self.current_experiment}")
                 return
 
-            print(f"\n📊 Amplitude Methods for Experiment {self.current_experiment}:")
+            print(f"\nAmplitude Methods for Experiment {self.current_experiment}:")
             print(f"\n{'ID':<5} {'Name':<15} {'Function':<40} {'Description':<30}")
             print("-" * 95)
             for method_id, method_name, func_name, desc in methods:
@@ -4036,7 +4043,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error listing amplitude methods: {e}")
+            print(f"Error listing amplitude methods: {e}")
 
     def cmd_list_all_amplitude_methods(self, args):
         """List ALL available amplitude methods from ml_amplitude_normalization_lut"""
@@ -4060,10 +4067,10 @@ class MLDPShell:
             methods = cursor.fetchall()
 
             if not methods:
-                print(f"\n❌ No amplitude methods found in ml_amplitude_normalization_lut")
+                print(f"\nNo amplitude methods found in ml_amplitude_normalization_lut")
                 return
 
-            print(f"\n📊 All Available Amplitude Methods:")
+            print(f"\nAll Available Amplitude Methods:")
             print(f"\n{'ID':<5} {'Name':<15} {'Function':<40} {'Description':<30}")
             print("-" * 95)
             for method_id, method_name, func_name, desc in methods:
@@ -4078,7 +4085,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error listing all amplitude methods: {e}")
+            print(f"Error listing all amplitude methods: {e}")
 
     def cmd_list_feature_sets(self, args):
         """List feature sets for current experiment"""
@@ -4117,9 +4124,9 @@ class MLDPShell:
             print("Use 'clear-feature-sets' to remove all")
                 
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error listing feature sets: {e}")
+            print(f"Error listing feature sets: {e}")
     
     def cmd_show_all_feature_sets(self, args):
         """Show all available feature sets in the database"""
@@ -4195,9 +4202,9 @@ class MLDPShell:
             conn.close()
                 
         except psycopg2.Error as e:
-            print(f"❌ Database error: {e}")
+            print(f"Database error: {e}")
         except Exception as e:
-            print(f"❌ Error showing feature sets: {e}")
+            print(f"Error showing feature sets: {e}")
 
     def cmd_create_feature(self, args):
         """Create a new feature in ml_features_lut"""
@@ -4231,18 +4238,18 @@ class MLDPShell:
                 i += 1
 
         if not name:
-            print("❌ Feature name is required")
+            print("Feature name is required")
             return
 
         valid_categories = ['electrical', 'statistical', 'spectral', 'temporal', 'compute']
         if category not in valid_categories:
-            print(f"❌ Invalid category: {category}")
+            print(f"Invalid category: {category}")
             print(f"   Must be one of: {', '.join(valid_categories)}")
             return
 
         valid_behaviors = ['driver', 'derived', 'aggregate', 'transform']
         if behavior not in valid_behaviors:
-            print(f"❌ Invalid behavior: {behavior}")
+            print(f"Invalid behavior: {behavior}")
             print(f"   Must be one of: {', '.join(valid_behaviors)}")
             return
 
@@ -4257,7 +4264,7 @@ class MLDPShell:
 
             cursor.execute("SELECT feature_id FROM ml_features_lut WHERE feature_name = %s", (name,))
             if cursor.fetchone():
-                print(f"❌ Feature '{name}' already exists")
+                print(f"Feature '{name}' already exists")
                 conn.close()
                 return
 
@@ -4271,7 +4278,7 @@ class MLDPShell:
             """, (feature_id, name, category, behavior, description or f"{name} feature"))
 
             conn.commit()
-            print(f"✅ Created feature '{name}' (ID: {feature_id})")
+            print(f"Created feature '{name}' (ID: {feature_id})")
             print(f"   Category: {category}")
             print(f"   Behavior: {behavior}")
             if description:
@@ -4281,7 +4288,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error creating feature: {e}")
+            print(f"Error creating feature: {e}")
 
     def cmd_list_features(self, args):
         """List all available features"""
@@ -4335,7 +4342,7 @@ class MLDPShell:
             for f in features:
                 by_category[f['feature_category']].append(f)
 
-            print("\n📊 Available Features:")
+            print("\nAvailable Features:")
             print("=" * 80)
 
             for category in sorted(by_category.keys()):
@@ -4359,7 +4366,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error listing features: {e}")
+            print(f"Error listing features: {e}")
 
     def cmd_show_feature(self, args):
         """Show details of a specific feature"""
@@ -4387,10 +4394,10 @@ class MLDPShell:
             feature = cursor.fetchone()
 
             if not feature:
-                print(f"❌ Feature '{feature_arg}' not found")
+                print(f"Feature '{feature_arg}' not found")
                 return
 
-            print(f"\n📊 Feature Details:")
+            print(f"\nFeature Details:")
             print("=" * 60)
             print(f"ID:           {feature['feature_id']}")
             print(f"Name:         {feature['feature_name']}")
@@ -4420,7 +4427,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error showing feature: {e}")
+            print(f"Error showing feature: {e}")
 
     def cmd_update_feature(self, args):
         """Update feature properties"""
@@ -4447,7 +4454,7 @@ class MLDPShell:
                     i += 1
 
             if not updates:
-                print("❌ No updates specified")
+                print("No updates specified")
                 return
 
             import psycopg2
@@ -4469,10 +4476,10 @@ class MLDPShell:
             cursor.execute(query, params)
 
             if cursor.rowcount == 0:
-                print(f"❌ Feature {feature_id} not found")
+                print(f"Feature {feature_id} not found")
             else:
                 conn.commit()
-                print(f"✅ Updated feature {feature_id}")
+                print(f"Updated feature {feature_id}")
                 for key, value in updates.items():
                     print(f"   {key}: {value}")
 
@@ -4480,9 +4487,9 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid feature ID")
+            print("Invalid feature ID")
         except Exception as e:
-            print(f"❌ Error updating feature: {e}")
+            print(f"Error updating feature: {e}")
 
     def cmd_delete_feature(self, args):
         """Delete a feature if not in use"""
@@ -4507,25 +4514,25 @@ class MLDPShell:
 
             count = cursor.fetchone()[0]
             if count > 0:
-                print(f"❌ Cannot delete feature {feature_id}: used in {count} feature set(s)")
+                print(f"Cannot delete feature {feature_id}: used in {count} feature set(s)")
                 print("   Remove from feature sets first using 'remove-features-from-set'")
                 return
 
             cursor.execute("DELETE FROM ml_features_lut WHERE feature_id = %s", (feature_id,))
 
             if cursor.rowcount == 0:
-                print(f"❌ Feature {feature_id} not found")
+                print(f"Feature {feature_id} not found")
             else:
                 conn.commit()
-                print(f"✅ Deleted feature {feature_id}")
+                print(f"Deleted feature {feature_id}")
 
             cursor.close()
             conn.close()
 
         except ValueError:
-            print("❌ Invalid feature ID")
+            print("Invalid feature ID")
         except Exception as e:
-            print(f"❌ Error deleting feature: {e}")
+            print(f"Error deleting feature: {e}")
 
     def cmd_create_global_feature_set(self, args):
         """Create a feature set without linking to any experiment"""
@@ -4553,7 +4560,7 @@ class MLDPShell:
                 i += 1
 
         if not name:
-            print("❌ Feature set name is required")
+            print("Feature set name is required")
             return
 
         try:
@@ -4567,7 +4574,7 @@ class MLDPShell:
 
             cursor.execute("SELECT feature_set_id FROM ml_feature_sets_lut WHERE feature_set_name = %s", (name,))
             if cursor.fetchone():
-                print(f"❌ Feature set '{name}' already exists")
+                print(f"Feature set '{name}' already exists")
                 conn.close()
                 return
 
@@ -4581,7 +4588,7 @@ class MLDPShell:
             """, (feature_set_id, name, category, description or f"{name} feature set"))
 
             conn.commit()
-            print(f"✅ Created global feature set '{name}' (ID: {feature_set_id})")
+            print(f"Created global feature set '{name}' (ID: {feature_set_id})")
             print(f"   Category: {category}")
             if description:
                 print(f"   Description: {description}")
@@ -4591,7 +4598,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error creating feature set: {e}")
+            print(f"Error creating feature set: {e}")
 
     def cmd_add_features_to_set(self, args):
         """Add features to an existing feature set with optional per-feature overrides"""
@@ -4632,23 +4639,23 @@ class MLDPShell:
                                for n in args[idx + 1].split(',')]
 
             if not features:
-                print("❌ No features specified")
+                print("No features specified")
                 return
 
             # Validate counts match
             if channels and len(channels) != len(features):
-                print(f"❌ Channel count ({len(channels)}) must match feature count ({len(features)})")
+                print(f"Channel count ({len(channels)}) must match feature count ({len(features)})")
                 return
 
             if n_values and len(n_values) != len(features):
-                print(f"❌ N-value count ({len(n_values)}) must match feature count ({len(features)})")
+                print(f"N-value count ({len(n_values)}) must match feature count ({len(features)})")
                 return
 
             # Validate channels
             valid_channels = ['source_current', 'load_voltage', 'impedance', 'power', 'source_current,load_voltage']
             for ch in channels:
                 if ch is not None and ch not in valid_channels:
-                    print(f"❌ Invalid channel: {ch}")
+                    print(f"Invalid channel: {ch}")
                     print(f"   Must be one of: {', '.join(valid_channels)}")
                     return
 
@@ -4665,7 +4672,7 @@ class MLDPShell:
             cursor.execute("SELECT feature_set_name FROM ml_feature_sets_lut WHERE feature_set_id = %s", (feature_set_id,))
             result = cursor.fetchone()
             if not result:
-                print(f"❌ Feature set {feature_set_id} does not exist")
+                print(f"Feature set {feature_set_id} does not exist")
                 conn.close()
                 return
 
@@ -4676,7 +4683,7 @@ class MLDPShell:
 
             invalid = [f for f in features if f not in valid_features]
             if invalid:
-                print(f"❌ Invalid feature IDs: {invalid}")
+                print(f"Invalid feature IDs: {invalid}")
                 conn.close()
                 return
 
@@ -4712,7 +4719,7 @@ class MLDPShell:
                     skipped.append(valid_features[feature_id])
                     conn.rollback()
 
-            print(f"✅ Updated feature set '{feature_set_name}' (ID: {feature_set_id})")
+            print(f"Updated feature set '{feature_set_name}' (ID: {feature_set_id})")
             if added:
                 print(f"   Added {len(added)} features: {', '.join(added)}")
             if skipped:
@@ -4734,9 +4741,9 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid feature set ID or feature IDs")
+            print("Invalid feature set ID or feature IDs")
         except Exception as e:
-            print(f"❌ Error adding features: {e}")
+            print(f"Error adding features: {e}")
 
     def cmd_remove_features_from_set(self, args):
         """Remove features from a feature set"""
@@ -4753,7 +4760,7 @@ class MLDPShell:
                 features = [int(f.strip()) for f in args[idx + 1].split(',')]
 
             if not features:
-                print("❌ No features specified")
+                print("No features specified")
                 return
 
             import psycopg2
@@ -4772,7 +4779,7 @@ class MLDPShell:
             removed = cursor.rowcount
             if removed > 0:
                 conn.commit()
-                print(f"✅ Removed {removed} feature(s) from feature set {feature_set_id}")
+                print(f"Removed {removed} feature(s) from feature set {feature_set_id}")
 
                 cursor.execute("""
                     WITH reordered AS (
@@ -4790,15 +4797,15 @@ class MLDPShell:
                 conn.commit()
                 print("   Reordered remaining features")
             else:
-                print(f"❌ No features removed (not found in set)")
+                print(f"No features removed (not found in set)")
 
             cursor.close()
             conn.close()
 
         except ValueError:
-            print("❌ Invalid feature set ID or feature IDs")
+            print("Invalid feature set ID or feature IDs")
         except Exception as e:
-            print(f"❌ Error removing features: {e}")
+            print(f"Error removing features: {e}")
 
     def cmd_update_feature_in_set(self, args):
         """Update feature assignment in a feature set"""
@@ -4833,14 +4840,14 @@ class MLDPShell:
                     i += 1
 
             if not updates:
-                print("❌ No updates specified")
+                print("No updates specified")
                 return
 
             # Validate channel if provided
             if 'data_channel' in updates and updates['data_channel'] is not None:
                 valid_channels = ['source_current', 'load_voltage', 'impedance', 'power', 'source_current,load_voltage']
                 if updates['data_channel'] not in valid_channels:
-                    print(f"❌ Invalid channel: {updates['data_channel']}")
+                    print(f"Invalid channel: {updates['data_channel']}")
                     print(f"   Must be one of: {', '.join(valid_channels)}")
                     return
 
@@ -4865,7 +4872,7 @@ class MLDPShell:
             """, values + [feature_set_id, feature_id])
 
             if cursor.rowcount == 0:
-                print(f"❌ Feature {feature_id} not found in set {feature_set_id}")
+                print(f"Feature {feature_id} not found in set {feature_set_id}")
                 cursor.close()
                 conn.close()
                 return
@@ -4893,7 +4900,7 @@ class MLDPShell:
                 effective_channel = row['feature_channel'] or row['set_channel']
                 effective_n = row['n_value_override'] or row['set_n_value']
 
-                print(f"✅ Updated {row['feature_name']} in set {feature_set_id} (order {row['feature_order']})")
+                print(f"Updated {row['feature_name']} in set {feature_set_id} (order {row['feature_order']})")
                 print(f"   Channel: {effective_channel} {'(override)' if row['feature_channel'] else '(inherit)'}")
                 print(f"   N-value: {effective_n} {'(override)' if row['n_value_override'] else '(inherit)'}")
 
@@ -4901,9 +4908,9 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid feature set ID or feature ID")
+            print("Invalid feature set ID or feature ID")
         except Exception as e:
-            print(f"❌ Error updating feature: {e}")
+            print(f"Error updating feature: {e}")
 
     def cmd_clone_feature_set(self, args):
         """Create a copy of an existing feature set"""
@@ -4920,7 +4927,7 @@ class MLDPShell:
                 new_name = args[idx + 1]
 
             if not new_name:
-                print("❌ New name is required")
+                print("New name is required")
                 return
 
             import psycopg2
@@ -4939,12 +4946,12 @@ class MLDPShell:
             source = cursor.fetchone()
 
             if not source:
-                print(f"❌ Source feature set {source_id} not found")
+                print(f"Source feature set {source_id} not found")
                 return
 
             cursor.execute("SELECT 1 FROM ml_feature_sets_lut WHERE feature_set_name = %s", (new_name,))
             if cursor.fetchone():
-                print(f"❌ Feature set '{new_name}' already exists")
+                print(f"Feature set '{new_name}' already exists")
                 return
 
             cursor.execute("SELECT COALESCE(MAX(feature_set_id), 0) + 1 FROM ml_feature_sets_lut")
@@ -4967,7 +4974,7 @@ class MLDPShell:
 
             conn.commit()
 
-            print(f"✅ Cloned feature set '{source['feature_set_name']}' (ID: {source_id})")
+            print(f"Cloned feature set '{source['feature_set_name']}' (ID: {source_id})")
             print(f"   New set: '{new_name}' (ID: {new_id})")
 
             cursor.execute("""
@@ -4980,9 +4987,9 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid source feature set ID")
+            print("Invalid source feature set ID")
         except Exception as e:
-            print(f"❌ Error cloning feature set: {e}")
+            print(f"Error cloning feature set: {e}")
 
     def cmd_link_feature_set(self, args):
         """Link a feature set to an experiment with configuration"""
@@ -5016,7 +5023,7 @@ class MLDPShell:
                 elif args[i] == '--windowing' and i + 1 < len(args):
                     windowing_strategy = args[i + 1]
                     if windowing_strategy not in ['non_overlapping', 'sliding_window']:
-                        print(f"❌ Invalid windowing strategy: {windowing_strategy}")
+                        print(f"Invalid windowing strategy: {windowing_strategy}")
                         print("   Must be 'non_overlapping' or 'sliding_window'")
                         return
                     i += 2
@@ -5051,7 +5058,7 @@ class MLDPShell:
             """, (efs_id, experiment_id, feature_set_id, n_value, priority, channel, windowing_strategy))
 
             conn.commit()
-            print(f"✅ Linked feature set {feature_set_id} to experiment {experiment_id}")
+            print(f"Linked feature set {feature_set_id} to experiment {experiment_id}")
             print(f"   Channel: {channel}")
             if n_value:
                 print(f"   N-value: {n_value}")
@@ -5062,11 +5069,11 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid experiment ID or feature set ID")
+            print("Invalid experiment ID or feature set ID")
         except psycopg2.IntegrityError as e:
-            print(f"❌ Link already exists or invalid IDs: {e}")
+            print(f"Link already exists or invalid IDs: {e}")
         except Exception as e:
-            print(f"❌ Error linking feature set: {e}")
+            print(f"Error linking feature set: {e}")
 
     def cmd_bulk_link_feature_sets(self, args):
         """Link multiple feature sets to an experiment"""
@@ -5085,7 +5092,7 @@ class MLDPShell:
                 sets = [int(s.strip()) for s in args[idx + 1].split(',')]
 
             if not sets:
-                print("❌ No feature sets specified")
+                print("No feature sets specified")
                 return
 
             n_values = [None] * len(sets)
@@ -5134,17 +5141,17 @@ class MLDPShell:
                     failed += 1
                     conn.rollback()
 
-            print(f"✅ Linked {success}/{len(sets)} feature sets to experiment {experiment_id}")
+            print(f"Linked {success}/{len(sets)} feature sets to experiment {experiment_id}")
             if failed > 0:
-                print(f"   ⚠️  {failed} feature sets were already linked or don't exist")
+                print(f"   {failed} feature sets were already linked or don't exist")
 
             cursor.close()
             conn.close()
 
         except ValueError:
-            print("❌ Invalid experiment ID or feature set IDs")
+            print("Invalid experiment ID or feature set IDs")
         except Exception as e:
-            print(f"❌ Error linking feature sets: {e}")
+            print(f"Error linking feature sets: {e}")
 
     def cmd_update_feature_link(self, args):
         """Update properties of an experiment-feature set link"""
@@ -5173,7 +5180,7 @@ class MLDPShell:
                 elif args[i] == '--windowing' and i + 1 < len(args):
                     windowing_strategy = args[i + 1]
                     if windowing_strategy not in ['non_overlapping', 'sliding_window']:
-                        print(f"❌ Invalid windowing strategy: {windowing_strategy}")
+                        print(f"Invalid windowing strategy: {windowing_strategy}")
                         print("   Must be 'non_overlapping' or 'sliding_window'")
                         return
                     updates['windowing_strategy'] = windowing_strategy
@@ -5182,7 +5189,7 @@ class MLDPShell:
                     i += 1
 
             if not updates:
-                print("❌ No updates specified")
+                print("No updates specified")
                 return
 
             import psycopg2
@@ -5208,10 +5215,10 @@ class MLDPShell:
             cursor.execute(query, params)
 
             if cursor.rowcount == 0:
-                print(f"❌ Link between experiment {experiment_id} and feature set {feature_set_id} not found")
+                print(f"Link between experiment {experiment_id} and feature set {feature_set_id} not found")
             else:
                 conn.commit()
-                print(f"✅ Updated link between experiment {experiment_id} and feature set {feature_set_id}")
+                print(f"Updated link between experiment {experiment_id} and feature set {feature_set_id}")
                 for key, value in updates.items():
                     print(f"   {key}: {value}")
 
@@ -5219,9 +5226,9 @@ class MLDPShell:
             conn.close()
 
         except ValueError:
-            print("❌ Invalid experiment ID or feature set ID")
+            print("Invalid experiment ID or feature set ID")
         except Exception as e:
-            print(f"❌ Error updating feature link: {e}")
+            print(f"Error updating feature link: {e}")
 
     def cmd_show_feature_config(self, args):
         """Show complete feature configuration for an experiment"""
@@ -5331,7 +5338,7 @@ class MLDPShell:
             conn.close()
 
         except Exception as e:
-            print(f"❌ Error showing feature configuration: {e}")
+            print(f"Error showing feature configuration: {e}")
 
     def cmd_update_selection_config(self, args):
         """Update segment selection configuration"""
@@ -5366,7 +5373,7 @@ class MLDPShell:
                     i += 1
             
             if not config_updates:
-                print("❌ No valid parameters provided")
+                print("No valid parameters provided")
                 return
             
             from experiment_configurator import ExperimentConfigurator
@@ -5379,25 +5386,25 @@ class MLDPShell:
             
             configurator = ExperimentConfigurator(self.current_experiment, db_config)
             
-            print(f"🔄 Updating segment selection config for experiment {self.current_experiment}...")
+            print(f"Updating segment selection config for experiment {self.current_experiment}...")
             if configurator.update_segment_selection_config(config_updates):
-                print(f"✅ Segment selection config updated:")
+                print(f"Segment selection config updated:")
                 for key, value in config_updates.items():
                     print(f"   {key}: {value}")
             else:
-                print(f"❌ Failed to update segment selection config")
+                print(f"Failed to update segment selection config")
                 
         except ValueError as e:
-            print(f"❌ Invalid value: {e}")
+            print(f"Invalid value: {e}")
         except ImportError as e:
-            print(f"❌ Could not import configurator: {e}")
+            print(f"Could not import configurator: {e}")
         except Exception as e:
-            print(f"❌ Error updating selection config: {e}")
+            print(f"Error updating selection config: {e}")
     
     def cmd_select_files(self, args):
         """Select files for experiment training data"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
             
         max_files = 50  # Default
@@ -5438,7 +5445,7 @@ class MLDPShell:
             else:
                 i += 1
         
-        print(f"🔄 Selecting files for experiment {self.current_experiment}...")
+        print(f"Selecting files for experiment {self.current_experiment}...")
         print(f"   Strategy: {strategy}")
         print(f"   Max files per label: {max_files}")
         print(f"   Random seed: {seed}")
@@ -5453,7 +5460,7 @@ class MLDPShell:
             if dry_run:
                 # Preview available files
                 files_by_label = selector.get_available_files()
-                print(f"\n📊 Available files by label:")
+                print(f"\nAvailable files by label:")
                 total_available = 0
                 for label, files in files_by_label.items():
                     print(f"   {label}: {len(files)} files")
@@ -5471,30 +5478,30 @@ class MLDPShell:
             )
             
             if result['success']:
-                print(f"\n✅ Successfully selected {result['total_selected']} files")
+                print(f"\nSuccessfully selected {result['total_selected']} files")
                 
                 # Display statistics
                 stats = result['statistics']
                 if stats and 'label_counts' in stats:
-                    print("\n📊 Files selected per label:")
+                    print("\nFiles selected per label:")
                     for label, count in stats['label_counts'].items():
                         print(f"   {label}: {count} files")
                     print(f"\n   Total unique files: {stats['unique_files']}")
                     print(f"   Total unique labels: {stats['unique_labels']}")
                 
-                print(f"\n💾 Data saved to: experiment_{self.current_experiment:03d}_file_training_data")
+                print(f"\nData saved to: experiment_{self.current_experiment:03d}_file_training_data")
             else:
-                print(f"❌ Failed to select files: {result.get('error', 'Unknown error')}")
+                print(f"Failed to select files: {result.get('error', 'Unknown error')}")
             
         except ImportError:
-            print("❌ ExperimentFileSelector module not found")
+            print("ExperimentFileSelector module not found")
         except Exception as e:
-            print(f"❌ Error selecting files: {e}")
+            print(f"Error selecting files: {e}")
     
     def cmd_remove_file_labels(self, args):
         """Remove specific file labels from experiment training data"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
         
         if not args:
@@ -5523,7 +5530,7 @@ class MLDPShell:
             """, (table_name,))
             
             if not cursor.fetchone()[0]:
-                print(f"❌ Table {table_name} does not exist")
+                print(f"Table {table_name} does not exist")
                 return
             
             # Check which column name is used for labels
@@ -5537,7 +5544,7 @@ class MLDPShell:
 
             label_column_result = cursor.fetchone()
             if not label_column_result:
-                print("❌ No label column found in the table")
+                print("No label column found in the table")
                 return
 
             label_column = label_column_result[0]
@@ -5555,19 +5562,19 @@ class MLDPShell:
                 labels_found[row[0]] = row[1]
             
             if not labels_found:
-                print("⚠️  No files found with the specified labels")
+                print("No files found with the specified labels")
                 return
             
-            print("\n📊 Files to be removed:")
+            print("\nFiles to be removed:")
             total_to_remove = 0
             for label, count in labels_found.items():
                 print(f"   {label}: {count} files")
                 total_to_remove += count
             
             # Ask for confirmation
-            response = input(f"\n⚠️  Remove {total_to_remove} files? (y/n): ")
+            response = input(f"\nRemove {total_to_remove} files? (y/n): ")
             if response.lower() != 'y':
-                print("❌ Removal cancelled")
+                print("Removal cancelled")
                 return
             
             # Delete the files using correct column
@@ -5579,7 +5586,7 @@ class MLDPShell:
             deleted = cursor.rowcount
             self.db_conn.commit()
             
-            print(f"\n✅ Successfully removed {deleted} files")
+            print(f"\nSuccessfully removed {deleted} files")
             
             # Show remaining statistics
             cursor.execute(f"""
@@ -5591,7 +5598,7 @@ class MLDPShell:
             """, (self.current_experiment,))
 
             stats = cursor.fetchone()
-            print(f"\n📊 Remaining in training data:")
+            print(f"\nRemaining in training data:")
             print(f"   Total files: {stats[0]}")
             print(f"   Unique labels: {stats[1]}")
 
@@ -5604,20 +5611,20 @@ class MLDPShell:
                 ORDER BY count DESC
             """, (self.current_experiment,))
             
-            print("\n📊 Remaining label distribution:")
+            print("\nRemaining label distribution:")
             for row in cursor:
                 print(f"   {row[0]}: {row[1]} files")
             
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error removing file labels: {e}")
+            print(f"Error removing file labels: {e}")
         finally:
             cursor.close()
 
     def cmd_remove_files(self, args):
         """Remove specific files from experiment training data"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not args:
@@ -5633,10 +5640,10 @@ class MLDPShell:
             try:
                 file_ids.append(int(arg))
             except ValueError:
-                print(f"⚠️ Skipping invalid file ID: {arg}")
+                print(f"Skipping invalid file ID: {arg}")
 
         if not file_ids:
-            print("❌ No valid file IDs provided")
+            print("No valid file IDs provided")
             return
 
         table_name = f"experiment_{self.current_experiment:03d}_file_training_data"
@@ -5654,7 +5661,7 @@ class MLDPShell:
             """, (table_name,))
 
             if not cursor.fetchone()[0]:
-                print(f"❌ Table {table_name} does not exist")
+                print(f"Table {table_name} does not exist")
                 return
 
             # Delete the files
@@ -5666,7 +5673,7 @@ class MLDPShell:
             deleted = cursor.rowcount
             self.db_conn.commit()
 
-            print(f"✅ Successfully removed {deleted} files")
+            print(f"Successfully removed {deleted} files")
 
             # Show remaining statistics
             cursor.execute(f"""
@@ -5675,18 +5682,18 @@ class MLDPShell:
             """, (self.current_experiment,))
 
             remaining = cursor.fetchone()[0]
-            print(f"📊 Remaining files in training data: {remaining}")
+            print(f"Remaining files in training data: {remaining}")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error removing files: {e}")
+            print(f"Error removing files: {e}")
         finally:
             cursor.close()
 
     def cmd_remove_segments(self, args):
         """Remove specific segments from experiment training data"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not args:
@@ -5702,10 +5709,10 @@ class MLDPShell:
             try:
                 segment_ids.append(int(arg))
             except ValueError:
-                print(f"⚠️ Skipping invalid segment ID: {arg}")
+                print(f"Skipping invalid segment ID: {arg}")
 
         if not segment_ids:
-            print("❌ No valid segment IDs provided")
+            print("No valid segment IDs provided")
             return
 
         table_name = f"experiment_{self.current_experiment:03d}_segment_training_data"
@@ -5723,7 +5730,7 @@ class MLDPShell:
             """, (table_name,))
 
             if not cursor.fetchone()[0]:
-                print(f"❌ Table {table_name} does not exist")
+                print(f"Table {table_name} does not exist")
                 print("   Run 'select-segments' first to create segment training data")
                 return
 
@@ -5736,7 +5743,7 @@ class MLDPShell:
             deleted = cursor.rowcount
             self.db_conn.commit()
 
-            print(f"✅ Successfully removed {deleted} segments")
+            print(f"Successfully removed {deleted} segments")
 
             # Show remaining statistics
             cursor.execute(f"""
@@ -5745,17 +5752,17 @@ class MLDPShell:
             """, (self.current_experiment,))
 
             remaining = cursor.fetchone()[0]
-            print(f"📊 Remaining segments in training data: {remaining}")
+            print(f"Remaining segments in training data: {remaining}")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error removing segments: {e}")
+            print(f"Error removing segments: {e}")
         finally:
             cursor.close()
 
     def cmd_generate_training_data(self, args):
         """Deprecated - use select-segments instead"""
-        print("⚠️  This command has been replaced by 'select-segments' for clarity.")
+        print("This command has been replaced by 'select-segments' for clarity.")
         print("\nUse: select-segments [experiment_id] [options]")
         print("\nExample:")
         print("  select-segments 41 --strategy balanced")
@@ -5775,7 +5782,7 @@ class MLDPShell:
             experiment_id = self.current_experiment
 
         if not experiment_id:
-            print("❌ No experiment specified. Use: clean-segment-pairs <experiment_id>")
+            print("No experiment specified. Use: clean-segment-pairs <experiment_id>")
             print("   Or set current experiment: set experiment <id>")
             return
 
@@ -5783,7 +5790,7 @@ class MLDPShell:
 
         # Connect to database
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         try:
@@ -5814,16 +5821,16 @@ class MLDPShell:
                 return
 
             # Show what will be deleted
-            print(f"\n📊 Segment pairs table: {table_name}")
+            print(f"\nSegment pairs table: {table_name}")
             print(f"   Current rows: {count_before:,}")
 
             # Confirmation
-            print(f"\n⚠️  WARNING: This will delete all {count_before:,} pairs from {table_name}")
-            print(f"⚠️  This action CANNOT be undone!")
+            print(f"\nWARNING: This will delete all {count_before:,} pairs from {table_name}")
+            print(f"This action CANNOT be undone!")
             response = input(f"\nType 'DELETE' to confirm: ").strip()
 
             if response != 'DELETE':
-                print("❌ Cancelled")
+                print("Cancelled")
                 cursor.close()
                 return
 
@@ -5837,22 +5844,22 @@ class MLDPShell:
             count_after = cursor.fetchone()[0]
 
             if count_after == 0:
-                print(f"✅ Deleted {count_before:,} pairs")
-                print(f"✅ Table {table_name} is now empty")
+                print(f"Deleted {count_before:,} pairs")
+                print(f"Table {table_name} is now empty")
             else:
-                print(f"⚠️  Warning: {count_after} pairs remaining")
+                print(f"Warning: {count_after} pairs remaining")
 
             cursor.close()
 
         except Exception as e:
-            print(f"❌ Error cleaning segment pairs table: {e}")
+            print(f"Error cleaning segment pairs table: {e}")
             if self.db_conn:
                 self.db_conn.rollback()
 
     def cmd_generate_segment_pairs(self, args):
         """Generate segment pairs for distance calculations"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         pairing_strategy = 'match_lengths_all_combinations'  # Default (safe for same-size comparison)
@@ -5910,7 +5917,7 @@ class MLDPShell:
             self.cmd_clean_segment_pairs([])
             print()
 
-        print(f"🔄 Generating segment pairs for experiment {self.current_experiment}...")
+        print(f"Generating segment pairs for experiment {self.current_experiment}...")
         print(f"   Strategy: {pairing_strategy}")
         if max_pairs_per_segment:
             print(f"   Max pairs per segment: {max_pairs_per_segment}")
@@ -5940,14 +5947,14 @@ class MLDPShell:
             print(f"✓ Pair generation completed in {elapsed_time:.1f} seconds")
             
             if result['success']:
-                print(f"\n✅ Successfully generated segment pairs!")
+                print(f"\nSuccessfully generated segment pairs!")
                 print(f"   Total segments: {result['total_segments']}")
                 print(f"   Total pairs: {result['total_pairs']}")
                 
                 # Display statistics
                 if 'statistics' in result and result['statistics']:
                     stats = result['statistics']
-                    print("\n📊 Pair Statistics:")
+                    print("\nPair Statistics:")
                     print(f"   Same segment label pairs: {stats.get('same_segment_label_pairs', 0)}")
                     print(f"   Same file label pairs: {stats.get('same_file_label_pairs', 0)}")
                     print(f"   Same code type pairs: {stats.get('same_code_type_pairs', 0)}")
@@ -5962,13 +5969,13 @@ class MLDPShell:
                         for pair in stats['top_code_type_pairs'][:5]:
                             print(f"     {pair}")
             else:
-                print(f"\n❌ Failed to generate pairs: {result.get('error', 'Unknown error')}")
+                print(f"\nFailed to generate pairs: {result.get('error', 'Unknown error')}")
                 
         except ImportError:
-            print("❌ ExperimentSegmentPairGeneratorV2 module not found")
+            print("ExperimentSegmentPairGeneratorV2 module not found")
             print("   Make sure experiment_segment_pair_generator_v2.py is in the same directory")
         except Exception as e:
-            print(f"❌ Error generating segment pairs: {e}")
+            print(f"Error generating segment pairs: {e}")
 
     def cmd_init_distance_tables(self, args):
         """Initialize distance result tables for current experiment
@@ -5987,7 +5994,7 @@ class MLDPShell:
             init-distance-tables --drop-existing
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
@@ -5998,7 +6005,7 @@ class MLDPShell:
         if '--drop-existing' in args:
             drop_existing = True
 
-        print(f"\n🔄 Initializing distance tables for experiment {self.current_experiment}...")
+        print(f"\nInitializing distance tables for experiment {self.current_experiment}...")
 
         try:
             import psycopg2
@@ -6017,11 +6024,11 @@ class MLDPShell:
             distance_functions = cursor.fetchall()
 
             if not distance_functions:
-                print(f"❌ No distance functions configured for experiment {self.current_experiment}")
+                print(f"No distance functions configured for experiment {self.current_experiment}")
                 print("   Check ml_experiments_distance_measurements table")
                 return
 
-            print(f"📊 Found {len(distance_functions)} active distance functions")
+            print(f"Found {len(distance_functions)} active distance functions")
             print()
 
             # If --drop-existing is specified, first check which tables exist and get confirmation
@@ -6046,23 +6053,23 @@ class MLDPShell:
                         tables_to_drop.append((table_name, display_name, row_count))
 
                 if tables_to_drop:
-                    print(f"\n⚠️  WARNING: The following tables will be PERMANENTLY DELETED:")
+                    print(f"\nWARNING: The following tables will be PERMANENTLY DELETED:")
                     print()
                     total_rows = 0
                     for table_name, display_name, row_count in tables_to_drop:
-                        print(f"   📊 {table_name}")
+                        print(f"   {table_name}")
                         print(f"      ({display_name}): {row_count:,} records")
                         total_rows += row_count
                     print()
                     print(f"   🔢 Total records to delete: {total_rows:,}")
                     print()
-                    print(f"⚠️  This action CANNOT be undone!")
-                    print(f"⚠️  ALL distance data for experiment {self.current_experiment} will be lost!")
+                    print(f"This action CANNOT be undone!")
+                    print(f"ALL distance data for experiment {self.current_experiment} will be lost!")
                     print()
                     response = input("Type 'DROP' to confirm deletion: ").strip()
 
                     if response != 'DROP':
-                        print("❌ Cancelled - no tables were dropped")
+                        print("Cancelled - no tables were dropped")
                         return
                     print()
 
@@ -6127,28 +6134,28 @@ class MLDPShell:
 
                     self.db_conn.commit()
 
-                    print(f"✅ Created table: {table_name} ({display_name})")
+                    print(f"Created table: {table_name} ({display_name})")
                     created_count += 1
 
                 except Exception as e:
-                    print(f"❌ Error creating {table_name}: {e}")
+                    print(f"Error creating {table_name}: {e}")
                     self.db_conn.rollback()
                     error_count += 1
 
             print()
-            print(f"📊 Summary:")
+            print(f"Summary:")
             print(f"   Created: {created_count}")
             print(f"   Skipped: {skipped_count}")
             print(f"   Errors: {error_count}")
             print()
 
             if created_count > 0:
-                print(f"✅ Distance tables initialized for experiment {self.current_experiment}")
+                print(f"Distance tables initialized for experiment {self.current_experiment}")
             elif skipped_count > 0:
                 print(f"ℹ️  All tables already exist. Use --drop-existing to recreate them.")
 
         except Exception as e:
-            print(f"❌ Error initializing distance tables: {e}")
+            print(f"Error initializing distance tables: {e}")
             import traceback
             traceback.print_exc()
 
@@ -6161,7 +6168,7 @@ class MLDPShell:
         for the current experiment.
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         try:
@@ -6179,10 +6186,10 @@ class MLDPShell:
             metrics = cursor.fetchall()
 
             if not metrics:
-                print(f"\n❌ No distance metrics configured for experiment {self.current_experiment}")
+                print(f"\nNo distance metrics configured for experiment {self.current_experiment}")
                 return
 
-            print(f"\n📊 Distance metrics configured for experiment {self.current_experiment}:")
+            print(f"\nDistance metrics configured for experiment {self.current_experiment}:")
             print(f"\nID  | Function Name        | Display Name                      | Table Prefix")
             print("-" * 90)
             for metric in metrics:
@@ -6191,7 +6198,7 @@ class MLDPShell:
             print(f"\nTotal: {len(metrics)} metrics")
 
         except Exception as e:
-            print(f"❌ Error showing distance metrics: {e}")
+            print(f"Error showing distance metrics: {e}")
 
     def cmd_add_distance_metric(self, args):
         """Add distance metric to current experiment
@@ -6206,7 +6213,7 @@ class MLDPShell:
             add-distance-metric --metric euclidean
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
@@ -6217,7 +6224,7 @@ class MLDPShell:
                 metric_name = args[idx + 1]
 
         if not metric_name:
-            print("❌ Error: --metric is required")
+            print("Error: --metric is required")
             print("\nUsage: add-distance-metric --metric <metric_name>")
             print("\nExample: add-distance-metric --metric wasserstein")
             return
@@ -6235,7 +6242,7 @@ class MLDPShell:
             function = cursor.fetchone()
 
             if not function:
-                print(f"❌ Distance function '{metric_name}' not found or not active")
+                print(f"Distance function '{metric_name}' not found or not active")
                 print("\nAvailable metrics:")
                 cursor.execute("SELECT function_name FROM ml_distance_functions_lut WHERE is_active = true ORDER BY function_name")
                 available = cursor.fetchall()
@@ -6270,7 +6277,7 @@ class MLDPShell:
             print(f"SUCCESS: Added {func_name} ({display_name}) to experiment {self.current_experiment}")
 
         except Exception as e:
-            print(f"❌ Error adding distance metric: {e}")
+            print(f"Error adding distance metric: {e}")
             self.db_conn.rollback()
 
     def cmd_remove_distance_metric(self, args):
@@ -6287,7 +6294,7 @@ class MLDPShell:
             remove-distance-metric --all-except L1,L2,cosine,pearson
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
@@ -6305,7 +6312,7 @@ class MLDPShell:
                 keep_only = [m.strip() for m in args[idx + 1].split(',')]
 
         if not metric_name and not keep_only:
-            print("❌ Error: --metric or --all-except is required")
+            print("Error: --metric or --all-except is required")
             print("\nUsage:")
             print("  remove-distance-metric --metric <metric_name>")
             print("  remove-distance-metric --all-except L1,L2,cosine,pearson")
@@ -6316,7 +6323,7 @@ class MLDPShell:
 
             if keep_only:
                 # Remove all except specified metrics
-                print(f"\n🔄 Removing all distance metrics except: {', '.join(keep_only)}")
+                print(f"\nRemoving all distance metrics except: {', '.join(keep_only)}")
 
                 # Get IDs of metrics to keep
                 placeholders = ','.join(['%s'] * len(keep_only))
@@ -6329,7 +6336,7 @@ class MLDPShell:
                 keep_ids = cursor.fetchall()
 
                 if not keep_ids:
-                    print(f"❌ None of the specified metrics found: {', '.join(keep_only)}")
+                    print(f"None of the specified metrics found: {', '.join(keep_only)}")
                     return
 
                 print(f"ℹ️  Keeping {len(keep_ids)} metrics:")
@@ -6349,7 +6356,7 @@ class MLDPShell:
                 deleted = cursor.fetchall()
                 self.db_conn.commit()
 
-                print(f"\n✅ Removed {len(deleted)} distance metrics from experiment {self.current_experiment}")
+                print(f"\nRemoved {len(deleted)} distance metrics from experiment {self.current_experiment}")
 
             else:
                 # Remove specific metric
@@ -6362,7 +6369,7 @@ class MLDPShell:
                 function = cursor.fetchone()
 
                 if not function:
-                    print(f"❌ Distance function '{metric_name}' not found")
+                    print(f"Distance function '{metric_name}' not found")
                     return
 
                 func_id, func_name, display_name = function
@@ -6376,15 +6383,15 @@ class MLDPShell:
                 deleted = cursor.fetchone()
 
                 if not deleted:
-                    print(f"⚠️  {func_name} ({display_name}) was not configured for experiment {self.current_experiment}")
+                    print(f"{func_name} ({display_name}) was not configured for experiment {self.current_experiment}")
                     return
 
                 self.db_conn.commit()
 
-                print(f"✅ Removed {func_name} ({display_name}) from experiment {self.current_experiment}")
+                print(f"Removed {func_name} ({display_name}) from experiment {self.current_experiment}")
 
         except Exception as e:
-            print(f"❌ Error removing distance metric: {e}")
+            print(f"Error removing distance metric: {e}")
             self.db_conn.rollback()
             import traceback
             traceback.print_exc()
@@ -6410,14 +6417,14 @@ class MLDPShell:
             clean-distance-tables --force        # Skip confirmation
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
         dry_run = '--dry-run' in args
         force = '--force' in args
 
-        print(f"\n🔄 Scanning distance tables for experiment {self.current_experiment}...")
+        print(f"\nScanning distance tables for experiment {self.current_experiment}...")
 
         try:
             cursor = self.db_conn.cursor()
@@ -6435,7 +6442,7 @@ class MLDPShell:
             # PostgreSQL lowercases table names, so normalize for comparison
             configured_tables_lower = [t.lower() for t in configured_tables]
 
-            print(f"📊 Found {len(configured_tables)} configured distance tables")
+            print(f"Found {len(configured_tables)} configured distance tables")
 
             # Get all distance tables for this experiment
             cursor.execute("""
@@ -6454,10 +6461,10 @@ class MLDPShell:
             unconfigured_tables = [t for t in all_tables if t.lower() not in configured_tables_lower]
 
             if not unconfigured_tables:
-                print("\n✅ No unconfigured distance tables found. All tables match configuration.")
+                print("\nNo unconfigured distance tables found. All tables match configuration.")
                 return
 
-            print(f"\n⚠️  Found {len(unconfigured_tables)} unconfigured tables:")
+            print(f"\nFound {len(unconfigured_tables)} unconfigured tables:")
 
             # Check row counts and categorize
             empty_tables = []
@@ -6472,10 +6479,10 @@ class MLDPShell:
                     print(f"   🗑️  {table_name}: 0 rows (can be deleted)")
                 else:
                     non_empty_tables.append((table_name, row_count))
-                    print(f"   ⚠️  {table_name}: {row_count:,} rows (WILL NOT DELETE - has data)")
+                    print(f"   {table_name}: {row_count:,} rows (WILL NOT DELETE - has data)")
 
             if not empty_tables:
-                print("\n✅ No empty unconfigured tables to clean.")
+                print("\nNo empty unconfigured tables to clean.")
                 if non_empty_tables:
                     print(f"\nℹ️  {len(non_empty_tables)} tables have data and were not deleted.")
                 return
@@ -6485,7 +6492,7 @@ class MLDPShell:
             print(f"   Tables with data (protected): {len(non_empty_tables)}")
 
             if dry_run:
-                print("\n🔍 DRY RUN - No tables will be deleted")
+                print("\nDRY RUN - No tables will be deleted")
                 print("\nWould delete:")
                 for table in empty_tables:
                     print(f"   - {table}")
@@ -6493,10 +6500,10 @@ class MLDPShell:
 
             # Confirmation prompt
             if not force:
-                print(f"\n⚠️  About to delete {len(empty_tables)} empty unconfigured tables")
+                print(f"\nAbout to delete {len(empty_tables)} empty unconfigured tables")
                 response = input("Continue? (yes/no): ").strip().lower()
                 if response not in ['yes', 'y']:
-                    print("❌ Cancelled")
+                    print("Cancelled")
                     return
 
             # Delete empty unconfigured tables
@@ -6505,19 +6512,19 @@ class MLDPShell:
                 try:
                     cursor.execute(f"DROP TABLE {table_name} CASCADE")
                     self.db_conn.commit()
-                    print(f"✅ Deleted: {table_name}")
+                    print(f"Deleted: {table_name}")
                     deleted_count += 1
                 except Exception as e:
-                    print(f"❌ Error deleting {table_name}: {e}")
+                    print(f"Error deleting {table_name}: {e}")
                     self.db_conn.rollback()
 
-            print(f"\n✅ Cleaned {deleted_count} empty unconfigured distance tables")
+            print(f"\nCleaned {deleted_count} empty unconfigured distance tables")
 
             if non_empty_tables:
                 print(f"\nℹ️  {len(non_empty_tables)} tables with data were preserved")
 
         except Exception as e:
-            print(f"❌ Error cleaning distance tables: {e}")
+            print(f"Error cleaning distance tables: {e}")
             import traceback
             traceback.print_exc()
 
@@ -6539,7 +6546,7 @@ class MLDPShell:
         elif self.current_experiment:
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         from pathlib import Path
@@ -6562,7 +6569,7 @@ class MLDPShell:
                     custom_feature_path = result[1]
                 cursor.close()
             except Exception as e:
-                print(f"⚠️  Warning: Could not read custom paths from database: {e}")
+                print(f"Warning: Could not read custom paths from database: {e}")
 
         # Use custom paths if configured, otherwise use defaults
         if custom_segment_path and custom_feature_path:
@@ -6578,17 +6585,17 @@ class MLDPShell:
 
         print(f"\n📁 Data paths for experiment {experiment_id}:")
         if using_custom:
-            print(f"   ⚙️  Using CUSTOM paths from database")
+            print(f"   Using CUSTOM paths from database")
         else:
-            print(f"   ⚙️  Using DEFAULT path pattern")
+            print(f"   Using DEFAULT path pattern")
         print(f"   Base:     {base_path}")
         print(f"   Segments: {segment_path}")
         print(f"   Features: {feature_path}")
         print()
         print(f"Status:")
-        print(f"   Base exists:     {'✅' if base_path.exists() else '❌'}")
-        print(f"   Segments exist:  {'✅' if segment_path.exists() else '❌'}")
-        print(f"   Features exist:  {'✅' if feature_path.exists() else '❌'}")
+        print(f"   Base exists:     {'' if base_path.exists() else ''}")
+        print(f"   Segments exist:  {'' if segment_path.exists() else ''}")
+        print(f"   Features exist:  {'' if feature_path.exists() else ''}")
 
         # Count files if directories exist
         if segment_path.exists():
@@ -6616,7 +6623,7 @@ class MLDPShell:
             set-experiment-data-path --reset 41
         """
         if not args:
-            print("❌ Usage: set-experiment-data-path <path> [experiment_id]")
+            print("Usage: set-experiment-data-path <path> [experiment_id]")
             print("   Or:    set-experiment-data-path --reset [experiment_id]")
             return
 
@@ -6636,11 +6643,11 @@ class MLDPShell:
         elif self.current_experiment:
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         try:
@@ -6656,7 +6663,7 @@ class MLDPShell:
                 """, (experiment_id,))
                 self.db_conn.commit()
 
-                print(f"\n✅ Reset experiment {experiment_id} to use default data paths")
+                print(f"\nReset experiment {experiment_id} to use default data paths")
                 print(f"   Default pattern: /Volumes/ArcData/V3_database/experiment{experiment_id:03d}/")
             else:
                 # Validate path format
@@ -6664,7 +6671,7 @@ class MLDPShell:
                 path_obj = Path(custom_path)
 
                 if not path_obj.is_absolute():
-                    print(f"❌ Path must be absolute: {custom_path}")
+                    print(f"Path must be absolute: {custom_path}")
                     return
 
                 # Set custom paths
@@ -6679,7 +6686,7 @@ class MLDPShell:
                 """, (segment_path, feature_path, experiment_id))
                 self.db_conn.commit()
 
-                print(f"\n✅ Updated experiment {experiment_id} data paths:")
+                print(f"\nUpdated experiment {experiment_id} data paths:")
                 print(f"   Segment path: {segment_path}")
                 print(f"   Feature path: {feature_path}")
                 print()
@@ -6689,7 +6696,7 @@ class MLDPShell:
             cursor.close()
 
         except Exception as e:
-            print(f"❌ Error updating data path: {e}")
+            print(f"Error updating data path: {e}")
             if self.db_conn:
                 self.db_conn.rollback()
 
@@ -6726,7 +6733,7 @@ class MLDPShell:
         elif self.current_experiment:
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         from pathlib import Path
@@ -6747,7 +6754,7 @@ class MLDPShell:
                 cursor.close()
             except Exception as e:
                 self.db_conn.rollback()
-                print(f"⚠️  Warning: Could not read custom path from database: {e}")
+                print(f"Warning: Could not read custom path from database: {e}")
 
         # Use custom path if configured, otherwise use default
         if custom_segment_path:
@@ -6775,7 +6782,7 @@ class MLDPShell:
 
         # Check if there's anything to clean
         if file_count == 0 and dir_count == 0:
-            print(f"✅ Segment folder already empty for experiment {experiment_id}")
+            print(f"Segment folder already empty for experiment {experiment_id}")
             print(f"   Path: {segment_path}")
             return
 
@@ -6801,7 +6808,7 @@ class MLDPShell:
         print(f"   Directories: {dir_count:,}")
 
         if dry_run:
-            print("\n🔍 DRY RUN - No files or directories will be deleted")
+            print("\nDRY RUN - No files or directories will be deleted")
             if file_count > 0:
                 print("\nSample files that would be deleted:")
                 for f in all_files[:10]:
@@ -6813,20 +6820,20 @@ class MLDPShell:
             return
 
         # Require confirmation for destructive operations (unless --force)
-        print(f"\n⚠️  WARNING: This will permanently delete:")
+        print(f"\nWARNING: This will permanently delete:")
         if file_count > 0:
             print(f"   - {file_count:,} files ({size_gb:.2f} GB)")
         if dir_count > 0:
             print(f"   - {dir_count:,} directories")
-        print(f"⚠️  This action CANNOT be undone!")
+        print(f"This action CANNOT be undone!")
 
         if not force:
             response = input("\nType 'DELETE' to confirm: ").strip()
             if response != 'DELETE':
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
         else:
-            print("\n⚠️  --force flag set: Skipping confirmation")
+            print("\n--force flag set: Skipping confirmation")
 
         # Delete ALL files (including .DS_Store, etc.)
         if file_count > 0:
@@ -6841,25 +6848,25 @@ class MLDPShell:
                     if deleted_count % 1000 == 0:
                         print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
                 except Exception as e:
-                    print(f"❌ Error deleting {file_path.name}: {e}")
+                    print(f"Error deleting {file_path.name}: {e}")
                     failed_count += 1
 
-            print(f"✅ Deleted {deleted_count:,} files")
+            print(f"Deleted {deleted_count:,} files")
             if npy_count > 0:
                 print(f"   - Segment files (.npy): {npy_count:,}")
             if other_files > 0:
                 print(f"   - Other files: {other_files:,}")
             if failed_count > 0:
-                print(f"⚠️  Failed to delete {failed_count} files")
+                print(f"Failed to delete {failed_count} files")
 
         # Also delete progress checkpoint
         progress_file = segment_path / 'generation_progress.json'
         if progress_file.exists():
             try:
                 progress_file.unlink()
-                print(f"✅ Deleted progress checkpoint")
+                print(f"Deleted progress checkpoint")
             except Exception as e:
-                print(f"⚠️  Could not delete progress checkpoint: {e}")
+                print(f"Could not delete progress checkpoint: {e}")
 
         # Delete all empty directories to completely clean the folder structure
         print(f"\n🗑️  Removing empty directories...")
@@ -6881,18 +6888,18 @@ class MLDPShell:
                 pass
 
         if dirs_removed > 0:
-            print(f"✅ Removed {dirs_removed} empty directories")
+            print(f"Removed {dirs_removed} empty directories")
 
         # Verify folder is completely empty
         remaining_items = list(segment_path.iterdir())
         if remaining_items:
-            print(f"\n⚠️  Warning: {len(remaining_items)} items remaining in {segment_path}:")
+            print(f"\nWarning: {len(remaining_items)} items remaining in {segment_path}:")
             for item in remaining_items[:5]:
                 print(f"   - {item.name}")
             if len(remaining_items) > 5:
                 print(f"   ... and {len(remaining_items) - 5} more items")
         else:
-            print(f"\n✅ Segment folder completely empty: {segment_path}")
+            print(f"\nSegment folder completely empty: {segment_path}")
 
     def cmd_clean_feature_files(self, args):
         """Delete feature files for an experiment
@@ -6917,7 +6924,7 @@ class MLDPShell:
             clean-feature-files --tables-only      # Truncate table, keep files
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
@@ -6934,7 +6941,7 @@ class MLDPShell:
         # Validate mutually exclusive options
         mode_count = sum([files_only, tables_only, files_and_tables])
         if mode_count > 1:
-            print("❌ Error: --files-only, --tables-only, and --files-and-tables are mutually exclusive")
+            print("Error: --files-only, --tables-only, and --files-and-tables are mutually exclusive")
             return
 
         # Determine what to clean
@@ -6950,7 +6957,7 @@ class MLDPShell:
         elif self.current_experiment:
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         from pathlib import Path
@@ -6970,7 +6977,7 @@ class MLDPShell:
             cursor.close()
         except Exception as e:
             self.db_conn.rollback()
-            print(f"⚠️  Warning: Could not read custom path from database: {e}")
+            print(f"Warning: Could not read custom path from database: {e}")
 
         # Use custom path if configured, otherwise use default
         if custom_feature_path:
@@ -7020,7 +7027,7 @@ class MLDPShell:
             return
 
         if dry_run:
-            print("\n🔍 DRY RUN - No files or data will be deleted")
+            print("\nDRY RUN - No files or data will be deleted")
             if clean_files and file_count > 0:
                 print("\nSample files that would be deleted:")
                 for f in feature_files[:10]:
@@ -7033,15 +7040,15 @@ class MLDPShell:
 
         # Confirmation prompt
         if not force:
-            print(f"\n⚠️  WARNING: This will permanently delete:")
+            print(f"\nWARNING: This will permanently delete:")
             if clean_files and file_count > 0:
                 print(f"   - {file_count:,} feature files ({size_gb:.2f} GB)")
             if clean_tables and db_count > 0:
                 print(f"   - {db_count:,} database records from {table_name}")
-            print(f"⚠️  This action CANNOT be undone!")
+            print(f"This action CANNOT be undone!")
             response = input("\nType 'DELETE' to confirm: ").strip()
             if response != 'DELETE':
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
 
         # Delete files
@@ -7052,15 +7059,15 @@ class MLDPShell:
             try:
                 # Delete the ENTIRE feature_files directory
                 shutil.rmtree(feature_path)
-                print(f"✅ Deleted entire directory: {feature_path}")
+                print(f"Deleted entire directory: {feature_path}")
                 print(f"   Removed {file_count:,} files ({size_gb:.2f} GB)")
 
                 # Recreate empty directory
                 feature_path.mkdir(parents=True, exist_ok=True)
-                print(f"✅ Recreated empty directory: {feature_path}")
+                print(f"Recreated empty directory: {feature_path}")
 
             except Exception as e:
-                print(f"❌ Error deleting directory: {e}")
+                print(f"Error deleting directory: {e}")
                 print(f"   Falling back to file-by-file deletion...")
 
                 # Fallback: delete files individually
@@ -7074,21 +7081,21 @@ class MLDPShell:
                         if deleted_count % 1000 == 0:
                             print(f"   Deleted {deleted_count:,} / {file_count:,} files...")
                     except Exception as e:
-                        print(f"❌ Error deleting {feature_file.name}: {e}")
+                        print(f"Error deleting {feature_file.name}: {e}")
                         failed_count += 1
 
-                print(f"✅ Deleted {deleted_count:,} feature files")
+                print(f"Deleted {deleted_count:,} feature files")
                 if failed_count > 0:
-                    print(f"⚠️  Failed to delete {failed_count} files")
+                    print(f"Failed to delete {failed_count} files")
 
         # Truncate database table
         if clean_tables and db_count > 0:
             try:
                 cursor.execute(f"TRUNCATE TABLE {table_name}")
                 self.db_conn.commit()
-                print(f"✅ Truncated table {table_name} ({db_count:,} records)")
+                print(f"Truncated table {table_name} ({db_count:,} records)")
             except Exception as e:
-                print(f"❌ Error truncating table: {e}")
+                print(f"Error truncating table: {e}")
                 self.db_conn.rollback()
 
     def cmd_sql(self, args):
@@ -7109,11 +7116,11 @@ class MLDPShell:
             sql INSERT INTO ml_experiments (experiment_name) VALUES ('test')
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not args:
-            print("❌ No SQL query provided.")
+            print("No SQL query provided.")
             print("Usage: sql <query>")
             return
 
@@ -7134,28 +7141,28 @@ class MLDPShell:
             pass
         elif first_word in ('DROP', 'TRUNCATE'):
             # Require typing the word for destructive operations
-            print(f"\n⚠️  WARNING: You are about to execute a {first_word} query:")
+            print(f"\nWARNING: You are about to execute a {first_word} query:")
             print(f"   {query}")
-            print(f"\n⚠️  This action CANNOT be undone!")
+            print(f"\nThis action CANNOT be undone!")
             response = input(f"\nType '{first_word}' to confirm: ").strip()
             if response != first_word:
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
         elif first_word in ('INSERT', 'UPDATE', 'DELETE'):
             # Require (N/y) confirmation for data modification
-            print(f"\n⚠️  You are about to execute a {first_word} query:")
+            print(f"\nYou are about to execute a {first_word} query:")
             print(f"   {query}")
             response = input("\nContinue? (N/y): ").strip().lower()
             if response not in ('y', 'yes'):
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
         else:
             # Other queries require confirmation
-            print(f"\n⚠️  You are about to execute:")
+            print(f"\nYou are about to execute:")
             print(f"   {query}")
             response = input("\nContinue? (N/y): ").strip().lower()
             if response not in ('y', 'yes'):
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
 
         # Execute query
@@ -7171,7 +7178,7 @@ class MLDPShell:
                     col_names = [desc[0] for desc in cursor.description]
 
                     # Print header
-                    print(f"\n📊 Results ({len(results)} rows):")
+                    print(f"\nResults ({len(results)} rows):")
                     print("─" * 80)
                     print(" | ".join(col_names))
                     print("─" * 80)
@@ -7184,18 +7191,18 @@ class MLDPShell:
                         print(f"\n... and {len(results) - 100} more rows")
                     print("─" * 80)
                 else:
-                    print("\n✅ Query returned 0 rows")
+                    print("\nQuery returned 0 rows")
             else:
                 # For non-SELECT queries, commit and show affected rows
                 self.db_conn.commit()
                 if cursor.rowcount >= 0:
-                    print(f"\n✅ Query executed successfully. Rows affected: {cursor.rowcount}")
+                    print(f"\nQuery executed successfully. Rows affected: {cursor.rowcount}")
                 else:
-                    print(f"\n✅ Query executed successfully")
+                    print(f"\nQuery executed successfully")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"\n❌ Error executing query: {e}")
+            print(f"\nError executing query: {e}")
         finally:
             cursor.close()
 
@@ -7224,7 +7231,7 @@ class MLDPShell:
             clean-distance-work-files --force 41         # Delete experiment 41 work files
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
@@ -7240,7 +7247,7 @@ class MLDPShell:
         elif self.current_experiment:
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         from pathlib import Path
@@ -7261,7 +7268,7 @@ class MLDPShell:
                 custom_feature_path = result[0]
             cursor.close()
         except Exception as e:
-            print(f"⚠️  Warning: Could not read custom path from database: {e}")
+            print(f"Warning: Could not read custom path from database: {e}")
 
         # Use custom path if configured, otherwise use default
         # MPCCTL work files are in the parent directory of feature_files
@@ -7271,7 +7278,7 @@ class MLDPShell:
             experiment_root = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}')
 
         if not experiment_root.exists():
-            print(f"❌ Experiment root path does not exist: {experiment_root}")
+            print(f"Experiment root path does not exist: {experiment_root}")
             return
 
         # Check for mpcctl work files (in experiment root)
@@ -7316,7 +7323,7 @@ class MLDPShell:
 
         # Show what will be deleted
         if not items_to_delete:
-            print(f"\n✅ No mpcctl work files found in {experiment_root}")
+            print(f"\nNo mpcctl work files found in {experiment_root}")
             return
 
         print(f"\n📂 Location: {experiment_root}")
@@ -7332,15 +7339,15 @@ class MLDPShell:
         print(f"{'Total:':<30} {len(items_to_delete)} items {total_size / (1024 * 1024):>10.2f} MB")
 
         if dry_run:
-            print("\n✅ Dry run complete - no files were deleted")
+            print("\nDry run complete - no files were deleted")
             return
 
         # Confirmation
         if not force:
-            print(f"\n⚠️  This will permanently delete {len(items_to_delete)} items from experiment {experiment_id}")
+            print(f"\nThis will permanently delete {len(items_to_delete)} items from experiment {experiment_id}")
             response = input("Type 'DELETE' to confirm: ").strip()
             if response != 'DELETE':
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
 
         # Delete items
@@ -7355,14 +7362,14 @@ class MLDPShell:
                 elif path.is_dir():
                     shutil.rmtree(path)
                 deleted_count += 1
-                print(f"   ✅ Deleted {name}")
+                print(f"   Deleted {name}")
             except Exception as e:
-                print(f"   ❌ Error deleting {name}: {e}")
+                print(f"   Error deleting {name}: {e}")
                 failed_count += 1
 
-        print(f"\n✅ Deleted {deleted_count} items")
+        print(f"\nDeleted {deleted_count} items")
         if failed_count > 0:
-            print(f"⚠️  Failed to delete {failed_count} items")
+            print(f"Failed to delete {failed_count} items")
 
     def cmd_clean_distance_insert(self, args):
         """Truncate distance tables for current experiment
@@ -7382,11 +7389,11 @@ class MLDPShell:
             clean-distance-insert --force        # Skip confirmation
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not self.current_experiment:
-            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            print("No experiment selected. Use 'set experiment <id>' first.")
             return
 
         dry_run = '--dry-run' in args
@@ -7424,12 +7431,12 @@ class MLDPShell:
                 total_records += count
                 print(f"   {table}: {count:,} records")
 
-            print(f"\n📊 Total records to delete: {total_records:,}")
-            print(f"\n⚠️  WARNING: This will DELETE ALL DISTANCE DATA for experiment {self.current_experiment}")
+            print(f"\nTotal records to delete: {total_records:,}")
+            print(f"\nWARNING: This will DELETE ALL DISTANCE DATA for experiment {self.current_experiment}")
             print(f"   This operation CANNOT be undone!")
 
             if dry_run:
-                print(f"\n🔍 DRY RUN: No tables would be truncated")
+                print(f"\nDRY RUN: No tables would be truncated")
                 cursor.close()
                 return
 
@@ -7437,7 +7444,7 @@ class MLDPShell:
                 print(f"\n❓ Type 'TRUNCATE' to confirm deletion: ", end='')
                 confirmation = input().strip()
                 if confirmation != 'TRUNCATE':
-                    print("❌ Operation cancelled")
+                    print("Operation cancelled")
                     cursor.close()
                     return
 
@@ -7445,16 +7452,16 @@ class MLDPShell:
             print(f"\n🗑️  Truncating tables...")
             for table in tables:
                 cursor.execute(f"TRUNCATE TABLE {table}")
-                print(f"   ✅ Truncated {table}")
+                print(f"   Truncated {table}")
 
             self.db_conn.commit()
             cursor.close()
 
-            print(f"\n✅ Successfully truncated {len(tables)} distance tables")
+            print(f"\nSuccessfully truncated {len(tables)} distance tables")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error truncating distance tables: {e}")
+            print(f"Error truncating distance tables: {e}")
 
     def cmd_clean_files(self, args):
         """Truncate file training data table for current experiment
@@ -7474,11 +7481,11 @@ class MLDPShell:
             clean-files --force          # Skip confirmation
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not self.current_experiment:
-            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            print("No experiment selected. Use 'set experiment <id>' first.")
             return
 
         dry_run = '--dry-run' in args
@@ -7519,10 +7526,10 @@ class MLDPShell:
             print(f"🗑️  TRUNCATE FILE TRAINING DATA - Experiment {self.current_experiment}")
             print(f"{'='*80}\n")
             print(f"   {table_name}: {file_count:,} rows")
-            print(f"\n⚠️  WARNING: This will TRUNCATE ALL FILE TRAINING DATA for experiment {self.current_experiment}")
+            print(f"\nWARNING: This will TRUNCATE ALL FILE TRAINING DATA for experiment {self.current_experiment}")
 
             if dry_run:
-                print(f"\n🔍 DRY RUN: No rows would be deleted")
+                print(f"\nDRY RUN: No rows would be deleted")
                 cursor.close()
                 return
 
@@ -7530,7 +7537,7 @@ class MLDPShell:
                 print(f"\n❓ Type 'TRUNCATE' to confirm: ", end='')
                 confirmation = input().strip()
                 if confirmation != 'TRUNCATE':
-                    print("❌ Operation cancelled")
+                    print("Operation cancelled")
                     cursor.close()
                     return
 
@@ -7541,12 +7548,12 @@ class MLDPShell:
             self.db_conn.commit()
             cursor.close()
 
-            print(f"   ✅ Truncated {table_name} ({file_count:,} rows)")
-            print(f"\n✅ Successfully cleaned file training data")
+            print(f"   Truncated {table_name} ({file_count:,} rows)")
+            print(f"\nSuccessfully cleaned file training data")
 
         except Exception as e:
             self.db_conn.rollback()
-            print(f"❌ Error cleaning file training data: {e}")
+            print(f"Error cleaning file training data: {e}")
 
     def cmd_clean_segments(self, args):
         """Delete segment files and truncate segment tables for current experiment
@@ -7574,7 +7581,7 @@ class MLDPShell:
             clean-segments --tables-only         # Truncate tables, keep files
         """
         if not self.current_experiment:
-            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            print("No experiment selected. Use 'set experiment <id>' first.")
             return
 
         # Parse options
@@ -7599,7 +7606,7 @@ class MLDPShell:
         # 2. Clean segment tables
         if clean_tables:
             if not self.db_conn:
-                print("❌ Not connected to database. Use 'connect' first.")
+                print("Not connected to database. Use 'connect' first.")
                 return
 
             try:
@@ -7662,7 +7669,7 @@ class MLDPShell:
                     return
 
                 if dry_run:
-                    print(f"\n🔍 DRY RUN: No tables would be truncated")
+                    print(f"\nDRY RUN: No tables would be truncated")
                     cursor.close()
                     return
 
@@ -7670,7 +7677,7 @@ class MLDPShell:
                     print(f"\n❓ Type 'TRUNCATE' to confirm deletion: ", end='')
                     confirmation = input().strip()
                     if confirmation != 'TRUNCATE':
-                        print("❌ Operation cancelled")
+                        print("Operation cancelled")
                         cursor.close()
                         return
 
@@ -7679,20 +7686,20 @@ class MLDPShell:
 
                 if segment_training_exists:
                     cursor.execute(f"TRUNCATE TABLE {segment_training_table}")
-                    print(f"   ✅ Truncated {segment_training_table}")
+                    print(f"   Truncated {segment_training_table}")
 
                 if segment_pairs_exists:
                     cursor.execute(f"TRUNCATE TABLE {segment_pairs_table}")
-                    print(f"   ✅ Truncated {segment_pairs_table}")
+                    print(f"   Truncated {segment_pairs_table}")
 
                 self.db_conn.commit()
                 cursor.close()
 
-                print(f"\n✅ Successfully cleaned segment tables")
+                print(f"\nSuccessfully cleaned segment tables")
 
             except Exception as e:
                 self.db_conn.rollback()
-                print(f"❌ Error cleaning segment tables: {e}")
+                print(f"Error cleaning segment tables: {e}")
 
     def cmd_clean_experiment(self, args):
         """Complete experiment cleanup - removes ALL data and files
@@ -7710,7 +7717,7 @@ class MLDPShell:
             4. clean-segments             (remove segment files and truncate tables)
             5. clean-files                (truncate training files table)
 
-        ⚠️  EXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!
+        EXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!
 
         After this command, the experiment will be in a clean state as if
         it had just been created. You can then re-run the entire pipeline.
@@ -7721,11 +7728,11 @@ class MLDPShell:
             clean-experiment --force         # Skip all confirmations (DANGEROUS!)
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not self.current_experiment:
-            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            print("No experiment selected. Use 'set experiment <id>' first.")
             return
 
         dry_run = '--dry-run' in args
@@ -7740,16 +7747,16 @@ class MLDPShell:
         print(f"   3. clean-features             (remove feature files and truncate table)")
         print(f"   4. clean-segments             (remove segment files and truncate tables)")
         print(f"   5. clean-files                (truncate training files table)")
-        print(f"\n⚠️  EXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!")
+        print(f"\nEXTREME CAUTION: This will DELETE ALL EXPERIMENT DATA!")
 
         if dry_run:
-            print(f"\n🔍 DRY RUN MODE: No data will be deleted\n")
+            print(f"\nDRY RUN MODE: No data will be deleted\n")
 
         if not force and not dry_run:
             print(f"\n❓ Type 'DELETE ALL' to confirm complete experiment cleanup: ", end='')
             confirmation = input().strip()
             if confirmation != 'DELETE ALL':
-                print("❌ Operation cancelled")
+                print("Operation cancelled")
                 return
 
         # Build args for sub-commands
@@ -7770,7 +7777,7 @@ class MLDPShell:
             self.cmd_clean_distance_insert(sub_args)
             success_count += 1
         except Exception as e:
-            print(f"❌ Error in clean-distance-insert: {e}")
+            print(f"Error in clean-distance-insert: {e}")
             failed_commands.append('clean-distance-insert')
 
         # 2. clean-distance-calculate
@@ -7781,7 +7788,7 @@ class MLDPShell:
             self.cmd_clean_distance_work_files(sub_args)
             success_count += 1
         except Exception as e:
-            print(f"❌ Error in clean-distance-calculate: {e}")
+            print(f"Error in clean-distance-calculate: {e}")
             failed_commands.append('clean-distance-calculate')
 
         # 3. clean-features
@@ -7792,7 +7799,7 @@ class MLDPShell:
             self.cmd_clean_feature_files(sub_args + ['--files-and-tables'])
             success_count += 1
         except Exception as e:
-            print(f"❌ Error in clean-features: {e}")
+            print(f"Error in clean-features: {e}")
             failed_commands.append('clean-features')
 
         # 4. clean-segments
@@ -7803,7 +7810,7 @@ class MLDPShell:
             self.cmd_clean_segments(sub_args + ['--files-and-tables'])
             success_count += 1
         except Exception as e:
-            print(f"❌ Error in clean-segments: {e}")
+            print(f"Error in clean-segments: {e}")
             failed_commands.append('clean-segments')
 
         # 5. clean-files
@@ -7814,7 +7821,7 @@ class MLDPShell:
             self.cmd_clean_files(sub_args)
             success_count += 1
         except Exception as e:
-            print(f"❌ Error in clean-files: {e}")
+            print(f"Error in clean-files: {e}")
             failed_commands.append('clean-files')
 
         # Summary
@@ -7828,10 +7835,10 @@ class MLDPShell:
                 print(f"      - {cmd}")
 
         if success_count == 5:
-            print(f"\n✅ Complete experiment cleanup finished successfully")
+            print(f"\nComplete experiment cleanup finished successfully")
             print(f"   Experiment {self.current_experiment} is now in a clean state")
         else:
-            print(f"\n⚠️  Some cleanup commands failed. Check errors above.")
+            print(f"\nSome cleanup commands failed. Check errors above.")
 
     def cmd_show_distance_functions(self, args):
         """Show all distance functions in ml_distance_functions_lut
@@ -7844,7 +7851,7 @@ class MLDPShell:
         Displays all distance functions available in the system.
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         active_only = '--active-only' in args
@@ -7888,17 +7895,17 @@ class MLDPShell:
             functions = cursor.fetchall()
 
             if not functions:
-                print("\n❌ No distance functions found in ml_distance_functions_lut")
+                print("\nNo distance functions found in ml_distance_functions_lut")
                 return
 
             # Show warning if pairwise_metric_name column doesn't exist
             if not has_pairwise_column:
-                print("\n⚠️  WARNING: pairwise_metric_name column not found!")
+                print("\nWARNING: pairwise_metric_name column not found!")
                 print("   Run this SQL script to add it:")
                 print("   psql -h localhost -p 5432 -d arc_detection -f /Users/kjensen/Documents/GitHub/mldp/mldp_cli/sql/update_distance_functions_lut.sql")
                 print()
 
-            print(f"\n📊 Distance Functions in ml_distance_functions_lut:")
+            print(f"\nDistance Functions in ml_distance_functions_lut:")
             if active_only:
                 print("(Showing only active functions)")
             print()
@@ -7910,7 +7917,7 @@ class MLDPShell:
                 for func in functions:
                     func_id, name, display, library, func_import, pairwise, prefix, active = func
                     pairwise_str = pairwise or 'N/A'
-                    active_str = '✅' if active else '❌'
+                    active_str = '' if active else ''
                     print(f"{func_id:<4} | {name:<20} | {display:<30} | {pairwise_str:<15} | {active_str:<6}")
             else:
                 # Without pairwise_metric_name column
@@ -7920,7 +7927,7 @@ class MLDPShell:
                 for func in functions:
                     func_id, name, display, library, func_import, prefix, active = func
                     library_str = library or 'N/A'
-                    active_str = '✅' if active else '❌'
+                    active_str = '' if active else ''
                     print(f"{func_id:<4} | {name:<20} | {display:<30} | {library_str:<30} | {active_str:<6}")
 
             print(f"\nTotal: {len(functions)} functions")
@@ -7945,7 +7952,7 @@ class MLDPShell:
                     print(f"  Active: {'Yes' if active else 'No'}")
 
         except Exception as e:
-            print(f"❌ Error showing distance functions: {e}")
+            print(f"Error showing distance functions: {e}")
             import traceback
             traceback.print_exc()
 
@@ -7966,12 +7973,12 @@ class MLDPShell:
             update-distance-function manhattan --pairwise-metric manhattan --library sklearn.metrics.pairwise --function-import pairwise_distances
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Parse arguments
         if not args or args[0].startswith('--'):
-            print("❌ Error: function_name is required")
+            print("Error: function_name is required")
             print("\nUsage: update-distance-function <function_name> [options]")
             return
 
@@ -7999,7 +8006,7 @@ class MLDPShell:
                 i += 1
 
         if not updates:
-            print("❌ Error: At least one update option is required")
+            print("Error: At least one update option is required")
             print("\nAvailable options: --pairwise-metric, --library, --function-import, --description, --active")
             return
 
@@ -8016,7 +8023,7 @@ class MLDPShell:
             function = cursor.fetchone()
 
             if not function:
-                print(f"❌ Distance function '{function_name}' not found in ml_distance_functions_lut")
+                print(f"Distance function '{function_name}' not found in ml_distance_functions_lut")
                 return
 
             func_id, func_name, display_name = function
@@ -8040,13 +8047,13 @@ class MLDPShell:
             cursor.execute(update_query, values)
             self.db_conn.commit()
 
-            print(f"✅ Updated {func_name} ({display_name})")
+            print(f"Updated {func_name} ({display_name})")
             print("\nUpdated fields:")
             for key, value in updates.items():
                 print(f"  {key}: {value}")
 
         except Exception as e:
-            print(f"❌ Error updating distance function: {e}")
+            print(f"Error updating distance function: {e}")
             self.db_conn.rollback()
             import traceback
             traceback.print_exc()
@@ -8087,7 +8094,7 @@ class MLDPShell:
         if '--start' in args:
             # Start distance calculation in background
             if not self.current_experiment:
-                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                print("No experiment selected. Use 'set experiment <id>' first.")
                 return
 
             # Parse options
@@ -8107,13 +8114,13 @@ class MLDPShell:
                     try:
                         workers = int(args[i + 1])
                     except ValueError:
-                        print(f"❌ Invalid workers value: {args[i + 1]}")
+                        print(f"Invalid workers value: {args[i + 1]}")
                         return
                 elif arg == '--feature_sets' and i + 1 < len(args):
                     try:
                         feature_set_filter = [int(x.strip()) for x in args[i + 1].split(',')]
                     except ValueError:
-                        print(f"❌ Invalid feature_sets value: {args[i + 1]}")
+                        print(f"Invalid feature_sets value: {args[i + 1]}")
                         print("   Expected format: --feature_sets 1,2,3,4,5")
                         return
 
@@ -8181,7 +8188,7 @@ class MLDPShell:
             cursor.close()
             conn.close()
 
-            print(f"📊 Configuration:")
+            print(f"Configuration:")
             print(f"   Mode: {'--clean (starting fresh)' if clean_mode else '--resume (continuing existing)'}")
             print(f"   Workers: {workers}")
             if feature_set_filter:
@@ -8213,10 +8220,10 @@ class MLDPShell:
                 print(f"\n📄 Resume Mode:")
                 print(f"   Will continue from existing progress")
 
-            print(f"\n💾 Output:")
+            print(f"\nOutput:")
             print(f"   .processed/{'{'}function_name{'}'}/worker_*_distance_{'{'}function_name{'}'}_batch_*.npy")
             if clean_mode:
-                print(f"   ⚠️  Existing .mpcctl and .processed directories will be deleted")
+                print(f"   Existing .mpcctl and .processed directories will be deleted")
 
             print(f"\n{'='*80}\n")
 
@@ -8224,10 +8231,10 @@ class MLDPShell:
             if not force:
                 response = input("Do you wish to continue? (Y/n): ").strip().lower()
                 if response and response != 'y':
-                    print("❌ Cancelled")
+                    print("Cancelled")
                     return
             else:
-                print("⚠️  --force flag set: Skipping confirmation prompt\n")
+                print("--force flag set: Skipping confirmation prompt\n")
 
             print(f"\n🚀 Starting distance calculation...\n")
 
@@ -8240,7 +8247,7 @@ class MLDPShell:
                         state_file_path.unlink()
                         print(f"🗑️  Removed old state file: {state_file_path}")
                     except Exception as e:
-                        print(f"⚠️  Warning: Could not remove old state file: {e}")
+                        print(f"Warning: Could not remove old state file: {e}")
                         print(f"   Manager will attempt to remove it during cleanup")
 
             # Create log file if requested
@@ -8278,11 +8285,11 @@ class MLDPShell:
                 waited += 0.5
 
             if not state_file.exists():
-                print(f"⚠️  State file not created yet. Monitor progress with:")
+                print(f"State file not created yet. Monitor progress with:")
                 print(f"   mpcctl-distance-function --status")
                 return
 
-            print(f"\n📊 Live Progress Monitor (Press Ctrl+C to detach)\n")
+            print(f"\nLive Progress Monitor (Press Ctrl+C to detach)\n")
 
             # Live progress monitoring loop
             try:
@@ -8323,7 +8330,7 @@ class MLDPShell:
 
                         # Check if completed or stopped
                         if status in ['completed', 'stopped', 'killed']:
-                            print(f"\n✅ Calculation {status}")
+                            print(f"\nCalculation {status}")
                             break
 
                         time.sleep(1.0)
@@ -8335,7 +8342,7 @@ class MLDPShell:
 
             except KeyboardInterrupt:
                 print(f"\n\n⏸️  Detached from monitoring (calculation continues in background)")
-                print(f"\n📊 Monitor progress:")
+                print(f"\nMonitor progress:")
                 print(f"   mpcctl-distance-function --status")
                 print(f"\n⏸️  Control:")
                 print(f"   mpcctl-distance-function --pause")
@@ -8349,12 +8356,12 @@ class MLDPShell:
             import json
 
             if not self.current_experiment:
-                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                print("No experiment selected. Use 'set experiment <id>' first.")
                 return
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_state.json')
             if not state_file.exists():
-                print("❌ No active distance calculation found")
+                print("No active distance calculation found")
                 print("   Start with: mpcctl-distance-function --start --workers 20")
                 return
 
@@ -8376,7 +8383,7 @@ class MLDPShell:
                 eta_minutes = eta_seconds // 60
                 eta_seconds_remainder = eta_seconds % 60
 
-                print(f"\n📊 Distance Calculation Progress")
+                print(f"\nDistance Calculation Progress")
                 print(f"   Status: {status}")
                 print(f"   [{bar}] {percent:.1f}%")
                 print(f"   Completed: {progress.get('completed_pairs', 0):,} / {progress.get('total_pairs', 0):,} pairs")
@@ -8388,7 +8395,7 @@ class MLDPShell:
                     print(f"   Log: {state['log_file']}")
 
             except Exception as e:
-                print(f"❌ Error reading status: {e}")
+                print(f"Error reading status: {e}")
 
         elif '--pause' in args:
             # Send pause command
@@ -8398,7 +8405,7 @@ class MLDPShell:
 
             state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
             if not state_file.exists():
-                print("❌ No active distance calculation found")
+                print("No active distance calculation found")
                 return
 
             try:
@@ -8418,7 +8425,7 @@ class MLDPShell:
                 print("   Use 'mpcctl-distance-function --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending pause signal: {e}")
+                print(f"Error sending pause signal: {e}")
 
         elif '--continue' in args:
             # Send resume command
@@ -8428,7 +8435,7 @@ class MLDPShell:
 
             state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
             if not state_file.exists():
-                print("❌ No active distance calculation found")
+                print("No active distance calculation found")
                 return
 
             try:
@@ -8448,7 +8455,7 @@ class MLDPShell:
                 print("   Use 'mpcctl-distance-function --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending resume signal: {e}")
+                print(f"Error sending resume signal: {e}")
 
         elif '--stop' in args:
             # Send stop command
@@ -8458,7 +8465,7 @@ class MLDPShell:
 
             state_file = Path('/Volumes/ArcData/V3_database/experiment041/.mpcctl_state.json')
             if not state_file.exists():
-                print("❌ No active distance calculation found")
+                print("No active distance calculation found")
                 return
 
             try:
@@ -8473,12 +8480,12 @@ class MLDPShell:
                 with open(state_file, 'w') as f:
                     json.dump(state, f, indent=2)
 
-                print("⏹️  Stop signal sent")
+                print("Stop signal sent")
                 print("   Workers will exit gracefully after current pair")
                 print("   Use 'mpcctl-distance-function --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending stop signal: {e}")
+                print(f"Error sending stop signal: {e}")
 
         elif '--kill-all' in args:
             # Kill all workers forcefully
@@ -8488,12 +8495,12 @@ class MLDPShell:
             import psutil
 
             if not self.current_experiment:
-                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                print("No experiment selected. Use 'set experiment <id>' first.")
                 return
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_state.json')
             if not state_file.exists():
-                print("❌ No active distance calculation found")
+                print("No active distance calculation found")
                 return
 
             try:
@@ -8502,13 +8509,13 @@ class MLDPShell:
 
                 manager_pid = state.get('manager_pid')
 
-                print(f"⚠️  WARNING: This will forcefully terminate all workers!")
+                print(f"WARNING: This will forcefully terminate all workers!")
                 print(f"   Manager process PID: {manager_pid}")
                 print()
                 response = input("Type 'KILL' to confirm: ").strip()
 
                 if response != 'KILL':
-                    print("❌ Cancelled")
+                    print("Cancelled")
                     return
 
                 killed_count = 0
@@ -8518,12 +8525,12 @@ class MLDPShell:
                     try:
                         import os
                         os.kill(manager_pid, signal.SIGTERM)
-                        print(f"✅ Sent SIGTERM to manager (PID {manager_pid})")
+                        print(f"Sent SIGTERM to manager (PID {manager_pid})")
                         killed_count += 1
                     except ProcessLookupError:
-                        print(f"⚠️  Manager process {manager_pid} not found")
+                        print(f"Manager process {manager_pid} not found")
                     except Exception as e:
-                        print(f"⚠️  Error killing manager: {e}")
+                        print(f"Error killing manager: {e}")
 
                 # Kill workers by finding python processes with mpcctl in command line
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -8531,12 +8538,12 @@ class MLDPShell:
                         cmdline = proc.info.get('cmdline', [])
                         if cmdline and any('mpcctl_cli_distance_calculator' in str(arg) for arg in cmdline):
                             proc.terminate()
-                            print(f"✅ Sent SIGTERM to worker (PID {proc.info['pid']})")
+                            print(f"Sent SIGTERM to worker (PID {proc.info['pid']})")
                             killed_count += 1
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
 
-                print(f"\n✅ Terminated {killed_count} processes")
+                print(f"\nTerminated {killed_count} processes")
 
                 # Update state file
                 state['status'] = 'killed'
@@ -8544,10 +8551,10 @@ class MLDPShell:
                     json.dump(state, f, indent=2)
 
             except Exception as e:
-                print(f"❌ Error killing processes: {e}")
+                print(f"Error killing processes: {e}")
 
         else:
-            print("❌ Unknown option. Use --help for usage information.")
+            print("Unknown option. Use --help for usage information.")
 
     def cmd_mpcctl_distance_insert(self, args):
         """Control MPCCTL distance database insertion with background execution."""
@@ -8596,7 +8603,7 @@ class MLDPShell:
         if '--start' in args:
             # Start database insertion in background
             if not self.current_experiment:
-                print("❌ No experiment selected. Use 'set experiment <id>' first.")
+                print("No experiment selected. Use 'set experiment <id>' first.")
                 return
 
             # Parse options
@@ -8613,21 +8620,21 @@ class MLDPShell:
                     try:
                         workers = int(args[i + 1])
                     except ValueError:
-                        print(f"❌ Invalid workers value: {args[i + 1]}")
+                        print(f"Invalid workers value: {args[i + 1]}")
                         return
                 elif arg == '--distances' and i + 1 < len(args):
                     distances = args[i + 1]
                 elif arg == '--method' and i + 1 < len(args):
                     method = args[i + 1]
                     if method not in ['copy', 'insert']:
-                        print(f"❌ Invalid method: {method}")
+                        print(f"Invalid method: {method}")
                         print("   Use 'copy' or 'insert'")
                         return
                 elif arg == '--batch-size' and i + 1 < len(args):
                     try:
                         batch_size = int(args[i + 1])
                     except ValueError:
-                        print(f"❌ Invalid batch size: {args[i + 1]}")
+                        print(f"Invalid batch size: {args[i + 1]}")
                         return
 
             # Import required modules
@@ -8693,7 +8700,7 @@ class MLDPShell:
             cursor.close()
             conn.close()
 
-            print(f"📊 Configuration:")
+            print(f"Configuration:")
             print(f"   Workers: {workers}")
             print(f"   Method: {method.upper()} {'(fast, PostgreSQL COPY)' if method == 'copy' else '(safe, INSERT with ON CONFLICT)'}")
             print(f"   Batch size: {batch_size} files")
@@ -8708,16 +8715,16 @@ class MLDPShell:
                     print(f"   {func_name}: {count:,} files")
                 print(f"   Total files: {total_files:,}")
             else:
-                print(f"   ⚠️  No distance files found in {processed_dir}")
+                print(f"   No distance files found in {processed_dir}")
 
-            print(f"\n💾 Current Database Records:")
+            print(f"\nCurrent Database Records:")
             for func_name, display_name, table_prefix in distance_functions:
                 count = db_record_counts.get(func_name, 0)
                 table_name = f"experiment_{self.current_experiment:03d}_distance_{func_name}"
                 print(f"   {display_name} ({table_name}): {count:,} records")
 
             if method == 'copy':
-                print(f"\n⚠️  WARNING: COPY method will fail if:")
+                print(f"\nWARNING: COPY method will fail if:")
                 print(f"   - Distance tables already contain data")
                 print(f"   - Distance files contain duplicate keys")
                 print(f"   Use INSERT method for safer incremental inserts")
@@ -8732,10 +8739,10 @@ class MLDPShell:
             if not force:
                 response = input("Do you wish to continue? (Y/n): ").strip().lower()
                 if response and response != 'y':
-                    print("❌ Cancelled")
+                    print("Cancelled")
                     return
             else:
-                print("⚠️  --force flag set: Skipping confirmation prompt\n")
+                print("--force flag set: Skipping confirmation prompt\n")
 
             print(f"\n🚀 Starting distance insertion...\n")
 
@@ -8747,7 +8754,7 @@ class MLDPShell:
                     state_file_path.unlink()
                     print(f"🗑️  Removed old state file: {state_file_path}")
                 except Exception as e:
-                    print(f"⚠️  Warning: Could not remove old state file: {e}")
+                    print(f"Warning: Could not remove old state file: {e}")
                     print(f"   Manager will attempt to remove it during cleanup")
 
             # Create log file if requested
@@ -8786,11 +8793,11 @@ class MLDPShell:
                 waited += 0.5
 
             if not state_file.exists():
-                print(f"⚠️  State file not created yet. Monitor progress with:")
+                print(f"State file not created yet. Monitor progress with:")
                 print(f"   mpcctl-distance-insert --status")
                 return
 
-            print(f"\n📊 Live Progress Monitor (Press Ctrl+C to detach)\n")
+            print(f"\nLive Progress Monitor (Press Ctrl+C to detach)\n")
 
             # Live progress monitoring loop
             try:
@@ -8833,7 +8840,7 @@ class MLDPShell:
 
                         # Check if completed or stopped
                         if status in ['completed', 'stopped', 'killed']:
-                            print(f"\n✅ Insertion {status}")
+                            print(f"\nInsertion {status}")
                             break
 
                         time.sleep(1.0)
@@ -8845,7 +8852,7 @@ class MLDPShell:
 
             except KeyboardInterrupt:
                 print(f"\n\n⏸️  Detached from monitoring (insertion continues in background)")
-                print(f"\n📊 Monitor progress:")
+                print(f"\nMonitor progress:")
                 print(f"   mpcctl-distance-insert --status")
                 print(f"\n⏸️  Control:")
                 print(f"   mpcctl-distance-insert --pause")
@@ -8859,7 +8866,7 @@ class MLDPShell:
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/distance_insert/state.json')
             if not state_file.exists():
-                print("❌ No active distance insertion found")
+                print("No active distance insertion found")
                 return
 
             try:
@@ -8868,7 +8875,7 @@ class MLDPShell:
 
                 status = state.get('status', 'unknown')
 
-                print(f"\n📊 Distance Insertion Status - Experiment {state.get('experiment_id', 'N/A')}")
+                print(f"\nDistance Insertion Status - Experiment {state.get('experiment_id', 'N/A')}")
                 print(f"   Status: {status}")
 
                 if 'progress' in state:
@@ -8903,7 +8910,7 @@ class MLDPShell:
                     print(f"   Batch size: {metrics.get('batch_size', 'N/A')}")
 
             except Exception as e:
-                print(f"❌ Error reading state: {e}")
+                print(f"Error reading state: {e}")
 
         elif '--pause' in args:
             # Send pause command
@@ -8913,7 +8920,7 @@ class MLDPShell:
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
             if not state_file.exists():
-                print("❌ No active distance insertion found")
+                print("No active distance insertion found")
                 return
 
             try:
@@ -8933,7 +8940,7 @@ class MLDPShell:
                 print("   Use 'mpcctl-distance-insert --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending pause signal: {e}")
+                print(f"Error sending pause signal: {e}")
 
         elif '--continue' in args:
             # Send resume command
@@ -8943,7 +8950,7 @@ class MLDPShell:
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
             if not state_file.exists():
-                print("❌ No active distance insertion found")
+                print("No active distance insertion found")
                 return
 
             try:
@@ -8963,7 +8970,7 @@ class MLDPShell:
                 print("   Use 'mpcctl-distance-insert --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending resume signal: {e}")
+                print(f"Error sending resume signal: {e}")
 
         elif '--stop' in args:
             # Send stop command
@@ -8973,7 +8980,7 @@ class MLDPShell:
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
             if not state_file.exists():
-                print("❌ No active distance insertion found")
+                print("No active distance insertion found")
                 return
 
             try:
@@ -8988,12 +8995,12 @@ class MLDPShell:
                 with open(state_file, 'w') as f:
                     json.dump(state, f, indent=2)
 
-                print("⏹️  Stop signal sent")
+                print("Stop signal sent")
                 print("   Workers will exit gracefully after current batch")
                 print("   Use 'mpcctl-distance-insert --status' to verify")
 
             except Exception as e:
-                print(f"❌ Error sending stop signal: {e}")
+                print(f"Error sending stop signal: {e}")
 
         elif '--list-processes' in args:
             # List all mpcctl distance insert processes
@@ -9003,7 +9010,7 @@ class MLDPShell:
 
             state_file = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_insert_state.json')
 
-            print(f"\n🔍 MPCCTL Distance Insert Processes (Experiment {self.current_experiment}):")
+            print(f"\nMPCCTL Distance Insert Processes (Experiment {self.current_experiment}):")
             print("=" * 70)
 
             # Check state file for manager PID
@@ -9019,7 +9026,7 @@ class MLDPShell:
                     print(f"  Workers: {state.get('workers_count', 0)}")
                     print(f"  Start Time: {state.get('start_time', 'unknown')}")
                 except Exception as e:
-                    print(f"  ⚠️  Error reading state file: {e}")
+                    print(f"  Error reading state file: {e}")
             else:
                 print(f"\n  ℹ️  No active manager process (no state file)")
 
@@ -9041,7 +9048,7 @@ class MLDPShell:
                     print(f"\n  ℹ️  No active worker processes found")
 
             except Exception as e:
-                print(f"  ⚠️  Error listing processes: {e}")
+                print(f"  Error listing processes: {e}")
 
             print()
 
@@ -9057,23 +9064,23 @@ class MLDPShell:
                     try:
                         pid = int(args[i + 1])
                     except ValueError:
-                        print(f"❌ Invalid PID: {args[i + 1]}")
+                        print(f"Invalid PID: {args[i + 1]}")
                         return
 
             if pid is None:
-                print("❌ No PID specified. Usage: mpcctl-distance-insert --kill <PID>")
+                print("No PID specified. Usage: mpcctl-distance-insert --kill <PID>")
                 return
 
             try:
                 os.kill(pid, signal.SIGTERM)
-                print(f"⚠️  Sent SIGTERM to PID {pid}")
+                print(f"Sent SIGTERM to PID {pid}")
                 print(f"   Process will terminate gracefully")
             except ProcessLookupError:
-                print(f"❌ No process found with PID {pid}")
+                print(f"No process found with PID {pid}")
             except PermissionError:
-                print(f"❌ Permission denied to kill PID {pid}")
+                print(f"Permission denied to kill PID {pid}")
             except Exception as e:
-                print(f"❌ Error killing process {pid}: {e}")
+                print(f"Error killing process {pid}: {e}")
 
         elif '--kill-all' in args:
             # Kill all mpcctl distance insert processes
@@ -9114,21 +9121,21 @@ class MLDPShell:
                             except ValueError:
                                 continue
             except Exception as e:
-                print(f"❌ Error finding processes: {e}")
+                print(f"Error finding processes: {e}")
                 return
 
             if not pids_to_kill:
                 print("ℹ️  No mpcctl-distance-insert processes found")
                 return
 
-            print(f"⚠️  Found {len(pids_to_kill)} process(es) to kill:")
+            print(f"Found {len(pids_to_kill)} process(es) to kill:")
             for pid in pids_to_kill:
                 print(f"   PID {pid}")
 
             # Confirm
             response = input("\nKill all these processes? (yes/no): ").strip().lower()
             if response not in ['yes', 'y']:
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
 
             # Kill all processes
@@ -9136,27 +9143,27 @@ class MLDPShell:
             for pid in pids_to_kill:
                 try:
                     os.kill(pid, signal.SIGKILL)
-                    print(f"✅ Killed PID {pid}")
+                    print(f"Killed PID {pid}")
                     killed += 1
                 except ProcessLookupError:
-                    print(f"⚠️  PID {pid} already terminated")
+                    print(f"PID {pid} already terminated")
                 except PermissionError:
-                    print(f"❌ Permission denied for PID {pid}")
+                    print(f"Permission denied for PID {pid}")
                 except Exception as e:
-                    print(f"❌ Error killing PID {pid}: {e}")
+                    print(f"Error killing PID {pid}: {e}")
 
-            print(f"\n✅ Killed {killed}/{len(pids_to_kill)} processes")
+            print(f"\nKilled {killed}/{len(pids_to_kill)} processes")
 
             # Clean up state file
             if state_file.exists():
                 try:
                     os.remove(state_file)
-                    print(f"✅ Removed state file")
+                    print(f"Removed state file")
                 except Exception as e:
-                    print(f"⚠️  Could not remove state file: {e}")
+                    print(f"Could not remove state file: {e}")
 
         else:
-            print("❌ Unknown option. Use --help for usage information.")
+            print("Unknown option. Use --help for usage information.")
 
     def cmd_mpcctl_execute_experiment(self, args):
         """Execute complete MPCCTL experiment pipeline from file selection to distance insertion
@@ -9193,11 +9200,11 @@ class MLDPShell:
             mpcctl-execute-experiment --workers 20 --log --verbose --force
         """
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         if not self.current_experiment:
-            print("❌ No experiment selected. Use 'set experiment <id>' first.")
+            print("No experiment selected. Use 'set experiment <id>' first.")
             return
 
         if '--help' in args:
@@ -9247,7 +9254,7 @@ class MLDPShell:
                 try:
                     workers = int(args[i + 1])
                 except ValueError:
-                    print(f"❌ Invalid workers value: {args[i + 1]}")
+                    print(f"Invalid workers value: {args[i + 1]}")
                     return
 
         # Banner
@@ -9258,7 +9265,7 @@ class MLDPShell:
         print(f"   Workers: {workers}")
         print(f"   Log files: {'Enabled' if log_enabled else 'Disabled'}")
         print(f"   Verbose: {'Enabled' if verbose else 'Disabled'}")
-        print(f"\n📊 Pipeline Steps:")
+        print(f"\nPipeline Steps:")
         step_num = 1
         if not skip_file_selection:
             print(f"   {step_num}. select-files")
@@ -9307,10 +9314,10 @@ class MLDPShell:
         if not force:
             response = input("Do you wish to continue with pipeline execution? (Y/n): ").strip().lower()
             if response and response != 'y':
-                print("❌ Pipeline execution cancelled")
+                print("Pipeline execution cancelled")
                 return
         else:
-            print("⚠️  --force flag set: Skipping confirmation prompt\n")
+            print("--force flag set: Skipping confirmation prompt\n")
 
         # Execute pipeline with timing
         import time
@@ -9332,7 +9339,7 @@ class MLDPShell:
                 step_times['select-files'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in select-files: {e}")
+                print(f"Error in select-files: {e}")
                 failed_commands.append('select-files')
                 step_times['select-files'] = time.time() - step_start
 
@@ -9347,7 +9354,7 @@ class MLDPShell:
                 step_times['select-segments'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in select-segments: {e}")
+                print(f"Error in select-segments: {e}")
                 failed_commands.append('select-segments')
                 step_times['select-segments'] = time.time() - step_start
 
@@ -9362,7 +9369,7 @@ class MLDPShell:
                 step_times['generate-segment-fileset'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in generate-segment-fileset: {e}")
+                print(f"Error in generate-segment-fileset: {e}")
                 failed_commands.append('generate-segment-fileset')
                 step_times['generate-segment-fileset'] = time.time() - step_start
 
@@ -9377,7 +9384,7 @@ class MLDPShell:
                 step_times['generate-segment-pairs'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in generate-segment-pairs: {e}")
+                print(f"Error in generate-segment-pairs: {e}")
                 failed_commands.append('generate-segment-pairs')
                 step_times['generate-segment-pairs'] = time.time() - step_start
 
@@ -9392,7 +9399,7 @@ class MLDPShell:
                 step_times['generate-feature-fileset'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in generate-feature-fileset: {e}")
+                print(f"Error in generate-feature-fileset: {e}")
                 failed_commands.append('generate-feature-fileset')
                 step_times['generate-feature-fileset'] = time.time() - step_start
 
@@ -9412,7 +9419,7 @@ class MLDPShell:
                 step_times['mpcctl-distance-function'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in mpcctl-distance-function: {e}")
+                print(f"Error in mpcctl-distance-function: {e}")
                 failed_commands.append('mpcctl-distance-function')
                 step_times['mpcctl-distance-function'] = time.time() - step_start
 
@@ -9432,7 +9439,7 @@ class MLDPShell:
                 step_times['mpcctl-distance-insert'] = time.time() - step_start
                 success_count += 1
             except Exception as e:
-                print(f"❌ Error in mpcctl-distance-insert: {e}")
+                print(f"Error in mpcctl-distance-insert: {e}")
                 failed_commands.append('mpcctl-distance-insert')
                 step_times['mpcctl-distance-insert'] = time.time() - step_start
 
@@ -9478,15 +9485,15 @@ class MLDPShell:
         print(f"\n   Total time: {total_time_str}")
 
         if success_count == total_steps:
-            print(f"\n✅ Pipeline execution completed successfully")
+            print(f"\nPipeline execution completed successfully")
             print(f"   Experiment {self.current_experiment} is ready for analysis")
         else:
-            print(f"\n⚠️  Some pipeline steps failed. Check errors above.")
+            print(f"\nSome pipeline steps failed. Check errors above.")
 
     def cmd_generate_feature_fileset(self, args):
         """Generate feature files from segment data"""
         if not self.db_conn:
-            print("❌ Not connected to database. Use 'connect' first.")
+            print("Not connected to database. Use 'connect' first.")
             return
 
         # Show help if requested or if no experiment set
@@ -9515,13 +9522,13 @@ class MLDPShell:
             print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
             print("\n📁 Output Structure:")
             print("  experiment{NNN}/feature_files/S{size}/T{type}/D{decimation}/*_FS{id}[_N_{n}].npy")
-            print("\n📊 Processing Details:")
+            print("\nProcessing Details:")
             print("  - Processes ALL decimation levels (S000512 to S524288)")
             print("  - Processes ALL ADC types (TRAW, TADC6, TADC8, TADC10, TADC12, TADC14)")
             print("  - Mirrors segment_files/ directory structure exactly")
             print("  - Tracks original_segment_length AND stored_segment_length")
             print("  - Enables decimation/information-loss analysis")
-            print("\n⚙️  Database Records:")
+            print("\nDatabase Records:")
             print("  Each extraction creates a record in experiment_{NNN}_feature_fileset with:")
             print("    - segment_id, file_id, feature_set_id, n_value")
             print("    - original_segment_length (from data_segments)")
@@ -9529,7 +9536,7 @@ class MLDPShell:
             print("    - adc_type, adc_division")
             print("    - feature_file_path, num_chunks, extraction_time")
             if not self.current_experiment:
-                print("\n⚠️  No experiment selected. Use 'set experiment <id>' first.")
+                print("\nNo experiment selected. Use 'set experiment <id>' first.")
             return
 
         feature_set_ids = None  # Default: all configured feature sets
@@ -9603,15 +9610,15 @@ class MLDPShell:
             cursor.close()
 
         except psycopg2.Error as e:
-            print(f"\n❌ Database error: {e}")
-            print(f"⚠️  Rolling back transaction...")
+            print(f"\nDatabase error: {e}")
+            print(f"Rolling back transaction...")
             self.db_conn.rollback()
             return
         except Exception as e:
-            print(f"\n❌ Error during configuration query: {e}")
+            print(f"\nError during configuration query: {e}")
             return
 
-        print(f"📊 Input:")
+        print(f"Input:")
         print(f"   Segment files available: {segment_file_count:,}")
         if max_segments:
             print(f"   Will process: {max_segments:,} files (limited)")
@@ -9636,12 +9643,12 @@ class MLDPShell:
         if not force_reextract:
             response = input("Do you wish to continue? (Y/n): ").strip().lower()
             if response and response != 'y':
-                print("❌ Cancelled")
+                print("Cancelled")
                 return
         else:
-            print("⚠️  --force flag set: Skipping confirmation prompt\n")
+            print("--force flag set: Skipping confirmation prompt\n")
 
-        print(f"\n🔄 Starting feature extraction...")
+        print(f"\nStarting feature extraction...")
 
         try:
             # Import the feature extractor module
@@ -9658,13 +9665,13 @@ class MLDPShell:
             )
             
             if result['success']:
-                print(f"\n✅ Successfully extracted features!")
+                print(f"\nSuccessfully extracted features!")
                 print(f"   Total segments: {result['total_segments']}")
                 print(f"   Total feature sets: {result['total_feature_sets']}")
                 print(f"   Total extracted: {result['total_extracted']}")
                 
                 if result['failed_count'] > 0:
-                    print(f"\n⚠️  Failed extractions: {result['failed_count']}")
+                    print(f"\nFailed extractions: {result['failed_count']}")
                     if result.get('failed_extractions'):
                         print("   First few failures:")
                         for fail in result['failed_extractions'][:5]:
@@ -9675,13 +9682,13 @@ class MLDPShell:
                     print(f"   Average time per extraction: {result['average_extraction_time']:.2f}s")
                     print(f"   Total extraction time: {result['total_extraction_time']:.2f}s")
             else:
-                print(f"\n❌ Failed to extract features: {result.get('error', 'Unknown error')}")
+                print(f"\nFailed to extract features: {result.get('error', 'Unknown error')}")
                 
         except ImportError:
-            print("❌ ExperimentFeatureExtractor module not found")
+            print("ExperimentFeatureExtractor module not found")
             print("   Make sure experiment_feature_extractor.py is in the same directory")
         except Exception as e:
-            print(f"❌ Error generating feature fileset: {e}")
+            print(f"Error generating feature fileset: {e}")
     
     def _create_segment_selector_module(self):
         """Create the segment selector module if it doesn't exist"""
@@ -18110,12 +18117,12 @@ class MLDPShell:
                 print(f"✓ experiment_noise_floor table already exists")
                 print(f"  Current entries: {count}")
             else:
-                print("❌ experiment_noise_floor table does not exist")
+                print("experiment_noise_floor table does not exist")
                 print("Run the SQL registration script to create it:")
                 print("  psql -h localhost -U kjensen -d arc_detection -f noise_floor_sql_registration.sql")
 
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
             import traceback
             traceback.print_exc()
 
@@ -18165,7 +18172,7 @@ class MLDPShell:
             print()
 
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
             import traceback
             traceback.print_exc()
 
@@ -18219,7 +18226,7 @@ class MLDPShell:
             results = calculator.calculate_noise_floor(data_type_id)
 
             if not results:
-                print("\n❌ No noise floor values calculated")
+                print("\nNo noise floor values calculated")
                 print("Check that approved steady-state segments exist")
                 return
 
@@ -18230,7 +18237,7 @@ class MLDPShell:
             self.cmd_noise_floor_show([])
 
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
             import traceback
             traceback.print_exc()
 
@@ -18261,7 +18268,7 @@ class MLDPShell:
             elif args[0] == '--type' and len(args) > 1:
                 data_type_id = int(args[1])
             else:
-                print("❌ Unknown option. Use --all or --type <id>")
+                print("Unknown option. Use --all or --type <id>")
                 return
 
             db_params = {
@@ -18307,7 +18314,7 @@ class MLDPShell:
             print(f"\n✓ Cleared {rows_deleted} entries")
 
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
             import traceback
             traceback.print_exc()
 
@@ -18804,13 +18811,13 @@ class MLDPShell:
                 break
 
         if not script_path:
-            print(f"❌ Script file not found: {filename}")
+            print(f"Script file not found: {filename}")
             print(f"   Searched in:")
             for path in search_paths:
                 print(f"     - {path}")
             return
 
-        print(f"📜 Executing script: {script_path}")
+        print(f"Executing script: {script_path}")
         print(f"   Continue on error: {continue_on_error}")
         print(f"   Echo commands: {echo_commands}")
         print()
@@ -18853,30 +18860,30 @@ class MLDPShell:
                             self.commands[cmd](cmd_args)
                             executed_commands += 1
                         else:
-                            print(f"❌ Unknown command at line {line_num}: {cmd}")
+                            print(f"Unknown command at line {line_num}: {cmd}")
                             failed_commands += 1
                             if not continue_on_error:
-                                print(f"⏹️  Stopping execution (use --continue to continue on errors)")
+                                print(f"Stopping execution (use --continue to continue on errors)")
                                 break
 
                     except Exception as e:
-                        print(f"❌ Error at line {line_num}: {e}")
+                        print(f"Error at line {line_num}: {e}")
                         failed_commands += 1
                         if not continue_on_error:
-                            print(f"⏹️  Stopping execution (use --continue to continue on errors)")
+                            print(f"Stopping execution (use --continue to continue on errors)")
                             break
 
         except FileNotFoundError:
-            print(f"❌ Could not open file: {script_path}")
+            print(f"Could not open file: {script_path}")
             return
         except Exception as e:
-            print(f"❌ Error reading script: {e}")
+            print(f"Error reading script: {e}")
             return
 
         # Print summary
         print()
         print("=" * 60)
-        print(f"📊 Script Execution Summary")
+        print(f"Script Execution Summary")
         print("=" * 60)
         print(f"   Total lines: {line_num}")
         print(f"   Skipped (blank/comments): {skipped_lines}")
@@ -18924,7 +18931,7 @@ class MLDPShell:
         scripts_path = MLDP_ROOT / "scripts" / "start_services.sh"
         
         if not scripts_path.exists():
-            print(f"❌ start_services.sh not found at {scripts_path}")
+            print(f"start_services.sh not found at {scripts_path}")
             return
         
         print("🚀 Starting all MLDP servers...")
@@ -18939,20 +18946,20 @@ class MLDPShell:
                 cwd=str(MLDP_ROOT)
             )
             if result.returncode == 0:
-                print("\n✅ All servers started successfully!")
+                print("\nAll servers started successfully!")
                 print("\nUse 'status' to check server status")
             else:
-                print("\n⚠️  Some servers may have failed to start")
+                print("\nSome servers may have failed to start")
                 print("Use 'status' to check which services are running")
         except Exception as e:
-            print(f"❌ Error starting servers: {e}")
+            print(f"Error starting servers: {e}")
     
     def cmd_servers_stop(self, args):
         """Stop all MLDP servers"""
         scripts_path = MLDP_ROOT / "scripts" / "stop_services.sh"
         
         if not scripts_path.exists():
-            print(f"❌ stop_services.sh not found at {scripts_path}")
+            print(f"stop_services.sh not found at {scripts_path}")
             return
         
         print("🛑 Stopping all MLDP servers...")
@@ -18966,16 +18973,16 @@ class MLDPShell:
             )
             print(result.stdout)
             if result.returncode == 0:
-                print("✅ All servers stopped successfully!")
+                print("All servers stopped successfully!")
             else:
-                print("⚠️  Some servers may still be running")
+                print("Some servers may still be running")
                 print("Use 'status' to check")
         except Exception as e:
-            print(f"❌ Error stopping servers: {e}")
+            print(f"Error stopping servers: {e}")
     
     def cmd_servers_restart(self, args):
         """Restart all MLDP servers"""
-        print("🔄 Restarting all MLDP servers...")
+        print("Restarting all MLDP servers...")
         print("─" * 60)
         
         # Stop servers
@@ -19005,7 +19012,7 @@ class MLDPShell:
             ("segment_verifier", 5034, "Segment Verifier"),
         ]
         
-        print("\n📊 MLDP Server Status")
+        print("\nMLDP Server Status")
         print("=" * 70)
         print(f"{'Service':<30} {'Port':<8} {'PID':<10} {'Status':<15} {'URL'}")
         print("-" * 70)
@@ -19032,16 +19039,16 @@ class MLDPShell:
                         text=True
                     )
                     if result.returncode == 0:
-                        status = "✅ Running"
+                        status = "Running"
                         running_count += 1
                     else:
-                        status = "❌ Not Running"
+                        status = "Not Running"
                         url = "-"
                 except Exception:
-                    status = "❌ Error"
+                    status = "Error"
                     url = "-"
             else:
-                status = "⏹️  Stopped"
+                status = "Stopped"
                 url = "-"
             
             print(f"{display_name:<30} {port:<8} {pid_str:<10} {status:<15} {url}")
@@ -19052,9 +19059,9 @@ class MLDPShell:
         if running_count == total_count:
             print("\n🎉 All services are running!")
         elif running_count == 0:
-            print("\n⚠️  No services are running. Use 'start' to start them.")
+            print("\nNo services are running. Use 'start' to start them.")
         else:
-            print(f"\n⚠️  Only {running_count}/{total_count} services are running.")
+            print(f"\nOnly {running_count}/{total_count} services are running.")
             print("Use 'restart' to restart all services.")
     
     def cmd_servers_logs(self, args):
@@ -19076,7 +19083,7 @@ class MLDPShell:
                 )
                 print(result.stdout)
             else:
-                print(f"❌ Log file not found: {log_file}")
+                print(f"Log file not found: {log_file}")
                 print("\nAvailable services:")
                 for log_file in sorted(logs_path.glob("*.log")):
                     print(f"  • {log_file.stem}")
@@ -19096,7 +19103,7 @@ class MLDPShell:
                 else:
                     print("No log files found")
             else:
-                print("❌ Logs directory not found")
+                print("Logs directory not found")
     
     def cmd_segment_generate(self, args):
         """Generate segment fileset for experiment"""
@@ -19193,7 +19200,7 @@ class MLDPShell:
             workers=16
         )
         
-        print("\n✅ Generation complete!")
+        print("\nGeneration complete!")
 
     def cmd_generate_segment_fileset(self, args):
         """Generate physical segment files from raw data on disk
@@ -19242,17 +19249,17 @@ class MLDPShell:
             # Use current experiment set via 'set experiment'
             experiment_id = self.current_experiment
         else:
-            print("❌ No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
+            print("No experiment specified. Use 'set experiment <id>' first or provide experiment_id as argument.")
             return
 
         # Special handling for experiment 18 with legacy code
         if experiment_id == 18 and '--files' in args:
-            print(f"🔄 Using legacy generator for experiment 18...")
+            print(f"Using legacy generator for experiment 18...")
             self.cmd_segment_generate(args)
             return
 
         # Use new generator for all experiments
-        print(f"🔄 Generating segment fileset for experiment {experiment_id}...")
+        print(f"Generating segment fileset for experiment {experiment_id}...")
 
         # Parse arguments - only use if explicitly provided
         data_types = None  # Will use experiment config if not specified
@@ -19334,7 +19341,7 @@ class MLDPShell:
 
             # Pre-flight check: show what will be generated
             if not self._show_segment_generation_plan(experiment_id, data_types, decimations):
-                print("❌ Cancelled by user")
+                print("Cancelled by user")
                 return
 
             # Generate fileset - pass None to use experiment config
@@ -19346,20 +19353,20 @@ class MLDPShell:
             )
 
             if result.get('files_created', 0) > 0:
-                print(f"\n✅ Successfully generated segment files!")
+                print(f"\nSuccessfully generated segment files!")
                 print(f"   Files created: {result['files_created']}")
                 print(f"   Files skipped: {result['files_skipped']}")
                 print(f"   Segments processed: {result['segments_processed']}")
                 print(f"   Output path: {generator.segment_path}")
             else:
-                print(f"\n❌ No segment files generated")
+                print(f"\nNo segment files generated")
                 print(f"   Files failed: {result.get('files_failed', 0)}")
 
         except ImportError:
-            print("❌ ExperimentSegmentFilesetGeneratorV2 module not found")
+            print("ExperimentSegmentFilesetGeneratorV2 module not found")
             print("   Make sure experiment_segment_fileset_generator_v2.py is in the same directory")
         except Exception as e:
-            print(f"❌ Error generating segment fileset: {e}")
+            print(f"Error generating segment fileset: {e}")
 
     def _show_segment_generation_plan(self, experiment_id, override_data_types=None, override_decimations=None):
         """Show pre-flight information about what will be generated
@@ -19393,7 +19400,7 @@ class MLDPShell:
             distinct_sizes = [row[0] for row in cursor.fetchall()]
 
             if len(distinct_sizes) != 1:
-                print(f"⚠️  Warning: Segments have multiple sizes: {distinct_sizes}")
+                print(f"Warning: Segments have multiple sizes: {distinct_sizes}")
                 print(f"   Expected all segments to be the same size")
                 cursor.close()
                 conn.close()
@@ -19402,7 +19409,7 @@ class MLDPShell:
             segment_size = distinct_sizes[0]
 
             if total_segments == 0:
-                print("❌ No segments selected for this experiment")
+                print("No segments selected for this experiment")
                 print("   Run 'select-segments' first")
                 cursor.close()
                 conn.close()
@@ -19448,7 +19455,7 @@ class MLDPShell:
             print(f"📋 SEGMENT GENERATION PLAN - Experiment {experiment_id}")
             print(f"{'='*80}")
 
-            print(f"\n📊 Input Configuration:")
+            print(f"\nInput Configuration:")
             print(f"   Total segments selected: {total_segments:,}")
             print(f"   Segment size: {segment_size} samples")
             print(f"      - All {total_segments:,} segments are size {segment_size}")
@@ -19486,7 +19493,7 @@ class MLDPShell:
                 return False
 
         except Exception as e:
-            print(f"❌ Error calculating generation plan: {e}")
+            print(f"Error calculating generation plan: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -19499,7 +19506,7 @@ class MLDPShell:
         base_path = Path('/Volumes/ArcData/V3_database/experiment018/segment_files')
         progress_file = base_path / 'generation_progress.json'
         
-        print("\n📊 Segment Generation Status")
+        print("\nSegment Generation Status")
         print("="*60)
         
         # Check progress file
@@ -19567,7 +19574,7 @@ class MLDPShell:
             workers=2
         )
         
-        print("\n✅ Test complete!")
+        print("\nTest complete!")
     
     def cmd_validate_segments(self, args):
         """Validate generated segment files"""
@@ -19576,7 +19583,7 @@ class MLDPShell:
         
         base_path = Path('/Volumes/ArcData/V3_database/experiment018/segment_files')
         
-        print("\n🔍 Validating Segment Files")
+        print("\nValidating Segment Files")
         print("="*60)
         
         # Sample some files
@@ -19601,11 +19608,11 @@ class MLDPShell:
                 file_id = parts[1]
                 data_type = parts[3]
                 
-                status = "✅" if is_power_of_2 else "❌"
+                status = "" if is_power_of_2 else ""
                 print(f"{status} {filename[:40]:<40} Shape: {data.shape}, 2^N: {is_power_of_2}")
                 
             except Exception as e:
-                print(f"❌ Error validating {filepath.name}: {e}")
+                print(f"Error validating {filepath.name}: {e}")
 
     def cmd_feature_plot(self, args):
         """Plot feature files with statistical visualization
@@ -19649,7 +19656,7 @@ class MLDPShell:
 
         # Validate required parameters
         if not file_path:
-            print("❌ Error: --file is required")
+            print("Error: --file is required")
             print("\nUsage: feature-plot --file <path> [--output-folder <path>] [--save <filename>]")
             print("\nExample:")
             print("  feature-plot --file /Volumes/ArcData/V3_database/experiment041/feature_files/S000512/TADC8/D000015/SID00012527_F00000238_D000015_TADC8_S008192_R000512_FS0001_N_00000064.npy")
@@ -19657,7 +19664,7 @@ class MLDPShell:
 
         file_path = Path(file_path)
         if not file_path.exists():
-            print(f"❌ Error: File not found: {file_path}")
+            print(f"Error: File not found: {file_path}")
             return
 
         # Determine save location
@@ -19674,11 +19681,11 @@ class MLDPShell:
         try:
             data = np.load(file_path)
         except Exception as e:
-            print(f"❌ Error loading file: {e}")
+            print(f"Error loading file: {e}")
             return
 
         if data.ndim != 2:
-            print(f"❌ Error: Expected 2D array (windows × features), got shape {data.shape}")
+            print(f"Error: Expected 2D array (windows × features), got shape {data.shape}")
             return
 
         filename = file_path.name
@@ -19729,7 +19736,7 @@ class MLDPShell:
                         break
 
             except Exception as e:
-                print(f"⚠️  Warning: Could not fetch labels from database: {e}")
+                print(f"Warning: Could not fetch labels from database: {e}")
                 column_labels = [f"Feature {i}" for i in range(data.shape[1])]
         else:
             column_labels = [f"Feature {i}" for i in range(data.shape[1])]
@@ -19738,7 +19745,7 @@ class MLDPShell:
         while len(column_labels) < data.shape[1]:
             column_labels.append(f"Feature {len(column_labels)}")
 
-        print(f"\n📊 Feature File: {filename}")
+        print(f"\nFeature File: {filename}")
         print(f"   Shape: {data.shape}")
         print(f"   Windows: {data.shape[0]:,}")
         print(f"   Columns: {data.shape[1]}")
@@ -19778,12 +19785,12 @@ class MLDPShell:
 
         if save_location:
             plt.savefig(save_location, dpi=150, bbox_inches='tight')
-            print(f"💾 Saved plot to: {save_location}")
+            print(f"Saved plot to: {save_location}")
             plt.close()
         else:
             plt.show()
 
-        print("\n✅ Feature plotting complete!")
+        print("\nFeature plotting complete!")
 
     def cmd_segment_plot(self, args):
         """Plot segment files with statistical analysis
@@ -19982,7 +19989,7 @@ class MLDPShell:
         
         # Check required parameters
         if not params['output_folder']:
-            print("❌ Error: --output-folder is required")
+            print("Error: --output-folder is required")
             print("\nUsage: segment-plot --output-folder <path> [options]")
             print("\nExample:")
             print("  segment-plot --original-segment 104075 --decimations 0 --output-folder ~/plots/")
@@ -19994,7 +20001,7 @@ class MLDPShell:
         if params['types'] is None:
             params['types'] = ['RAW']
         
-        print(f"\n📊 Starting Segment Plot Generation")
+        print(f"\nStarting Segment Plot Generation")
         print(f"Output folder: {params['output_folder']}")
         print(f"Experiment: {params['experiment_id']}")
         print(f"Decimations: {params['decimations']}")
@@ -20006,9 +20013,9 @@ class MLDPShell:
         # Call the plotting function
         try:
             plot_segment_files(**params)
-            print("\n✅ Plotting complete!")
+            print("\nPlotting complete!")
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
             import traceback
             traceback.print_exc()
 
