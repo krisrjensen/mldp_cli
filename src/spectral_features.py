@@ -4,10 +4,11 @@ Filename: spectral_features.py
 Author(s): Kristophor Jensen
 Date Created: 20251105_000000
 Date Revised: 20251105_000000
-File version: 1.0.0.1
+File version: 1.0.0.2
 Description: Spectral feature extraction functions for MLDP
              Implements SNR, mean PSD, slope, and SFM for different frequency bands
              All frequency bands are RELATIVE to max usable frequency (Nyquist)
+             Fixed divide-by-zero handling in SNR calculation for very clean signals
 """
 
 import numpy as np
@@ -120,12 +121,16 @@ def _compute_snr_in_band(signal: np.ndarray, start_bin: int, end_bin: int) -> fl
     # Use standard deviation of PSD as noise estimate
     noise_power = np.std(band_psd) ** 2
 
-    # Avoid division by zero
-    if noise_power < 1e-12:
-        noise_power = 1e-12
+    # Avoid division by zero and log of zero/negative
+    # Set minimum thresholds for both signal and noise
+    signal_power = max(signal_power, 1e-12)
+    noise_power = max(noise_power, 1e-12)
 
-    # Calculate SNR in dB
-    snr_db = 10 * np.log10(signal_power / noise_power)
+    # Calculate SNR in dB with safe ratio
+    ratio = signal_power / noise_power
+    ratio = max(ratio, 1e-12)  # Ensure positive for log10
+
+    snr_db = 10 * np.log10(ratio)
 
     return float(snr_db)
 
