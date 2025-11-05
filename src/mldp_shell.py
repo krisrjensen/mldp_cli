@@ -3,17 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251029_000000
-File version: 2.0.10.35
+Date Revised: 20251104_000000
+File version: 2.0.11.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 10)
-- CHANGE: Tracks changes within current commit cycle (currently 35)
+- COMMIT: Increments on every git commit/push (currently 11)
+- CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (10.35):
+Changes in this version (11.0):
+1. TEST INFRASTRUCTURE - Added source command test scripts
+   - v2.0.11.0: Added test_source_command.sh for basic functionality tests
+                Added test_source_advanced.sh for advanced scenarios
+                Added README_SOURCE_TESTS.md with complete documentation
+                Test scripts verify comment handling, blank lines, command execution
+                Supports --echo and --continue flags
+                All tests passing: 6 commands executed, 0 failed, 57 lines skipped
+
+Changes in previous versions (10.35):
 1. NOISE FLOOR SCALERS - Removed redundant database save code
    - v2.0.10.35: Removed old code calling calculator.store_noise_floor()
                  Method doesn't exist - calculate_noise_floor() already saves internally
