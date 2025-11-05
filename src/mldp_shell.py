@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.7
+File version: 2.0.11.8
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.7"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.8"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -5414,75 +5414,131 @@ SETTINGS:
         if not self.db_conn:
             print("Not connected to database. Use 'connect' first.")
             return
-            
-        max_files = 50  # Default
-        seed = 42  # Default for experiment 41
-        strategy = 'random'  # Default strategy
+
+        # Defaults
+        label_filter = None  # Specific label to select
+        max_files = 50
+        seed = 42
+        strategy = 'random'
         min_quality = None
         dry_run = False
-        
+        mode = 'replace'  # Default: replace existing for this label
+
         # Parse arguments
         i = 0
         while i < len(args):
-            if args[i] == '--max-files' and i + 1 < len(args):
-                max_files = int(args[i + 1])
-                i += 2
-            elif args[i] == '--seed' and i + 1 < len(args):
-                seed = int(args[i + 1])
-                i += 2
-            elif args[i] == '--strategy' and i + 1 < len(args):
-                strategy = args[i + 1]
-                i += 2
-            elif args[i] == '--min-quality' and i + 1 < len(args):
-                min_quality = float(args[i + 1])
-                i += 2
-            elif args[i] == '--dry-run':
-                dry_run = True
-                i += 1
-            elif args[i] == '--help':
-                print("\nUsage: select-files [options]")
-                print("\nOptions:")
-                print("  --strategy STRATEGY    Selection strategy: random|balanced|quality_first (default: random)")
-                print("  --max-files N         Maximum files per label (default: 50)")
-                print("  --seed N              Random seed for reproducibility (default: 42)")
-                print("  --min-quality N       Minimum quality score for quality_first strategy")
-                print("  --dry-run             Preview selection without saving to database")
-                print("\nExample:")
-                print("  select-files --strategy random --max-files 50 --seed 42")
-                return
+            if args[i].startswith('--'):
+                # Handle flags
+                if args[i] == '--count' and i + 1 < len(args):
+                    max_files = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--max-files' and i + 1 < len(args):
+                    max_files = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--seed' and i + 1 < len(args):
+                    seed = int(args[i + 1])
+                    i += 2
+                elif args[i] == '--strategy' and i + 1 < len(args):
+                    strategy = args[i + 1]
+                    i += 2
+                elif args[i] == '--min-quality' and i + 1 < len(args):
+                    min_quality = float(args[i + 1])
+                    i += 2
+                elif args[i] == '--clean':
+                    mode = 'clean'
+                    i += 1
+                elif args[i] == '--replace':
+                    mode = 'replace'
+                    i += 1
+                elif args[i] == '--add':
+                    mode = 'add'
+                    i += 1
+                elif args[i] == '--remove':
+                    mode = 'remove'
+                    i += 1
+                elif args[i] == '--dry-run':
+                    dry_run = True
+                    i += 1
+                elif args[i] == '--help':
+                    print("\nUsage: select-files <label> [options]")
+                    print("\nArguments:")
+                    print("  <label>               Label to select files for (or ALL for all labels)")
+                    print("\nOptions:")
+                    print("  --strategy STRATEGY   Selection strategy: random|balanced|quality_first (default: random)")
+                    print("  --count N            Maximum files to select for this label (default: 50)")
+                    print("  --seed N              Random seed for reproducibility (default: 42)")
+                    print("  --min-quality N       Minimum quality score for quality_first strategy")
+                    print("\nModes:")
+                    print("  --replace            Replace existing selection for this label (default)")
+                    print("  --add                Add to existing selection for this label")
+                    print("  --clean              Remove all files for this label")
+                    print("  --remove             Remove files for this label (keeps others)")
+                    print("  --dry-run            Preview selection without saving to database")
+                    print("\nExamples:")
+                    print("  select-files arc --count 50 --strategy random --seed 42")
+                    print("  select-files arc --clean")
+                    print("  select-files arc --count 10 --add")
+                    return
+                else:
+                    i += 1
             else:
+                # First non-flag argument is the label
+                if label_filter is None:
+                    label_filter = args[i]
                 i += 1
         
         print(f"Selecting files for experiment {self.current_experiment}...")
+        print(f"   Mode: {mode}")
+        if label_filter:
+            print(f"   Label filter: {label_filter}")
         print(f"   Strategy: {strategy}")
         print(f"   Max files per label: {max_files}")
         print(f"   Random seed: {seed}")
         if min_quality:
             print(f"   Minimum quality: {min_quality}")
-        
+
         try:
             from experiment_file_selector import ExperimentFileSelector
-            
+
             selector = ExperimentFileSelector(self.current_experiment, self.db_conn)
-            
+
+            # Handle clean and remove modes (delete only, no selection)
+            if mode in ('clean', 'remove'):
+                if label_filter:
+                    result = selector.delete_files_by_label(label_filter)
+                    if result['success']:
+                        print(f"[SUCCESS] Removed {result['deleted_count']} files with label '{label_filter}'")
+                    else:
+                        print(f"[ERROR] Failed to remove files: {result.get('error', 'Unknown error')}")
+                else:
+                    # No label specified - clear all
+                    deleted = selector.clear_existing_selection()
+                    print(f"[SUCCESS] Removed {deleted} files from training data")
+                return
+
             if dry_run:
                 # Preview available files
-                files_by_label = selector.get_available_files()
+                files_by_label = selector.get_available_files(label_filter=label_filter)
                 print(f"\nAvailable files by label:")
                 total_available = 0
                 for label, files in files_by_label.items():
                     print(f"   {label}: {len(files)} files")
                     total_available += len(files)
                 print(f"   Total: {total_available} files")
-                print("\n💡 Run without --dry-run to save selection")
+                print("\nRun without --dry-run to save selection")
                 return
-            
+
+            # Handle replace and add modes
+            skip_clear = (mode == 'add')  # Don't clear if adding
+
             # Perform selection
             result = selector.select_files(
                 strategy=strategy,
                 max_files_per_label=max_files,
                 seed=seed,
-                min_quality=min_quality
+                min_quality=min_quality,
+                label_filter=label_filter,
+                skip_clear=skip_clear
             )
             
             if result['success']:

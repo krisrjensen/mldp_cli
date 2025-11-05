@@ -4,8 +4,14 @@ Filename: experiment_file_selector.py
 Author: Kristophor Jensen
 Date Created: 20250915_090000
 Date Revised: 20251104_000000
-File version: 1.0.0.1
+File version: 1.0.0.2
 Description: File selection for experiment training data
+
+Changes in v1.0.0.2:
+- Added label_filter parameter to get_available_files() and select_files()
+- Added skip_clear parameter to select_files() for --add mode
+- Added delete_files_by_label() method for --clean and --remove modes
+- Implemented support for --clean, --replace, --add, --remove modes
 
 Changes in v1.0.0.1:
 - Fixed SQL query to use files_x instead of files table
@@ -78,7 +84,7 @@ class ExperimentFileSelector:
         cursor = self.db_conn.cursor()
         try:
             cursor.execute(f"""
-                DELETE FROM {self.table_name} 
+                DELETE FROM {self.table_name}
                 WHERE experiment_id = %s
             """, (self.experiment_id,))
             deleted = cursor.rowcount
@@ -92,13 +98,46 @@ class ExperimentFileSelector:
             return 0
         finally:
             cursor.close()
+
+    def delete_files_by_label(self, label: str) -> Dict[str, Any]:
+        """Delete files with a specific label from the training data
+
+        Args:
+            label: Label name to delete files for
+
+        Returns:
+            Dictionary with success status and deleted count
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute(f"""
+                DELETE FROM {self.table_name}
+                WHERE experiment_id = %s AND file_label_name = %s
+            """, (self.experiment_id, label))
+            deleted = cursor.rowcount
+            self.db_conn.commit()
+            logger.info(f"Deleted {deleted} files with label '{label}'")
+            return {'success': True, 'deleted_count': deleted}
+        except psycopg2.Error as e:
+            self.db_conn.rollback()
+            logger.error(f"Error deleting files by label: {e}")
+            return {'success': False, 'error': str(e)}
+        finally:
+            cursor.close()
     
-    def get_available_files(self) -> Dict[str, List[Dict]]:
-        """Get all available files grouped by label"""
+    def get_available_files(self, label_filter: str = None) -> Dict[str, List[Dict]]:
+        """Get all available files grouped by label
+
+        Args:
+            label_filter: Optional label name to filter by
+
+        Returns:
+            Dictionary mapping label names to lists of file info dictionaries
+        """
         cursor = self.db_conn.cursor(cursor_factory=RealDictCursor)
         try:
-            # Query files with their labels
-            cursor.execute("""
+            # Build query with optional label filter
+            query = """
                 SELECT DISTINCT
                     f.file_id,
                     f.original_filename as file_name,
@@ -113,8 +152,20 @@ class ExperimentFileSelector:
                 LEFT JOIN files_y fy ON f.file_id = fy.file_id
                 LEFT JOIN experiment_labels el ON fy.label_id = el.label_id
                 WHERE f.total_samples > 0
-                ORDER BY el.experiment_label, f.file_id
-            """)
+            """
+
+            params = []
+            if label_filter:
+                query += " AND el.experiment_label = %s"
+                params.append(label_filter)
+
+            query += " ORDER BY el.experiment_label, f.file_id"
+
+            # Execute query
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
             
             # Group by label
             files_by_label = {}
@@ -132,32 +183,41 @@ class ExperimentFileSelector:
         finally:
             cursor.close()
     
-    def select_files(self, strategy: str = 'random', max_files_per_label: int = 50, 
-                    seed: int = 42, min_quality: float = None) -> Dict[str, Any]:
+    def select_files(self, strategy: str = 'random', max_files_per_label: int = 50,
+                    seed: int = 42, min_quality: float = None,
+                    label_filter: str = None, skip_clear: bool = False) -> Dict[str, Any]:
         """
         Select files for training data based on strategy
-        
+
         Args:
             strategy: Selection strategy ('random', 'balanced', 'quality_first')
             max_files_per_label: Maximum files to select per label
             seed: Random seed for reproducibility
             min_quality: Minimum quality score (if applicable)
-            
+            label_filter: Optional label name to select files for
+            skip_clear: If True, don't clear existing selections (for --add mode)
+
         Returns:
             Dictionary with selection results
         """
         # Set random seed for reproducibility
         random.seed(seed)
-        
+
         # Create table if needed
         if not self.create_training_table():
             return {'success': False, 'error': 'Failed to create training table'}
-        
-        # Clear existing selections
-        self.clear_existing_selection()
-        
+
+        # Clear existing selections (unless skip_clear is True for --add mode)
+        if not skip_clear:
+            if label_filter:
+                # Clear only this label (for --replace mode with specific label)
+                self.delete_files_by_label(label_filter)
+            else:
+                # Clear all (for --replace mode without label)
+                self.clear_existing_selection()
+
         # Get available files
-        files_by_label = self.get_available_files()
+        files_by_label = self.get_available_files(label_filter=label_filter)
         
         if not files_by_label:
             return {'success': False, 'error': 'No files available'}
