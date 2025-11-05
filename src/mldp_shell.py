@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.9
+File version: 2.0.11.10
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.9"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.10"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -3502,30 +3502,58 @@ SETTINGS:
         try:
             decimation = int(args[0])
         except ValueError:
-            print(f"Invalid decimation value. Must be an integer.")
+            print(f"[ERROR] Invalid decimation value. Must be an integer.")
+            return
+
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
             return
 
         try:
-            from experiment_configurator import ExperimentConfigurator
+            cursor = self.db_conn.cursor()
 
-            db_config = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
+            # Check if decimation exists in lookup table
+            cursor.execute("""
+                SELECT 1 FROM ml_experiment_decimation_lut
+                WHERE decimation_factor = %s
+            """, (decimation,))
 
-            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            if not cursor.fetchone():
+                print(f"[ERROR] Decimation factor {decimation} does not exist in ml_experiment_decimation_lut")
+                cursor.close()
+                return
 
-            print(f"Adding decimation {decimation} to experiment {self.current_experiment}...")
-            if configurator.add_decimation(decimation):
-                print(f"Decimation {decimation} added successfully")
-            else:
-                print(f"Decimation {decimation} already exists or failed to add")
+            # Check if already added to experiment
+            cursor.execute("""
+                SELECT 1 FROM ml_experiments_decimation
+                WHERE experiment_id = %s AND decimation_factor = %s
+            """, (self.current_experiment, decimation))
 
-        except ImportError as e:
-            print(f"Could not import configurator: {e}")
+            if cursor.fetchone():
+                print(f"[INFO] Decimation factor {decimation} already exists in experiment {self.current_experiment}")
+                cursor.close()
+                return
+
+            # Get next ID
+            cursor.execute("""
+                SELECT COALESCE(MAX(experiment_decimation_id), 0) + 1
+                FROM ml_experiments_decimation
+            """)
+            next_id = cursor.fetchone()[0]
+
+            # Add to experiment
+            cursor.execute("""
+                INSERT INTO ml_experiments_decimation (experiment_decimation_id, experiment_id, decimation_factor)
+                VALUES (%s, %s, %s)
+            """, (next_id, self.current_experiment, decimation))
+
+            self.db_conn.commit()
+            print(f"[SUCCESS] Added decimation factor {decimation} to experiment {self.current_experiment}")
+            cursor.close()
+
         except Exception as e:
-            print(f"Error adding decimation: {e}")
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to add decimation: {e}")
 
     def cmd_remove_decimation(self, args):
         """Remove a single decimation factor from current experiment"""
@@ -3900,30 +3928,61 @@ SETTINGS:
         try:
             data_type_id = int(args[0])
         except ValueError:
-            print(f"Invalid data type ID: {args[0]}")
+            print(f"[ERROR] Invalid data type ID: {args[0]}")
+            return
+
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
             return
 
         try:
-            from experiment_configurator import ExperimentConfigurator
+            cursor = self.db_conn.cursor()
 
-            db_config = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
+            # Check if data type exists in lookup table
+            cursor.execute("""
+                SELECT data_type_name FROM ml_data_types_lut
+                WHERE data_type_id = %s
+            """, (data_type_id,))
 
-            configurator = ExperimentConfigurator(self.current_experiment, db_config)
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Data type {data_type_id} does not exist in ml_data_types_lut")
+                cursor.close()
+                return
 
-            print(f"Adding data type {data_type_id} to experiment {self.current_experiment}...")
-            if configurator.add_data_type(data_type_id):
-                print(f"Data type {data_type_id} added")
-            else:
-                print(f"Data type already exists or failed to add")
+            data_type_name = result[0]
 
-        except ImportError as e:
-            print(f"Could not import configurator: {e}")
+            # Check if already added to experiment
+            cursor.execute("""
+                SELECT 1 FROM ml_experiments_data_types
+                WHERE experiment_id = %s AND data_type_id = %s
+            """, (self.current_experiment, data_type_id))
+
+            if cursor.fetchone():
+                print(f"[INFO] Data type {data_type_id} ({data_type_name}) already exists in experiment {self.current_experiment}")
+                cursor.close()
+                return
+
+            # Get next ID
+            cursor.execute("""
+                SELECT COALESCE(MAX(experiment_data_type_id), 0) + 1
+                FROM ml_experiments_data_types
+            """)
+            next_id = cursor.fetchone()[0]
+
+            # Add to experiment
+            cursor.execute("""
+                INSERT INTO ml_experiments_data_types (experiment_data_type_id, experiment_id, data_type_id)
+                VALUES (%s, %s, %s)
+            """, (next_id, self.current_experiment, data_type_id))
+
+            self.db_conn.commit()
+            print(f"[SUCCESS] Added data type {data_type_id} ({data_type_name}) to experiment {self.current_experiment}")
+            cursor.close()
+
         except Exception as e:
-            print(f"Error adding data type: {e}")
+            self.db_conn.rollback()
+            print(f"[ERROR] Failed to add data type: {e}")
 
     def cmd_list_data_types(self, args):
         """List data types for current experiment"""
@@ -6323,7 +6382,7 @@ SETTINGS:
             """, (self.current_experiment, func_id))
 
             if cursor.fetchone()[0] > 0:
-                print(f"WARNING: {func_name} ({display_name}) is already configured for experiment {self.current_experiment}")
+                print(f"[INFO] Distance metric {func_name} ({display_name}) already exists in experiment {self.current_experiment}")
                 return
 
             # Get next experiment_distance_id
@@ -6338,10 +6397,10 @@ SETTINGS:
 
             self.db_conn.commit()
 
-            print(f"SUCCESS: Added {func_name} ({display_name}) to experiment {self.current_experiment}")
+            print(f"[SUCCESS] Added distance metric {func_name} ({display_name}) to experiment {self.current_experiment}")
 
         except Exception as e:
-            print(f"Error adding distance metric: {e}")
+            print(f"[ERROR] Failed to add distance metric: {e}")
             self.db_conn.rollback()
 
     def cmd_remove_distance_metric(self, args):
