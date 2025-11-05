@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.11
+File version: 2.0.11.12
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.11"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.12"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1509,6 +1509,7 @@ class MLDPShell:
             'generate-feature-fileset': self.cmd_generate_feature_fileset,
             'help': self.cmd_help,
             'source': self.cmd_source,
+            'reload-modules': self.cmd_reload_modules,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
             # Server management commands
