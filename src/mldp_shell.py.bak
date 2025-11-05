@@ -3,177 +3,18 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251104_000000
-File version: 2.0.11.3
+Date Revised: 20251028_004000
+File version: 2.0.10.12
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- COMMIT: Increments on every git commit/push (currently 10)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (11.3):
-1. NEW COMMAND - Added echo command for script output
-   - v2.0.11.3: Added cmd_echo() method for printing text in scripts
-                Enables echo commands in source scripts for better script readability
-                Usage: echo "text to display"
-                Supports script documentation and progress messages
-
-Changes in previous version (11.2):
-1. VERSION CORRECTION - Fixed version number from incorrect rollback
-   - v2.0.11.2: Corrected version from 2.0.11.0 to 2.0.11.2
-                Previous running version was 2.0.11.1, should increment not rollback
-
-Changes in this version (11.1):
-1. TEST INFRASTRUCTURE - Added source command test scripts
-   - v2.0.11.1: Added test_source_command.sh for basic functionality tests
-                Added test_source_advanced.sh for advanced scenarios
-                Added README_SOURCE_TESTS.md with complete documentation
-                Test scripts verify comment handling, blank lines, command execution
-                Supports --echo and --continue flags
-                All tests passing: 6 commands executed, 0 failed, 57 lines skipped
-
-Changes in previous versions (10.35):
-1. NOISE FLOOR SCALERS - Removed redundant database save code
-   - v2.0.10.35: Removed old code calling calculator.store_noise_floor()
-                 Method doesn't exist - calculate_noise_floor() already saves internally
-                 Fixed AttributeError: 'NoiseFloorCalculator' object has no attribute 'store_noise_floor'
-                 Verified data type ID mappings are correct (adc6=6, adc8=2, adc10=3, adc12=4)
-
-Changes in previous versions (10.30):
-1. NOISE FLOOR SCALERS - Fixed f-string syntax error
-   - v2.0.10.30: Fixed SyntaxError: f-string expression part cannot include a backslash
-                 Moved complex list comprehension outside f-string to separate variable
-                 Updated noise_floor_calculator.py to v1.0.0.8
-
-Changes in previous versions (10.29):
-1. NOISE FLOOR SCALERS - Filter invalid bit depths and add progress output
-   - v2.0.10.29: Added SQL filter bit_depth <= 12 to exclude adc14/adc24
-                 Raw files are 12-bit max, can't requantize to higher depths
-                 Added comprehensive progress output with print statements
-                 Shows query status, data type summary, per-type progress
-                 Progress updates every 100 segments with percentage
-                 Success/failed counters, final summaries
-                 User-friendly output with ✓ and ❌ symbols
-                 Updated noise_floor_calculator.py to v1.0.0.7
-
-Changes in previous versions (10.28):
-1. NOISE FLOOR SCALERS - Fixed signed integer handling
-   - v2.0.10.28: Fixed noise_floor_calculator.py to handle signed integers in raw data
-                 Added dtype check and conversion to uint32
-                 Handle signed data by masking with 0xFFFFFFFF
-                 Added bit_depth validation (1-12)
-                 Use np.right_shift() for proper unsigned handling
-                 Prevents "Python integer -12 out of bounds for uint32" error
-                 Updated noise_floor_calculator.py to v1.0.0.6
-
-Changes in previous versions (10.27):
-1. NOISE FLOOR SCALERS - MAJOR REWRITE: Load from raw ADC files
-   - v2.0.10.27: Rewrote noise_floor_calculator.py to load from adc_data/ directory
-                 Loads raw 12-bit ADC files and extracts segments using database offsets
-                 Requantizes to target bit depth (adc6, adc8, adc10, adc12)
-                 Fixes issue where segment_files/ don't exist for all segments
-                 All segments now accessible from raw ADC data
-                 Updated noise_floor_calculator.py to v1.0.0.5
-
-Changes in previous versions (10.26):
-1. NOISE FLOOR SCALERS - Fixed path and SQL query bugs
-   - v2.0.10.26: Fixed path construction to include experiment ID
-                 NoiseFloorCalculator now accepts experiment_id parameter
-                 Path correctly built as data_root/experiment{id:03d}/segment_files/
-                 Fixed SQL query: is_quantized → is_raw = false (correct column name)
-                 All 4 CLI commands pass self.current_experiment to calculator
-                 Updated noise_floor_calculator.py to v1.0.0.4
-
-Changes in previous versions (10.25):
-1. NOISE FLOOR SCALERS - CRITICAL FIX: Load raw ADC segment data
-   - v2.0.10.25: Fixed noise_floor_calculator.py to load RAW segment files instead of processed features
-                 Changed from feature_fileset to data_segments query with CROSS JOIN to data types
-                 Updated path construction to use segment_files/S{length}/T{type}/D000000/
-                 Filters for is_quantized=true to get only ADC data types
-                 Default segment_length=8192 to match available data
-                 Updated noise_floor_calculator.py to v1.0.0.3
-
-Changes in previous versions (10.24):
-1. NOISE FLOOR SCALERS - Fixed numpy type conversion bug
-   - v2.0.10.24: Fixed noise_floor_calculator.py to convert numpy types to Python native types
-                 Prevents PostgreSQL "schema 'np' does not exist" error
-                 Converts np.float64 → float and np.int64 → int before database insert
-                 Updated noise_floor_calculator.py to v1.0.0.2
-
-Changes in previous versions (10.23):
-1. NOISE FLOOR SCALERS - Added 4 CLI commands for noise floor amplitude normalization
-   - v2.0.10.23: Added noise-floor-init command (check table exists, show entry count)
-                 Added noise-floor-show command (display all calculated values)
-                 Added noise-floor-calculate command (compute from approved steady-state segments)
-                 Added noise-floor-clear command (delete entries with confirmation)
-                 Created noise_floor_calculator.py module with spectral PSD calculations
-                 Uses Welch's method + 10th percentile for noise floor estimation
-                 Database table: experiment_noise_floor
-
-Changes in previous versions (10.22):
-1. PHASE 4 ENHANCEMENT - Improved heatmap visualization formatting
-   - v2.0.10.22: Changed metric precision from 3 to 2 decimal places (0.95 instead of 0.950)
-                 Removed global colorbar limits (vmin=0, vmax=1) for local scaling per subplot
-                 Each heatmap now uses full color spectrum based on its own data range
-                 Reduced annotation font size to 8pt for better readability
-1. PHASE 4 BUGFIX - Fixed table name in classifier query builder
-   - v2.0.10.21: Fixed ml_feature_set_lut → ml_feature_sets_lut (plural)
-                 Corrected JOIN in classifier_query_builder.py
-1. PHASE 4 VISUALIZATION - Added classifier results visualization with extensible registry pattern
-   - v2.0.10.20: Added classifier-plot-results command with registry-based architecture
-                 Created classifier_configs.py with ClassifierRegistry pattern for extensibility
-                 Created classifier_query_builder.py for classifier-agnostic SQL queries
-                 Supports any classifier type (SVM, RF, future: XGBoost, etc.)
-                 Generates heatmap plots with configurable X/Y axes and subplot layouts
-                 Default layout: 6 subplots (3 feature sets × 2 amplitude methods)
-                 Heatmap boxes colored by F1 score, annotated with ROC/F1/PR metrics
-                 Groups results by hyperparameter (e.g., C parameter: C0_1/, C1_0/, C10_0/)
-                 Generates plots for all three data splits (train/test/verify)
-                 Future classifiers can be added by creating config and registering
-1. PHASE 4 CRITICAL BUG FIX - Fixed LinearSVC steady-state prediction bug
-   - v2.0.10.19: Removed CalibratedClassifierCV wrapper that destroyed predictions
-                 Base LinearSVC: predicts all 13 classes correctly ✓
-                 After CalibratedClassifierCV(cv=2): only 2-4 classes ✗
-                 Root cause: cv=2 insufficient for 13-class calibration
-                 Solution: Use base LinearSVC directly without calibration
-                 Added softmax(decision_function) for probability estimates
-                 LinearSVC now works correctly with 800MB memory usage
-2. PHASE 4 BUG INVESTIGATION - Added diagnostic logging for LinearSVC steady-state bug
-   - v2.0.10.18: Train base LinearSVC without calibration to isolate bug
-                 Log predictions from base model before CalibratedClassifierCV wrapper
-                 Auto-retry without class_weight='balanced' if single-class detected
-                 Successfully identified CalibratedClassifierCV as root cause
-2. PHASE 4 MEMORY OPTIMIZATION - Disabled SVC shrinking heuristic to increase cache usage
-   - v2.0.10.17: Added shrinking=False to SVC to force full cache utilization
-                 Should increase memory usage beyond 295MB cap (TESTED: still caps at 293MB)
-                 May improve speed by keeping all support vectors in working set
-2. PHASE 4 MEMORY OPTIMIZATION - Fixed cache size configuration for kernel matrix operations
-   - v2.0.10.16: Enforced minimum 2GB cache per SVC worker (linear/rbf/poly kernels)
-                 Increased default memory budget from 16GB to 80GB
-                 Added warning when cache per worker is below minimum
-                 Fixed O(n²-n³) kernel matrix computation performance bottleneck
-2. PHASE 4 VISUALIZATION - Added F1 threshold curves for SVM and RF trainers
-   - v2.0.10.15: Both SVM and RF trainers now generate F1 score vs threshold curves
-                 Shows optimal classification threshold for binary arc detection
-                 Generates 3 plots per split: train/test/verify
-2. PHASE 4 SVM CONFIGURATION - Added --use-linear-svc flag for algorithm choice
-   - v2.0.10.14: Added --use-linear-svc flag to classifier-train-svm command
-                 By default, uses SVC(kernel='linear') for consistency across all kernels
-                 With --use-linear-svc, uses LinearSVC for 10-100x faster linear training
-                 User can choose between speed (LinearSVC) and consistency (SVC)
-                 Allows testing both implementations for comparison
-
-2. PHASE 4 RANDOM FOREST - Added Random Forest classifier training support
-   - v2.0.10.13: Added classifier-train-rf command with MPCCTL architecture
-                 Supports same configuration as SVM (decimation, data_type, amplitude, feature_set)
-                 RF hyperparameters: n_estimators, max_depth, min_samples_split, max_features
-                 Grid search: [50,100,200,500] trees × [10,20,30,None] depth × [2,5,10] split × ['sqrt','log2',None] features
-                 Uses same feature vectors as SVM for direct comparison
-                 Results stored in experiment_{exp}_classifier_{cls}_rf_results tables
-
-2. PHASE 4 ARCHITECTURAL CHANGE - Implemented MPCCTL architecture for SVM training
+Changes in this version (10.1):
+1. PHASE 4 ARCHITECTURAL CHANGE - Implemented MPCCTL architecture for SVM training
    - v2.0.10.1: COMPLETE REWRITE of classifier-train-svm using mpcctl architecture
                 Created new module: mpcctl_svm_trainer.py with file-based worker coordination
                 Manager creates .mpcctl/ directory with {PID}_todo.dat and {PID}_done.dat files
@@ -601,7 +442,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.10.12"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -664,9 +505,6 @@ class MLDPCompleter(Completer):
             'heatmap': ['--version', '--output-dir', '1', '2', '3', '4', '5', '6', '7'],
             'histogram': ['--version', '--bins', '1_0', '1_1', '1_2', '1_3', '50', '100'],
             'visualize': ['--segment-id', '--file-id'],
-
-            # Utility commands
-            'echo': [],
             'segment-plot': ['--amplitude-method', '--original-segment', '--result-segment-size', '--types',
                            '--decimations', '--output-folder', 'raw', 'minmax', 'zscore', 'amplitude_0', 'amplitude_1',
                            'RAW', 'ADC6', 'ADC8', 'ADC10', 'ADC12', 'ADC14', '0', '7', '15'],
@@ -822,7 +660,6 @@ class MLDPCompleter(Completer):
             'export': [],
             'time': [],
             'help': [],  # Will be populated with all command names
-            'source': ['--continue', '--echo'],
             'exit': [],
             'quit': [],
         }
@@ -1430,7 +1267,6 @@ class MLDPShell:
             'closest': self.cmd_closest,
             'set': self.cmd_set,
             'show': self.cmd_show,
-            'echo': self.cmd_echo,
             'verify': self.cmd_verify,
             'clear': self.cmd_clear,
             'export': self.cmd_export,
@@ -1479,7 +1315,6 @@ class MLDPShell:
             'generate-segment-pairs': self.cmd_generate_segment_pairs,
             'generate-feature-fileset': self.cmd_generate_feature_fileset,
             'help': self.cmd_help,
-            'source': self.cmd_source,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
             # Server management commands
@@ -1564,15 +1399,8 @@ class MLDPShell:
             'classifier-train-svm-init': self.cmd_classifier_train_svm_init,
             'classifier-train-svm': self.cmd_classifier_train_svm,
             'classifier-test-svm-single': self.cmd_classifier_test_svm_single,
-            'classifier-train-rf': self.cmd_classifier_train_rf,
-            'classifier-plot-results': self.cmd_plot_classifier_results,
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
-            # Noise floor amplitude normalization commands
-            'noise-floor-init': self.cmd_noise_floor_init,
-            'noise-floor-show': self.cmd_noise_floor_show,
-            'noise-floor-calculate': self.cmd_noise_floor_calculate,
-            'noise-floor-clear': self.cmd_noise_floor_clear,
         }
     
     def get_prompt(self):
@@ -2763,7 +2591,7 @@ class MLDPShell:
         print(f"  Distance Type:  {self.current_distance_type}")
         print(f"  MLDP Root:      {MLDP_ROOT}")
         print(f"  Database:       {'✅ Connected' if self.db_conn else '❌ Not connected'}")
-
+        
         if self.db_conn:
             try:
                 cursor = self.db_conn.cursor()
@@ -2774,20 +2602,7 @@ class MLDPShell:
                 cursor.close()
             except:
                 pass
-
-    def cmd_echo(self, args):
-        """Echo text to output - useful for scripts and documentation"""
-        if args:
-            # Join all arguments with spaces and print
-            # Remove quotes if they're the first and last characters
-            text = ' '.join(args)
-            if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
-                text = text[1:-1]
-            print(text)
-        else:
-            # Empty echo - just print a blank line
-            print()
-
+    
     def cmd_verify(self, args):
         """Verify MLDP tools"""
         print("\n🔍 Verifying MLDP tools...")
@@ -3168,7 +2983,6 @@ class MLDPShell:
   export <filename>                   Export query results (.csv or .json)
   time                                Show current time
   help [command]                      Show help
-  source <file> [--continue] [--echo] Execute commands from script file
   exit/quit                           Exit shell
 
 ⚡ BASH COMMANDS:
@@ -16495,7 +16309,7 @@ class MLDPShell:
 
         Options:
             --workers <n>             Parallel workers (default: 7, max: 28)
-            --memory <mb>             Total memory budget in MB (default: 80000)
+            --memory <mb>             Total memory budget in MB (default: 16000)
             --decimation-factor <n>   Train only this decimation factor
             --data-type <id>          Train only this data type
             --amplitude-method <id>   Train only this amplitude method
@@ -16503,7 +16317,6 @@ class MLDPShell:
             --kernel <type>           SVM kernel: linear, rbf, poly (default: all)
             --C <value>               SVM C parameter (default: grid search)
             --gamma <value>           SVM gamma parameter (default: grid search)
-            --use-linear-svc          Use LinearSVC for linear kernel (10-100x faster)
             --force                   Overwrite existing results
 
         Examples:
@@ -16511,7 +16324,6 @@ class MLDPShell:
             classifier-train-svm --workers 21 --memory 80000
             classifier-train-svm --decimation-factor 0 --data-type 4
             classifier-train-svm --amplitude-method 2 --workers 20 --memory 90000
-            classifier-train-svm --kernel linear --use-linear-svc
             classifier-train-svm --kernel rbf --C 10.0 --gamma 0.01
         """
         # Check session context
@@ -16525,7 +16337,7 @@ class MLDPShell:
 
         # Parse arguments
         num_workers = 7
-        max_memory_mb = 80000  # Default 80GB total memory budget (allows ~4GB per worker with 20 workers)
+        max_memory_mb = 16000  # Default 16GB total memory budget
         filter_dec = None
         filter_dtype = None
         filter_amp = None
@@ -16533,7 +16345,6 @@ class MLDPShell:
         svm_kernel = None
         svm_C = None
         svm_gamma = None
-        use_linear_svc = False  # Use LinearSVC for linear kernel (10-100x faster)
         force = False
 
         i = 0
@@ -16617,9 +16428,6 @@ class MLDPShell:
                 else:
                     print("[ERROR] --gamma requires a value")
                     return
-            elif args[i] == '--use-linear-svc':
-                use_linear_svc = True
-                i += 1
             elif args[i] == '--force':
                 force = True
                 i += 1
@@ -16914,8 +16722,7 @@ class MLDPShell:
                 'amplitude_method': filter_amp,
                 'experiment_feature_set': filter_efs,
                 'svm_kernel': svm_kernel,
-                'svm_C': svm_C,
-                'use_linear_svc': use_linear_svc
+                'svm_C': svm_C
             }
 
             # Create timestamped log file
@@ -16926,13 +16733,6 @@ class MLDPShell:
             print(f"\n[INFO] Starting parallel SVM training with {num_workers} workers...")
             print("[INFO] Using MPCCTL architecture for deadlock-proof training")
             print(f"[INFO] Memory budget: {max_memory_mb:,} MB total ({cache_size_mb:,} MB per worker)")
-
-            # Warn if cache per worker is below minimum (2GB for SVC)
-            if cache_size_mb < 2000:
-                print(f"[WARNING] Cache per worker ({cache_size_mb} MB) is below recommended 2GB minimum")
-                print(f"[WARNING] SVC will automatically use 2GB minimum cache, which may exceed memory budget")
-                print(f"[WARNING] Consider: --memory {num_workers * 2000} or --workers {max_memory_mb // 2000}")
-
             print(f"[INFO] Expected tasks: {total_tasks}")
             print(f"[INFO] Estimated time: {total_tasks * 1.5 / num_workers / 60:.1f} - {total_tasks * 3.0 / num_workers / 60:.1f} minutes\n")
 
@@ -17029,683 +16829,6 @@ class MLDPShell:
                 print("[WARNING] Manager still running, detaching...")
 
             cursor.close()
-
-        except Exception as e:
-            import traceback
-            print(f"[ERROR] {e}")
-            print(traceback.format_exc())
-
-    def cmd_classifier_train_rf(self, args):
-        """
-        Train Random Forest classifier using distance-based feature vectors
-
-        Usage: classifier-train-rf [OPTIONS]
-
-        Trains Random Forest on feature vectors from Phase 3 using data splits from Phase 1.
-        Evaluates on train/test/verification splits with both 13-class and binary
-        arc detection metrics.
-
-        Options:
-            --workers <n>             Parallel workers (default: 7, max: 28)
-            --decimation-factor <n>   Train only this decimation factor
-            --data-type <id>          Train only this data type
-            --amplitude-method <id>   Train only this amplitude method
-            --feature-set <id>        Train only this feature set
-            --n-estimators <n>        Number of trees (default: grid search)
-            --max-depth <n>           Max tree depth (default: grid search)
-            --min-samples-split <n>   Min samples to split (default: grid search)
-            --max-features <val>      Max features per split (default: grid search)
-            --force                   Overwrite existing results
-
-        Examples:
-            classifier-train-rf
-            classifier-train-rf --workers 21
-            classifier-train-rf --decimation-factor 0 --data-type 4
-            classifier-train-rf --amplitude-method 2 --workers 20
-            classifier-train-rf --n-estimators 200 --max-depth 30
-        """
-        # Check session context
-        if not self.current_experiment:
-            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
-            return
-
-        if not self.current_classifier_id:
-            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
-            return
-
-        # Parse arguments
-        num_workers = 7
-        filter_dec = None
-        filter_dtype = None
-        filter_amp = None
-        filter_efs = None
-        n_estimators = None
-        max_depth = None
-        min_samples_split = None
-        max_features = None
-        force = False
-
-        i = 0
-        while i < len(args):
-            if args[i] == '--workers':
-                if i + 1 < len(args):
-                    num_workers = int(args[i + 1])
-                    if num_workers < 1 or num_workers > 28:
-                        print("[ERROR] --workers must be between 1 and 28")
-                        return
-                    i += 2
-                else:
-                    print("[ERROR] --workers requires a value")
-                    return
-            elif args[i] == '--decimation-factor':
-                if i + 1 < len(args):
-                    filter_dec = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --decimation-factor requires a value")
-                    return
-            elif args[i] == '--data-type':
-                if i + 1 < len(args):
-                    filter_dtype = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --data-type requires a value")
-                    return
-            elif args[i] == '--amplitude-method':
-                if i + 1 < len(args):
-                    filter_amp = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --amplitude-method requires a value")
-                    return
-            elif args[i] == '--feature-set':
-                if i + 1 < len(args):
-                    filter_efs = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --feature-set requires a value")
-                    return
-            elif args[i] == '--n-estimators':
-                if i + 1 < len(args):
-                    n_estimators = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --n-estimators requires a value")
-                    return
-            elif args[i] == '--max-depth':
-                if i + 1 < len(args):
-                    if args[i + 1].lower() == 'none':
-                        max_depth = None
-                    else:
-                        max_depth = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --max-depth requires a value")
-                    return
-            elif args[i] == '--min-samples-split':
-                if i + 1 < len(args):
-                    min_samples_split = int(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --min-samples-split requires a value")
-                    return
-            elif args[i] == '--max-features':
-                if i + 1 < len(args):
-                    val = args[i + 1].lower()
-                    if val == 'none':
-                        max_features = None
-                    elif val in ['sqrt', 'log2']:
-                        max_features = val
-                    else:
-                        try:
-                            max_features = int(val)
-                        except ValueError:
-                            print("[ERROR] --max-features must be 'sqrt', 'log2', 'none', or an integer")
-                            return
-                    i += 2
-                else:
-                    print("[ERROR] --max-features requires a value")
-                    return
-            elif args[i] == '--force':
-                force = True
-                i += 1
-            else:
-                print(f"[ERROR] Unknown option: {args[i]}")
-                return
-
-        try:
-            cursor = self.db_conn.cursor()
-            exp_id = self.current_experiment
-            cls_id = self.current_classifier_id
-
-            print(f"\n[INFO] Training Random Forest for Experiment {exp_id}, Classifier {cls_id}")
-            print(f"[INFO] Using {num_workers} parallel workers")
-
-            # Get global_classifier_id
-            cursor.execute("""
-                SELECT global_classifier_id, classifier_name
-                FROM ml_experiment_classifiers
-                WHERE experiment_id = %s AND classifier_id = %s
-            """, (exp_id, cls_id))
-            result = cursor.fetchone()
-            if not result:
-                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
-                return
-
-            global_classifier_id, classifier_name = result
-            print(f"[INFO] Using classifier: {classifier_name}")
-
-            # Check if active configuration exists
-            cursor.execute("""
-                SELECT config_id, config_name
-                FROM ml_classifier_configs
-                WHERE global_classifier_id = %s AND is_active = TRUE
-            """, (global_classifier_id,))
-            result = cursor.fetchone()
-            if not result:
-                print(f"[ERROR] No active configuration found for classifier {cls_id}")
-                print("Use 'classifier-config-activate <config_id>' to activate a configuration")
-                return
-
-            config_id, config_name = result
-            print(f"[INFO] Using configuration: {config_name}")
-
-            # Check if results tables exist
-            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_rf_results"
-            cursor.execute("""
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_name = %s
-                )
-            """, (results_table_name,))
-            table_exists = cursor.fetchone()[0]
-
-            if not table_exists:
-                print(f"[ERROR] Results table {results_table_name} does not exist")
-                print(f"[INFO] Please create the RF results tables manually using the schema:")
-                print(f"[INFO] See: documentation/reference/rf_results_schema.sql")
-                return
-
-            # Check for existing results (simplified check)
-            if not force:
-                cursor.execute(f"SELECT COUNT(*) FROM {results_table_name}")
-                existing_count = cursor.fetchone()[0]
-                if existing_count > 0:
-                    print(f"[WARNING] Found {existing_count} existing results")
-                    print("[INFO] Use --force to overwrite existing results")
-                    return
-
-            # Import and prepare
-            from datetime import datetime
-            import multiprocessing as mp
-            from pathlib import Path
-            import sys
-            import time
-            import json
-
-            # Add mpcctl_rf_trainer to path
-            sys.path.insert(0, str(Path(__file__).parent))
-            from mpcctl_rf_trainer import manager_process
-
-            # Prepare mpcctl base directory
-            mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{exp_id:03d}')
-
-            # Prepare filter dictionary
-            filters = {
-                'decimation_factor': filter_dec,
-                'data_type': filter_dtype,
-                'amplitude_method': filter_amp,
-                'experiment_feature_set': filter_efs,
-                'n_estimators': n_estimators,
-                'max_depth': max_depth,
-                'min_samples_split': min_samples_split,
-                'max_features': max_features
-            }
-
-            # Create timestamped log file
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            log_file = mpcctl_base_dir / f"rf_training_{timestamp}.log"
-
-            # Database config
-            db_config = {
-                'host': 'localhost',
-                'port': 5432,
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-
-            print(f"\n[INFO] Starting parallel Random Forest training with {num_workers} workers...")
-            print("[INFO] Using MPCCTL architecture for deadlock-proof training")
-            print(f"[INFO] Log file: {log_file}\n")
-
-            # Spawn manager process in background
-            manager = mp.Process(
-                target=manager_process,
-                args=(exp_id, cls_id, num_workers, db_config, filters, log_file, True, mpcctl_base_dir)
-            )
-            manager.start()
-
-            print(f"[INFO] Training manager started in background (PID {manager.pid})")
-            print(f"[INFO] Waiting for initialization...\n")
-
-            # Wait for state file to be created
-            state_file = mpcctl_base_dir / ".mpcctl_state.json"
-            max_wait = 10
-            waited = 0
-            while not state_file.exists() and waited < max_wait:
-                time.sleep(0.5)
-                waited += 0.5
-
-            if not state_file.exists():
-                print("[WARNING] State file not created yet")
-                print("Training is running in background")
-                print(f"Monitor progress: cat {state_file}")
-                return
-
-            print("[INFO] Live Progress Monitor (Press Ctrl+C to detach)\n")
-
-            # Live progress monitoring loop
-            try:
-                last_status = None
-                last_completed = 0
-                while True:
-                    try:
-                        with open(state_file, 'r') as f:
-                            state = json.load(f)
-
-                        progress = state.get('progress', {})
-                        status = state.get('status', 'unknown')
-                        completed = progress.get('completed_tasks', 0)
-
-                        if completed != last_completed or status != last_status:
-                            total = progress.get('total_tasks', 0)
-                            pct = progress.get('percent_complete', 0.0)
-                            rate = progress.get('configs_per_second', 0.0)
-                            eta = progress.get('estimated_time_remaining_seconds', 0)
-
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Progress: {completed}/{total} ({pct:.1f}%) | Rate: {rate:.2f} configs/s | ETA: {eta//60:.0f}m {eta%60:.0f}s")
-
-                            last_completed = completed
-                            last_status = status
-
-                        if status == 'completed':
-                            print("\n[INFO] Training completed successfully!")
-                            break
-
-                        time.sleep(2)
-
-                    except json.JSONDecodeError:
-                        time.sleep(0.5)
-                    except KeyboardInterrupt:
-                        print("\n\n[INFO] Detached from monitor (training continues in background)")
-                        print(f"[INFO] Manager PID: {manager.pid}")
-                        print(f"[INFO] Monitor progress: cat {state_file}")
-                        break
-
-            except Exception as e:
-                print(f"[ERROR] Monitor error: {e}")
-
-            cursor.close()
-
-        except Exception as e:
-            import traceback
-            print(f"[ERROR] {e}")
-            print(traceback.format_exc())
-
-    def cmd_plot_classifier_results(self, args):
-        """
-        Plot classifier training results with performance comparison heatmaps
-
-        Usage: plot-classifier-results --X <col> --Y <col> --subplot-axes <cols> --group-by <col> [OPTIONS]
-
-        Generates performance heatmaps for classifier results. Data is organized by --group-by
-        parameter into separate directories, with subplots defined by --subplot-axes.
-
-        Required Arguments:
-            --X <column>              X-axis column (e.g., decimation_factor)
-            --Y <column>              Y-axis column (e.g., data_type_id)
-            --subplot-axes <cols>     Subplot facet columns, comma-separated
-                                     (e.g., experiment_feature_set_id,amplitude_processing_method_id)
-            --group-by <column>       Directory grouping column (e.g., svm_c_parameter)
-
-        Optional Arguments:
-            --classifier-type <type>  Classifier type: svm, rf (default: svm)
-            --split <name>            Data split: train, test, verify, all (default: all)
-            --output-dir <path>       Output directory (default: experiment_dir/classifier_files/plots)
-            --filter-<col> <value>    Filter by specific column value (can use multiple)
-
-        Examples:
-            # Plot SVM results grouped by C parameter
-            plot-classifier-results --X decimation_factor --Y data_type_id \\
-                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
-                --group-by svm_c_parameter
-
-            # Plot RF results grouped by n_estimators, test split only
-            plot-classifier-results --classifier-type rf --X decimation_factor --Y data_type_id \\
-                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
-                --group-by rf_n_estimators --split test
-
-            # Plot with filters
-            plot-classifier-results --X decimation_factor --Y data_type_id \\
-                --subplot-axes experiment_feature_set_id,amplitude_processing_method_id \\
-                --group-by svm_c_parameter --filter-decimation_factor 0
-        """
-        # Check session context
-        if not self.current_experiment:
-            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
-            return
-
-        if not self.current_classifier_id:
-            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
-            return
-
-        # Parse required arguments
-        x_axis = None
-        y_axis = None
-        subplot_axes = None
-        group_by = None
-        classifier_type = 'svm'
-        split = 'all'
-        output_dir = None
-        filters = {}
-
-        i = 0
-        while i < len(args):
-            if args[i] == '--X':
-                if i + 1 < len(args):
-                    x_axis = args[i + 1]
-                    i += 2
-                else:
-                    print("[ERROR] --X requires a value")
-                    return
-            elif args[i] == '--Y':
-                if i + 1 < len(args):
-                    y_axis = args[i + 1]
-                    i += 2
-                else:
-                    print("[ERROR] --Y requires a value")
-                    return
-            elif args[i] == '--subplot-axes':
-                if i + 1 < len(args):
-                    subplot_axes = args[i + 1].split(',')
-                    i += 2
-                else:
-                    print("[ERROR] --subplot-axes requires a value")
-                    return
-            elif args[i] == '--group-by':
-                if i + 1 < len(args):
-                    group_by = args[i + 1]
-                    i += 2
-                else:
-                    print("[ERROR] --group-by requires a value")
-                    return
-            elif args[i] == '--classifier-type':
-                if i + 1 < len(args):
-                    classifier_type = args[i + 1]
-                    i += 2
-                else:
-                    print("[ERROR] --classifier-type requires a value")
-                    return
-            elif args[i] == '--split':
-                if i + 1 < len(args):
-                    split = args[i + 1]
-                    i += 2
-                else:
-                    print("[ERROR] --split requires a value")
-                    return
-            elif args[i] == '--output-dir':
-                if i + 1 < len(args):
-                    output_dir = Path(args[i + 1])
-                    i += 2
-                else:
-                    print("[ERROR] --output-dir requires a value")
-                    return
-            elif args[i].startswith('--filter-'):
-                # Filter arguments: --filter-<column> <value>
-                filter_col = args[i][9:]  # Remove '--filter-' prefix
-                if i + 1 < len(args):
-                    filters[filter_col] = args[i + 1]
-                    i += 2
-                else:
-                    print(f"[ERROR] {args[i]} requires a value")
-                    return
-            else:
-                print(f"[ERROR] Unknown option: {args[i]}")
-                return
-
-        # Validate required arguments
-        if not x_axis:
-            print("[ERROR] --X is required")
-            return
-        if not y_axis:
-            print("[ERROR] --Y is required")
-            return
-        if not subplot_axes:
-            print("[ERROR] --subplot-axes is required")
-            return
-        if not group_by:
-            print("[ERROR] --group-by is required")
-            return
-
-        # Validate split
-        valid_splits = ['train', 'test', 'verify', 'all']
-        if split not in valid_splits:
-            print(f"[ERROR] --split must be one of: {', '.join(valid_splits)}")
-            return
-
-        # Determine which splits to process
-        if split == 'all':
-            splits_to_process = ['train', 'test', 'verify']
-        else:
-            splits_to_process = [split]
-
-        try:
-            # Import classifier configuration modules
-            import sys
-            sys.path.insert(0, str(Path(__file__).parent))
-            from classifier_configs import ClassifierRegistry
-            from classifier_query_builder import ClassifierQueryBuilder
-
-            # Get classifier configuration from registry
-            registry = ClassifierRegistry()
-            try:
-                classifier_config = registry.get(classifier_type)
-            except ValueError as e:
-                print(f"[ERROR] {e}")
-                return
-
-            print(f"\n[INFO] Plotting {classifier_config.display_name} results")
-            print(f"[INFO] Experiment: {self.current_experiment}, Classifier: {self.current_classifier_id}")
-
-            # Connect to database
-            cursor = self.db_conn.cursor()
-
-            # Check if results table exists
-            query_builder = ClassifierQueryBuilder(classifier_config)
-            if not query_builder.check_table_exists(cursor, self.current_experiment, self.current_classifier_id):
-                table_name = classifier_config.get_table_name(self.current_experiment, self.current_classifier_id)
-                print(f"[ERROR] Results table '{table_name}' does not exist")
-                print(f"[INFO] Run classifier training first to generate results")
-                cursor.close()
-                return
-
-            # Build and execute query
-            print(f"[INFO] Fetching data from database...")
-            query = query_builder.build_query(self.current_experiment, self.current_classifier_id, filters)
-            cursor.execute(query)
-
-            # Fetch all results
-            columns = [desc[0] for desc in cursor.description]
-            rows = cursor.fetchall()
-            cursor.close()
-
-            if len(rows) == 0:
-                print("[ERROR] No data found matching the criteria")
-                return
-
-            print(f"[INFO] Loaded {len(rows)} model configurations")
-
-            # Convert to pandas DataFrame for easier manipulation
-            import pandas as pd
-            import numpy as np
-            df = pd.DataFrame(rows, columns=columns)
-
-            # Determine output directory
-            if not output_dir:
-                output_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/classifier_files/plots/classifier_{self.current_classifier_id:03d}_results')
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[INFO] Output directory: {output_dir}")
-
-            # Get unique values for group-by column
-            group_values = sorted(df[group_by].unique())
-            print(f"[INFO] Group-by '{group_by}': {len(group_values)} unique values")
-
-            # Get unique values for subplot-axes
-            subplot_values = {}
-            for subplot_col in subplot_axes:
-                subplot_values[subplot_col] = sorted(df[subplot_col].unique())
-                print(f"[INFO] Subplot axis '{subplot_col}': {subplot_values[subplot_col]}")
-
-            # Import plotting libraries
-            import matplotlib
-            matplotlib.use('Agg')  # Non-interactive backend
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-
-            # Create directories and generate plots for each group-by value
-            total_plots = 0
-            for group_value in group_values:
-                # Format directory name using classifier config
-                dir_name = classifier_config.format_group_value(group_by, group_value)
-                group_dir = output_dir / dir_name
-                group_dir.mkdir(parents=True, exist_ok=True)
-
-                # Filter data for this group
-                group_data = df[df[group_by] == group_value]
-
-                print(f"\n[PROGRESS] Generating plots for {dir_name}...")
-
-                # Generate plots for each split
-                for split_name in splits_to_process:
-                    # Create figure with subplots
-                    n_subplots = len(subplot_values[subplot_axes[0]]) * len(subplot_values[subplot_axes[1]])
-                    n_rows = len(subplot_values[subplot_axes[1]])
-                    n_cols = len(subplot_values[subplot_axes[0]])
-
-                    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 7, n_rows * 5))
-                    if n_rows == 1 and n_cols == 1:
-                        axes = np.array([[axes]])
-                    elif n_rows == 1:
-                        axes = axes.reshape(1, -1)
-                    elif n_cols == 1:
-                        axes = axes.reshape(-1, 1)
-
-                    fig.suptitle(f'{classifier_config.display_name} Results | {group_by}={group_value} | {split_name.title()} Split',
-                                fontsize=16, fontweight='bold', y=0.995)
-
-                    # Iterate through subplot combinations
-                    for row_idx, row_value in enumerate(subplot_values[subplot_axes[1]]):
-                        for col_idx, col_value in enumerate(subplot_values[subplot_axes[0]]):
-                            ax = axes[row_idx, col_idx]
-
-                            # Filter data for this subplot
-                            subplot_data = group_data[
-                                (group_data[subplot_axes[0]] == col_value) &
-                                (group_data[subplot_axes[1]] == row_value)
-                            ]
-
-                            if len(subplot_data) == 0:
-                                # No data for this combination
-                                ax.text(0.5, 0.5, 'No Data', ha='center', va='center',
-                                       transform=ax.transAxes, fontsize=14, color='gray')
-                                ax.set_xticks([])
-                                ax.set_yticks([])
-                                ax.set_xlabel('')
-                                ax.set_ylabel('')
-                                continue
-
-                            # Create pivot table for heatmap
-                            pivot_f1 = subplot_data.pivot_table(
-                                values=f'arc_f1_{split_name}',
-                                index=y_axis,
-                                columns=x_axis,
-                                aggfunc='first'
-                            )
-
-                            # Create pivot tables for other metrics
-                            pivot_roc = subplot_data.pivot_table(
-                                values=f'arc_roc_auc_{split_name}',
-                                index=y_axis,
-                                columns=x_axis,
-                                aggfunc='first'
-                            )
-                            pivot_pr = subplot_data.pivot_table(
-                                values=f'arc_pr_auc_{split_name}',
-                                index=y_axis,
-                                columns=x_axis,
-                                aggfunc='first'
-                            )
-
-                            # Create annotation array with all three metrics
-                            annot_array = []
-                            for y_val in pivot_f1.index:
-                                row = []
-                                for x_val in pivot_f1.columns:
-                                    f1_val = pivot_f1.loc[y_val, x_val]
-                                    roc_val = pivot_roc.loc[y_val, x_val]
-                                    pr_val = pivot_pr.loc[y_val, x_val]
-
-                                    if pd.notna(f1_val):
-                                        text = f"ROC:{roc_val:.2f}\nF1:{f1_val:.2f}\nPR:{pr_val:.2f}"
-                                    else:
-                                        text = ""
-                                    row.append(text)
-                                annot_array.append(row)
-
-                            # Create heatmap with local color scaling
-                            sns.heatmap(
-                                pivot_f1,
-                                annot=annot_array,
-                                fmt='',
-                                cmap='RdYlGn',
-                                cbar_kws={'label': 'F1 Score'},
-                                linewidths=0.5,
-                                linecolor='gray',
-                                ax=ax,
-                                cbar=True,
-                                annot_kws={'fontsize': 8}
-                            )
-
-                            # Set subplot title using classifier config formatters
-                            title_parts = []
-                            for subplot_col, val in zip(subplot_axes, [col_value, row_value]):
-                                formatted = classifier_config.format_group_value(subplot_col, val)
-                                title_parts.append(formatted)
-                            ax.set_title(' - '.join(title_parts), fontsize=11, fontweight='bold')
-
-                            # Configure axes labels
-                            ax.set_xlabel(x_axis.replace('_', ' ').title(), fontsize=9)
-                            ax.set_ylabel(y_axis.replace('_', ' ').title(), fontsize=9)
-
-                    # Adjust layout and save
-                    plt.tight_layout()
-                    filename = f"{split_name}.png"
-                    filepath = group_dir / filename
-                    fig.savefig(filepath, dpi=150, bbox_inches='tight')
-                    plt.close(fig)
-
-                    print(f"  ✓ {filepath.name}")
-                    total_plots += 1
-
-            print(f"\n[COMPLETE] Generated {total_plots} plots in {len(group_values)} directories")
-            print(f"[INFO] Output directory: {output_dir}")
-
-            # Print directory structure summary
-            print("\nDirectory structure:")
-            for group_value in group_values:
-                dir_name = classifier_config.format_group_value(group_by, group_value)
-                print(f"├── {dir_name}/ ({len(splits_to_process)} plots)")
 
         except Exception as e:
             import traceback
@@ -18056,240 +17179,6 @@ class MLDPShell:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to clean features: {e}")
-            import traceback
-            traceback.print_exc()
-
-
-    # ========== Noise Floor Amplitude Normalization Commands ==========
-
-    def cmd_noise_floor_init(self, args):
-        """
-        Initialize experiment_noise_floor table
-
-        Usage: noise-floor-init
-
-        Creates the experiment_noise_floor table if it doesn't exist.
-        Reports status either way.
-        """
-        try:
-            from noise_floor_calculator import NoiseFloorCalculator
-
-            # Get database connection params
-            db_params = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-
-            # Get data root from experiment or use default
-            data_root = '/Volumes/ArcData/V3_database'
-
-            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
-
-            # Check if table exists
-            if calculator.table_exists():
-                count = calculator.get_entry_count()
-                print(f"✓ experiment_noise_floor table already exists")
-                print(f"  Current entries: {count}")
-            else:
-                print("❌ experiment_noise_floor table does not exist")
-                print("Run the SQL registration script to create it:")
-                print("  psql -h localhost -U kjensen -d arc_detection -f noise_floor_sql_registration.sql")
-
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def cmd_noise_floor_show(self, args):
-        """
-        Display calculated noise floor values
-
-        Usage: noise-floor-show
-
-        Shows all noise floor values with data type, segments used, and calculation date.
-        """
-        try:
-            from noise_floor_calculator import NoiseFloorCalculator
-
-            db_params = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-            data_root = '/Volumes/ArcData/V3_database'
-
-            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
-            entries = calculator.get_noise_floors()
-
-            if not entries:
-                print("\nNo noise floor values calculated yet")
-                print("Run 'noise-floor-calculate' to compute values")
-                return
-
-            # Display table
-            print("\nNoise Floor Values:")
-            print("-" * 100)
-            print(f"{'Data Type':<12} {'ID':<4} {'Voltage (RMS)':<18} {'Current (RMS)':<18} {'Segs':<6} {'Calculated':<20} {'Method':<10}")
-            print("-" * 100)
-
-            for entry in entries:
-                dt_name = entry['data_type_name']
-                dt_id = entry['data_type_id']
-                nf_v = entry['noise_floor_voltage']
-                nf_c = entry['noise_floor_current']
-                num_seg = entry['num_segments_used'] or 0
-                calc_date = entry['last_calculated'].strftime('%Y-%m-%d %H:%M') if entry['last_calculated'] else 'N/A'
-                method = entry['calculation_method'] or 'N/A'
-
-                print(f"{dt_name:<12} {dt_id:<4} {nf_v:<18.6f} {nf_c:<18.6f} {num_seg:<6} {calc_date:<20} {method:<10}")
-
-            print()
-
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def cmd_noise_floor_calculate(self, args):
-        """
-        Calculate noise floor values from approved steady-state segments
-
-        Usage: noise-floor-calculate [OPTIONS]
-
-        Options:
-            --all              Calculate for all data types (default)
-            --type <id>        Calculate for specific data_type_id
-
-        Requires user confirmation before proceeding.
-        Uses spectral PSD method with 10th percentile noise floor estimation.
-        """
-        try:
-            from noise_floor_calculator import NoiseFloorCalculator
-
-            # Parse arguments
-            data_type_id = None
-            if args:
-                if args[0] == '--all':
-                    data_type_id = None
-                elif args[0] == '--type' and len(args) > 1:
-                    data_type_id = int(args[1])
-                else:
-                    print("Usage: noise-floor-calculate [--all | --type <data_type_id>]")
-                    return
-
-            # Get user confirmation
-            if data_type_id is None:
-                response = input("\nCalculate noise floors for ALL data types? [y/N]: ")
-            else:
-                response = input(f"\nCalculate noise floor for data_type_id {data_type_id}? [y/N]: ")
-
-            if response.lower() != 'y':
-                print("Cancelled")
-                return
-
-            db_params = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-            data_root = '/Volumes/ArcData/V3_database'
-
-            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
-
-            print("\nCalculating noise floors...")
-            results = calculator.calculate_noise_floor(data_type_id)
-
-            if not results:
-                print("\n❌ No noise floor values calculated")
-                print("Check that approved steady-state segments exist")
-                return
-
-            # Results already saved to database by calculate_noise_floor()
-            print(f"\n✓ Calculated and saved {len(results)} noise floor values")
-
-            # Show results
-            self.cmd_noise_floor_show([])
-
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def cmd_noise_floor_clear(self, args):
-        """
-        Clear noise floor entries from database
-
-        Usage:
-            noise-floor-clear              Show help
-            noise-floor-clear --all        Clear all entries
-            noise-floor-clear --type <id>  Clear specific data type
-
-        Requires user confirmation for all delete operations.
-        """
-        try:
-            from noise_floor_calculator import NoiseFloorCalculator
-
-            # Parse arguments
-            if not args:
-                print("Usage:")
-                print("  noise-floor-clear --all              Clear all noise floor entries")
-                print("  noise-floor-clear --type <id>        Clear specific data type")
-                return
-
-            data_type_id = None
-            if args[0] == '--all':
-                data_type_id = None
-            elif args[0] == '--type' and len(args) > 1:
-                data_type_id = int(args[1])
-            else:
-                print("❌ Unknown option. Use --all or --type <id>")
-                return
-
-            db_params = {
-                'host': 'localhost',
-                'database': 'arc_detection',
-                'user': 'kjensen'
-            }
-            data_root = '/Volumes/ArcData/V3_database'
-
-            calculator = NoiseFloorCalculator(db_params, data_root, self.current_experiment)
-
-            # Show current entries
-            entries = calculator.get_noise_floors()
-
-            if not entries:
-                print("\nNo entries to clear")
-                return
-
-            # Filter if specific type
-            if data_type_id is not None:
-                entries = [e for e in entries if e['data_type_id'] == data_type_id]
-                if not entries:
-                    print(f"\nNo entry found for data_type_id {data_type_id}")
-                    return
-
-            # Show what will be deleted
-            print("\nCurrent noise floor entries:")
-            for e in entries:
-                print(f"  {e['data_type_name']}: {e['noise_floor']:.6e} ({e['num_segments_used']} segments)")
-
-            # Get confirmation
-            if data_type_id is None:
-                response = input(f"\nDelete all {len(entries)} entries? [y/N]: ")
-            else:
-                response = input(f"\nDelete this entry? [y/N]: ")
-
-            if response.lower() != 'y':
-                print("Cancelled")
-                return
-
-            # Clear entries
-            rows_deleted = calculator.clear_noise_floor(data_type_id)
-            print(f"\n✓ Cleared {rows_deleted} entries")
-
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
             import traceback
             traceback.print_exc()
 
@@ -18731,142 +17620,7 @@ class MLDPShell:
             self.db_conn.close()
         print("\nGoodbye! Thank you for using MLDP.")
         self.running = False
-
-    def cmd_source(self, args):
-        """Execute commands from a script file
-
-        Usage: source <filename> [--continue] [--echo]
-
-        Options:
-          --continue    Continue execution even if a command fails
-          --echo        Echo each command before executing it
-
-        File Format:
-          - One command per line
-          - Lines starting with # are comments
-          - Blank lines are ignored
-          - Arguments with spaces should be quoted
-
-        Search Path:
-          1. Current directory
-          2. ~/.mldp/ directory
-          3. User home directory
-
-        Examples:
-          source new_experiment.sh
-          source ~/.mldp/scripts/setup_exp42.sh --echo
-          source commands.txt --continue --echo
-        """
-        import shlex
-        from pathlib import Path
-
-        if not args:
-            print("Usage: source <filename> [--continue] [--echo]")
-            print("Type 'help source' for more information")
-            return
-
-        # Parse arguments
-        filename = args[0]
-        continue_on_error = '--continue' in args
-        echo_commands = '--echo' in args
-
-        # Build search path
-        search_paths = [
-            Path.cwd(),
-            Path.home() / '.mldp',
-            Path.home()
-        ]
-
-        # Find the file
-        script_path = None
-        for search_dir in search_paths:
-            candidate = search_dir / filename
-            if candidate.exists() and candidate.is_file():
-                script_path = candidate
-                break
-
-        if not script_path:
-            print(f"❌ Script file not found: {filename}")
-            print(f"   Searched in:")
-            for path in search_paths:
-                print(f"     - {path}")
-            return
-
-        print(f"📜 Executing script: {script_path}")
-        print(f"   Continue on error: {continue_on_error}")
-        print(f"   Echo commands: {echo_commands}")
-        print()
-
-        # Read and execute commands
-        total_commands = 0
-        executed_commands = 0
-        failed_commands = 0
-        skipped_lines = 0
-
-        try:
-            with open(script_path, 'r') as f:
-                for line_num, line in enumerate(f, 1):
-                    # Strip whitespace
-                    line = line.strip()
-
-                    # Skip empty lines and comments
-                    if not line or line.startswith('#'):
-                        skipped_lines += 1
-                        continue
-
-                    total_commands += 1
-
-                    # Echo if requested
-                    if echo_commands:
-                        print(f"[{line_num}] {line}")
-
-                    try:
-                        # Parse the command line using shlex to handle quoted arguments
-                        parts = shlex.split(line)
-                        if not parts:
-                            skipped_lines += 1
-                            continue
-
-                        cmd = parts[0]
-                        cmd_args = parts[1:]
-
-                        # Execute the command
-                        if cmd in self.commands:
-                            self.commands[cmd](cmd_args)
-                            executed_commands += 1
-                        else:
-                            print(f"❌ Unknown command at line {line_num}: {cmd}")
-                            failed_commands += 1
-                            if not continue_on_error:
-                                print(f"⏹️  Stopping execution (use --continue to continue on errors)")
-                                break
-
-                    except Exception as e:
-                        print(f"❌ Error at line {line_num}: {e}")
-                        failed_commands += 1
-                        if not continue_on_error:
-                            print(f"⏹️  Stopping execution (use --continue to continue on errors)")
-                            break
-
-        except FileNotFoundError:
-            print(f"❌ Could not open file: {script_path}")
-            return
-        except Exception as e:
-            print(f"❌ Error reading script: {e}")
-            return
-
-        # Print summary
-        print()
-        print("=" * 60)
-        print(f"📊 Script Execution Summary")
-        print("=" * 60)
-        print(f"   Total lines: {line_num}")
-        print(f"   Skipped (blank/comments): {skipped_lines}")
-        print(f"   Commands found: {total_commands}")
-        print(f"   Successfully executed: {executed_commands}")
-        print(f"   Failed: {failed_commands}")
-        print("=" * 60)
-
+    
     # ========== Server Management Commands ==========
     
     def cmd_servers(self, args):

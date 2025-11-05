@@ -1,0 +1,29 @@
+================================================================================
+CLASSIFIER 2: COMMANDS ONLY (NO EXPLANATIONS)
+================================================================================
+Copy and paste these commands into mldp CLI one at a time.
+Wait for each to complete before entering the next.
+================================================================================
+
+./mldp
+connect
+set experiment 41
+classifier-new --name raw_features_svm --description "SVM using raw features from sets 1,2,5 (no distance calculation)" --type svm
+set classifier 2
+classifier-config-create --name raw_baseline --active
+classifier-config-add-feature-sets --config-id 2 --experiment-feature-sets 1 2 5
+classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+classifier-config-add-distance-functions --config-id 2 --distance-functions 1 2 3 4
+classifier-config-add-hyperparameters --config-id 2 --kernel linear --C 0.1 1.0 10.0 100.0
+classifier-create-splits-table
+classifier-assign-splits --strategy stratified --split-ratios 0.33 0.33 0.34
+classifier-build-features --amplitude-method 2
+classifier-train-svm-init --amplitude-method 2
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+exit
+
+================================================================================
+EXPECTED TIME: 2.5-4.5 hours total
+  - Feature building: 20-40 minutes
+  - SVM training: 2-4 hours
+================================================================================

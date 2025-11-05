@@ -1,0 +1,46 @@
+# Quick Command Reference: Create Classifier 2 (Raw Features)
+# Copy and paste these commands into mldp shell
+
+# Start mldp
+./mldp
+connect
+set experiment 41
+
+# Step 1: Create classifier 2
+classifier-new --name raw_features_svm --description "SVM using raw features (no distances)" --type svm
+
+# Step 2: Select classifier 2
+set classifier 2
+
+# Step 3: Create configuration
+classifier-config-create --name raw_baseline --active
+
+# Step 4: Add feature sets (1=current, 2=voltage, 5=all_electrical)
+classifier-config-add-feature-sets --config-id 2 --experiment-feature-sets 1 2 5
+
+# Step 5: Set feature builder - KEY STEP (use raw features, no distances)
+classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+
+# Step 6: Add distance functions (required for schema)
+classifier-config-add-distance-functions --config-id 2 --distance-functions 1 2 3 4
+
+# Step 7: Add SVM hyperparameters
+classifier-config-add-hyperparameters --config-id 2 --kernel linear --C 0.1 1.0 10.0 100.0
+
+# Step 8: Create data splits table
+classifier-create-splits-table
+
+# Step 9: Assign data splits
+classifier-assign-splits --strategy stratified --split-ratios 0.33 0.33 0.34
+
+# Step 10: Build raw feature vectors
+classifier-build-features --amplitude-method 2
+
+# Step 11: Initialize SVM training
+classifier-train-svm-init --amplitude-method 2
+
+# Step 12: Train SVM models (84 models with linear kernel, 4 C values)
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+
+# Done! Exit when training completes
+exit

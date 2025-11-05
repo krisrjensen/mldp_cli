@@ -1,0 +1,98 @@
+================================================================================
+CLASSIFIER 2: CORRECTED COMMANDS
+================================================================================
+FIXES:
+  - Step 3: --config-name (not --name), --set-active (not --active)
+  - All other steps verified for correct syntax
+================================================================================
+
+./mldp
+connect
+set experiment 41
+
+--------------------------------------------------------------------------------
+STEP 1-2: Create and select classifier (COMPLETED - ALREADY DONE)
+--------------------------------------------------------------------------------
+classifier-new --name raw_features_svm --description "SVM using raw features from sets 1,2,5 (no distance calculation)" --type svm
+set classifier 2
+
+✅ Already completed successfully
+
+--------------------------------------------------------------------------------
+STEP 3: Create configuration (CORRECTED)
+--------------------------------------------------------------------------------
+classifier-config-create --config-name raw_baseline --set-active
+
+CHANGES:
+  - --name → --config-name
+  - --active → --set-active
+
+--------------------------------------------------------------------------------
+STEP 4: Add feature sets
+--------------------------------------------------------------------------------
+classifier-config-add-feature-sets --config-id 2 --experiment-feature-sets 1 2 5
+
+--------------------------------------------------------------------------------
+STEP 5: Set feature builder (CRITICAL - USE RAW FEATURES)
+--------------------------------------------------------------------------------
+classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+
+--------------------------------------------------------------------------------
+STEP 6: Add distance functions
+--------------------------------------------------------------------------------
+classifier-config-add-distance-functions --config-id 2 --distance-functions 1 2 3 4
+
+--------------------------------------------------------------------------------
+STEP 7: Add hyperparameters
+--------------------------------------------------------------------------------
+classifier-config-add-hyperparameters --config-id 2 --kernel linear --C 0.1 1.0 10.0 100.0
+
+--------------------------------------------------------------------------------
+STEP 8: Create splits table
+--------------------------------------------------------------------------------
+classifier-create-splits-table
+
+--------------------------------------------------------------------------------
+STEP 9: Assign splits
+--------------------------------------------------------------------------------
+classifier-assign-splits --strategy stratified --split-ratios 0.33 0.33 0.34
+
+--------------------------------------------------------------------------------
+STEP 10: Build feature vectors from raw features
+--------------------------------------------------------------------------------
+classifier-build-features --amplitude-method 2
+
+--------------------------------------------------------------------------------
+STEP 11: Initialize SVM training
+--------------------------------------------------------------------------------
+classifier-train-svm-init --amplitude-method 2
+
+--------------------------------------------------------------------------------
+STEP 12: Train SVM models
+--------------------------------------------------------------------------------
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+
+--------------------------------------------------------------------------------
+STEP 13: Exit
+--------------------------------------------------------------------------------
+exit
+
+================================================================================
+RESUME FROM STEP 3 (you are currently at this point)
+================================================================================
+
+Continue with these commands:
+
+classifier-config-create --config-name raw_baseline --set-active
+classifier-config-add-feature-sets --config-id 2 --experiment-feature-sets 1 2 5
+classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+classifier-config-add-distance-functions --config-id 2 --distance-functions 1 2 3 4
+classifier-config-add-hyperparameters --config-id 2 --kernel linear --C 0.1 1.0 10.0 100.0
+classifier-create-splits-table
+classifier-assign-splits --strategy stratified --split-ratios 0.33 0.33 0.34
+classifier-build-features --amplitude-method 2
+classifier-train-svm-init --amplitude-method 2
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+exit
+
+================================================================================

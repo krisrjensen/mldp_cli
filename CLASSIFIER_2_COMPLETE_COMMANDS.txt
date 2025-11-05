@@ -1,0 +1,496 @@
+================================================================================
+COMPLETE COMMAND LIST FOR CLASSIFIER 2 (RAW FEATURES - NO DISTANCES)
+================================================================================
+File: CLASSIFIER_2_COMPLETE_COMMANDS.txt
+Date: 2025-10-27
+Description: Step-by-step commands to create and train classifier 2 using
+             raw features instead of distance-based features
+
+IMPORTANT: Copy each command below into the mldp CLI and press Enter.
+           Wait for each command to complete before entering the next one.
+================================================================================
+
+PREREQUISITE CHECK:
+-------------------
+Raw features already exist in experiment_041_feature_fileset (279,552 files)
+Feature sets available:
+  - Feature Set 1 (current_only): Contains current feature
+  - Feature Set 2 (voltage_only): Contains voltage feature
+  - Feature Set 5 (all_electrical): Contains voltage + current features
+
+These raw features will be loaded and concatenated to create SVM feature vectors.
+
+================================================================================
+STEP-BY-STEP COMMANDS
+================================================================================
+
+----------------------------------------------------------------------
+STEP 1: Start mldp and connect to database
+----------------------------------------------------------------------
+./mldp
+connect
+set experiment 41
+
+EXPECTED OUTPUT:
+  [INFO] Connected to PostgreSQL database
+  [INFO] Set experiment to 41
+
+----------------------------------------------------------------------
+STEP 2: Create classifier 2
+----------------------------------------------------------------------
+classifier-new --name raw_features_svm --description "SVM using raw features from sets 1,2,5 (no distance calculation)" --type svm
+
+EXPECTED OUTPUT:
+  [SUCCESS] Created classifier 'raw_features_svm' (ID: 2) for experiment 41
+  [INFO] Global classifier ID: 2
+
+WHAT THIS DOES:
+  - Creates entry in ml_experiment_classifiers table
+  - Assigns classifier_id = 2 for experiment 41
+  - Creates global_classifier_id = 2
+
+----------------------------------------------------------------------
+STEP 3: Select classifier 2 for subsequent operations
+----------------------------------------------------------------------
+set classifier 2
+
+EXPECTED OUTPUT:
+  [INFO] Selected classifier 2 for experiment 41
+
+WHAT THIS DOES:
+  - Sets current_classifier_id = 2
+  - All following commands will operate on classifier 2
+
+----------------------------------------------------------------------
+STEP 4: Create configuration for classifier 2
+----------------------------------------------------------------------
+classifier-config-create --name raw_baseline --active
+
+EXPECTED OUTPUT:
+  [SUCCESS] Created configuration 'raw_baseline' (config_id: 2)
+  [INFO] Configuration is now active
+
+WHAT THIS DOES:
+  - Creates entry in ml_classifier_configs with config_id = 2
+  - Links to experiment 41, classifier 2
+  - Sets as active configuration
+
+----------------------------------------------------------------------
+STEP 5: Add feature sets to configuration
+----------------------------------------------------------------------
+classifier-config-add-feature-sets --config-id 2 --experiment-feature-sets 1 2 5
+
+EXPECTED OUTPUT:
+  [SUCCESS] Added feature sets to configuration 2:
+    - Experiment feature set 1 (current_only)
+    - Experiment feature set 2 (voltage_only)
+    - Experiment feature set 5 (all_electrical)
+
+WHAT THIS DOES:
+  - Links feature sets 1, 2, 5 to config_id 2
+  - Inserts into ml_classifier_config_experiment_feature_sets
+  - These feature sets will be concatenated to create feature vectors
+
+----------------------------------------------------------------------
+STEP 6: Configure feature builder (CRITICAL - DEFINES RAW VS DISTANCE)
+----------------------------------------------------------------------
+classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+
+EXPECTED OUTPUT:
+  [SUCCESS] Created feature builder for config 'raw_baseline' (ID: 2)
+
+  Current Feature Builder Settings:
+    Include original features: True         ← USE RAW FEATURES
+    Compute inter-class baseline distances: False  ← NO DISTANCES TO OTHER CLASSES
+    Compute intra-class baseline distances: False  ← NO DISTANCES TO SAME CLASS
+    Statistical features: False (reserved)
+    External function: False (reserved)
+
+WHAT THIS DOES:
+  - Creates entry in ml_classifier_feature_builder
+  - --include-original: Enables loading raw features from experiment_041_feature_fileset
+  - --no-compute-distances-inter: DISABLES inter-class distance calculation
+  - --no-compute-distances-intra: DISABLES intra-class distance calculation
+
+  *** THIS IS THE KEY DIFFERENCE FROM CLASSIFIER 1 ***
+
+  Classifier 1: include_original=false, distances=true  → Distance features
+  Classifier 2: include_original=true, distances=false  → Raw features
+
+----------------------------------------------------------------------
+STEP 7: Add distance functions (required for schema consistency)
+----------------------------------------------------------------------
+classifier-config-add-distance-functions --config-id 2 --distance-functions 1 2 3 4
+
+EXPECTED OUTPUT:
+  [SUCCESS] Added distance functions to configuration 2:
+    - Distance function 1 (L1 / Manhattan)
+    - Distance function 2 (L2 / Euclidean)
+    - Distance function 3 (Cosine)
+    - Distance function 4 (Pearson / Correlation)
+
+WHAT THIS DOES:
+  - Links distance functions to config (even though not used for feature building)
+  - Required for database schema consistency
+  - These functions will NOT be used because compute_distances = false
+
+----------------------------------------------------------------------
+STEP 8: Add SVM hyperparameters
+----------------------------------------------------------------------
+classifier-config-add-hyperparameters --config-id 2 --kernel linear --C 0.1 1.0 10.0 100.0
+
+EXPECTED OUTPUT:
+  [SUCCESS] Added hyperparameters to configuration 2
+    SVM Kernel: linear
+    C values: 0.1, 1.0, 10.0, 100.0
+
+WHAT THIS DOES:
+  - Creates entries in ml_classifier_config_hyperparameters
+  - Defines SVM grid search: 4 C values for linear kernel
+  - Total models per configuration: 4 (one for each C value)
+
+----------------------------------------------------------------------
+STEP 9: Create data splits table for classifier 2
+----------------------------------------------------------------------
+classifier-create-splits-table
+
+EXPECTED OUTPUT:
+  [SUCCESS] Created table: experiment_041_classifier_002_data_splits
+
+WHAT THIS DOES:
+  - Creates experiment_041_classifier_002_data_splits table
+  - Will store train/test/verification split assignments for classifier 2
+  - Independent from classifier 1's splits
+
+----------------------------------------------------------------------
+STEP 10: Assign segments to train/test/verification splits
+----------------------------------------------------------------------
+classifier-assign-splits --strategy stratified --split-ratios 0.33 0.33 0.34
+
+EXPECTED OUTPUT:
+  [INFO] Using stratified split strategy
+  [INFO] Split ratios: Train=0.33, Test=0.33, Verification=0.34
+  [INFO] Fetching segments from experiment_041_segment_training_data...
+  [INFO] Total segments: 34,860
+  [INFO] Assigning splits by label (stratified)...
+  [SUCCESS] Split assignments completed:
+    Training: ~11,504 segments
+    Test: ~11,504 segments
+    Verification: ~11,852 segments
+
+WHAT THIS DOES:
+  - Assigns each segment to train/test/verification split
+  - Uses stratified sampling to balance classes across splits
+  - Inserts into experiment_041_classifier_002_data_splits
+  - Each segment gets exactly one split assignment
+
+----------------------------------------------------------------------
+STEP 11: Build SVM feature vectors from raw features
+----------------------------------------------------------------------
+classifier-build-features --amplitude-method 2
+
+EXPECTED OUTPUT:
+  [INFO] Building features for experiment 41, classifier 2, config 2
+  [INFO] Amplitude processing method: 2 (z-score normalization)
+
+  [INFO] Feature builder settings:
+    - Include original features: True      ← LOADING RAW FEATURES
+    - Compute inter-class distances: False ← NOT COMPUTING DISTANCES
+    - Compute intra-class distances: False
+
+  [INFO] Processing configurations:
+    - Decimation factors: 0, 255, 511, 1023, 2047, 4095, 8191 (7 values)
+    - Data types: 6, 8, 10, 12 (4 ADC bit depths)
+    - Amplitude methods: 2 (z-score)
+    - Feature sets: 1, 2, 5 (3 sets)
+
+  [INFO] Total configurations: 7 × 4 × 1 × 3 = 84
+  [INFO] Total segments: 34,860
+  [INFO] Total features to build: 84 × 34,860 = 2,928,240
+
+  [INFO] Starting feature building with 12 workers...
+  [PROGRESS] Configuration 1/84: dec=0, dtype=6, amp=2, efs=1...
+  [PROGRESS] Processed 5000 / 34860 segments...
+  [PROGRESS] Processed 10000 / 34860 segments...
+  ...
+  [PROGRESS] Configuration 84/84: dec=8191, dtype=12, amp=2, efs=5...
+  [SUCCESS] Feature building completed
+    - Total features created: 2,928,240
+    - Time: ~20-40 minutes (depends on disk speed)
+
+WHAT THIS DOES:
+  - Creates table: experiment_041_classifier_002_svm_features
+  - For each configuration (dec, dtype, amp, efs):
+    1. Loads raw features from experiment_041_feature_fileset
+    2. Concatenates features according to feature sets
+    3. Saves as .npy files in classifier_002 directory
+  - Feature vector composition:
+    * Feature set 1 (current_only): N current features
+    * Feature set 2 (voltage_only): M voltage features
+    * Feature set 5 (all_electrical): N+M features (current + voltage)
+  - NO distance calculations performed (key difference from classifier 1)
+
+FILE LOCATIONS:
+  /Volumes/ArcData/V3_database/experiment041/classifier_files/svm_features/classifier_002/
+    └── D000000_TADC6_A2_EFS001/segment_XXXXX_class_YY.npy
+    └── D000000_TADC6_A2_EFS002/segment_XXXXX_class_YY.npy
+    └── D000000_TADC6_A2_EFS005/segment_XXXXX_class_YY.npy
+    └── ...
+
+----------------------------------------------------------------------
+STEP 12: Initialize SVM training
+----------------------------------------------------------------------
+classifier-train-svm-init --amplitude-method 2
+
+EXPECTED OUTPUT:
+  [INFO] Initializing SVM training for experiment 41, classifier 2
+  [INFO] Creating SVM models table...
+  [SUCCESS] Created table: experiment_041_classifier_002_svm_models
+  [SUCCESS] Created table: experiment_041_classifier_002_svm_results
+
+  [INFO] Hyperparameter grid:
+    - Decimation factors: 7
+    - Data types: 4
+    - Amplitude methods: 1 (filter: 2 only)
+    - Feature sets: 3
+    - Kernels: 1 (linear)
+    - C values: 4
+
+  [INFO] Total models to train: 7 × 4 × 1 × 3 × 1 × 4 = 336
+
+  [INFO] Without kernel filter, would train 336 models
+  [INFO] Ready to train with 'classifier-train-svm' command
+
+WHAT THIS DOES:
+  - Creates experiment_041_classifier_002_svm_models table
+  - Creates experiment_041_classifier_002_svm_results table
+  - Calculates total hyperparameter combinations
+  - Prepares for training
+
+----------------------------------------------------------------------
+STEP 13: Train SVM models
+----------------------------------------------------------------------
+classifier-train-svm --amplitude-method 2 --workers 12 --kernel linear
+
+EXPECTED OUTPUT:
+  [INFO] Training SVM models for experiment 41, classifier 2
+  [INFO] Using 12 parallel workers
+  [INFO] Kernel filter: linear only
+  [INFO] Amplitude method filter: 2 only
+
+  [INFO] Task grid:
+    - Decimation: 7 values (0, 255, 511, 1023, 2047, 4095, 8191)
+    - Data types: 4 values (6, 8, 10, 12 bit ADC)
+    - Amplitude methods: 1 value (2 = z-score)
+    - Feature sets: 3 values (1, 2, 5)
+    - Kernels: 1 value (linear)
+    - C values: 4 values (0.1, 1.0, 10.0, 100.0)
+
+  [INFO] Total tasks: 7 × 4 × 1 × 3 × 1 × 4 = 336
+
+  [INFO] Starting training with 12 workers...
+  [WORKER] Starting: dec=0, dtype=6, amp=2, efs=1, kernel=linear, C=0.1
+  [WORKER] DB connected in 0.05s
+  [WORKER] Loading training features...
+  [WORKER] Loaded 11504 training samples in 0.15s
+  [WORKER] Loading test features...
+  [WORKER] Loaded 11504 test samples in 0.14s
+  [WORKER] Loading verification features...
+  [WORKER] Loaded 11852 verification samples in 0.15s
+  [WORKER] Training SVM (linear kernel, C=0.1)...
+  [WORKER] Training completed in 12.3s
+  [WORKER] Making predictions...
+  [WORKER] Calculating metrics...
+  [WORKER] Saving model and visualizations...
+
+  [TASK 1/336] SUCCESS: dec=0, dtype=6, amp=2, efs=1, kernel=linear, C=0.1
+    Test accuracy: 0.7234
+    Timing: LOAD=0.5s, SVM=12.3s, CV=0.0s, PRED=0.4s, SAVE=1.2s, TOTAL=14.4s
+    Data: train=11504, test=11504, verify=11852, features=XXX
+
+  [TASK 2/336] SUCCESS: dec=0, dtype=6, amp=2, efs=1, kernel=linear, C=1.0
+    Test accuracy: 0.7456
+  ...
+
+  [PROGRESS] Completed 84/336 tasks (25%)...
+  [PROGRESS] Completed 168/336 tasks (50%)...
+  [PROGRESS] Completed 252/336 tasks (75%)...
+
+  [SUCCESS] All 336 tasks completed
+    - Total time: ~2-4 hours (depends on feature dimensions and hardware)
+    - Best model: dec=XXX, dtype=XX, efs=X, C=XX.X
+    - Best test accuracy: 0.XXXX
+
+WHAT THIS DOES:
+  - Trains 336 SVM models in parallel (12 workers)
+  - For each model:
+    1. Loads raw feature vectors (from Step 11)
+    2. Trains SVM with specified hyperparameters
+    3. Evaluates on train/test/verification splits
+    4. Saves model to disk
+    5. Generates confusion matrices and performance plots
+  - Inserts results into experiment_041_classifier_002_svm_models
+  - Model files saved to:
+    /Volumes/ArcData/V3_database/experiment041/classifier_files/svm_models/classifier_002/
+      └── D000000_TADC6_A2_EFS001/linear_C0.1/svm_model.pkl
+      └── D000000_TADC6_A2_EFS001/linear_C1.0/svm_model.pkl
+      └── ...
+
+----------------------------------------------------------------------
+STEP 14: Exit mldp
+----------------------------------------------------------------------
+exit
+
+EXPECTED OUTPUT:
+  [INFO] Goodbye!
+
+================================================================================
+VERIFICATION COMMANDS (OPTIONAL - RUN AFTER TRAINING)
+================================================================================
+
+After training completes, you can verify the setup:
+
+----------------------------------------------------------------------
+Check classifier status
+----------------------------------------------------------------------
+classifier-list
+
+EXPECTED OUTPUT:
+  Classifiers for Experiment 41:
+    [1] baseline_svm (ACTIVE) - Baseline SVM classifier
+    [2] raw_features_svm (ACTIVE) - SVM using raw features from sets 1,2,5
+
+----------------------------------------------------------------------
+Check configuration
+----------------------------------------------------------------------
+classifier-config-list
+
+EXPECTED OUTPUT:
+  Configurations for Classifier 2:
+    [2] raw_baseline (ACTIVE)
+      Feature sets: 1, 2, 5
+      Distance functions: 1, 2, 3, 4
+      Hyperparameters: linear (C: 0.1, 1.0, 10.0, 100.0)
+
+----------------------------------------------------------------------
+Check feature builder settings
+----------------------------------------------------------------------
+classifier-config-show --config-id 2
+
+EXPECTED OUTPUT:
+  Configuration Details:
+  ...
+  Feature Builder:
+    Include original features: True         ← KEY SETTING
+    Compute inter-class distances: False    ← KEY SETTING
+    Compute intra-class distances: False    ← KEY SETTING
+
+----------------------------------------------------------------------
+Check training results
+----------------------------------------------------------------------
+Query best models:
+  SELECT decimation_factor, data_type_id, experiment_feature_set_id,
+         svm_kernel, svm_C, test_accuracy_multiclass
+  FROM experiment_041_classifier_002_svm_models
+  WHERE test_accuracy_multiclass IS NOT NULL
+  ORDER BY test_accuracy_multiclass DESC
+  LIMIT 10;
+
+================================================================================
+COMPARISON: CLASSIFIER 1 vs CLASSIFIER 2
+================================================================================
+
+CLASSIFIER 1 (Distance-based):
+  - Feature type: Distances to 13 reference segments
+  - Feature dimensions: 52 (13 classes × 4 metrics)
+  - Feature builder: include_original=FALSE, compute_distances=TRUE
+  - Requires: Reference segment selection
+  - Training time: Faster (fewer features)
+  - Interpretability: Distance-based (how close to each class)
+
+CLASSIFIER 2 (Raw features):
+  - Feature type: Raw feature values from feature sets
+  - Feature dimensions: Variable (depends on feature sets)
+  - Feature builder: include_original=TRUE, compute_distances=FALSE
+  - Requires: Raw features only (no reference selection needed)
+  - Training time: May be slower (more features)
+  - Interpretability: Feature-based (direct feature values)
+
+================================================================================
+EXPECTED PERFORMANCE
+================================================================================
+
+Feature Vector Dimensions (approximate):
+  - Feature set 1 (current_only): N features per segment
+  - Feature set 2 (voltage_only): M features per segment
+  - Feature set 5 (all_electrical): N+M features per segment
+
+Training Time Estimates:
+  - Feature building (Step 11): 20-40 minutes
+  - SVM training (Step 13): 2-4 hours with 12 workers
+  - Total: ~2.5-4.5 hours
+
+Accuracy Comparison:
+  - Classifier 1 (distances): Baseline accuracy
+  - Classifier 2 (raw features): May be higher or lower
+    * More features → potentially more information
+    * More features → potentially more noise
+    * Results will show which approach works better
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Issue: "Config ID 2 already exists"
+Solution: A configuration was already created. Either:
+  - Use existing config: classifier-config-show --config-id 2
+  - Delete old config: classifier-config-delete --config-id 2 --force
+
+Issue: "Feature builder already exists for config 2"
+Solution: Update existing entry:
+  classifier-config-set-feature-builder --config-id 2 --include-original --no-compute-distances-inter --no-compute-distances-intra
+
+Issue: "No features found for configuration"
+Solution: Check that Step 11 (classifier-build-features) completed successfully:
+  SELECT COUNT(*) FROM experiment_041_classifier_002_svm_features;
+
+Issue: "Table already exists"
+Solution: Either:
+  - Drop existing table (WARNING: loses data)
+  - Use --force flag if supported
+  - Continue with existing table
+
+Issue: Feature building is slow
+Solution:
+  - Check disk I/O (especially if using network drive)
+  - Reduce number of workers if system is overloaded
+  - Monitor progress in experiment_041_classifier_002_svm_features table
+
+================================================================================
+NOTES
+================================================================================
+
+1. Raw features (experiment_041_feature_fileset) already exist with 279,552 files
+   - No need to regenerate these
+   - Step 11 will load and concatenate them
+
+2. Feature sets contain:
+   - Set 1: current only
+   - Set 2: voltage only
+   - Set 5: current + voltage
+
+3. The critical difference from classifier 1 is in Step 6:
+   - include_original = TRUE  (use raw features)
+   - compute_distances = FALSE (don't calculate distances)
+
+4. Training 336 models (7×4×3×4) will take 2-4 hours
+   - Can filter to fewer models by:
+     * Using --decimation-filter
+     * Using --data-type-filter
+     * Using fewer C values
+
+5. Results will be compared with classifier 1 to determine which approach works better
+
+================================================================================
+END OF COMMAND LIST
+================================================================================
