@@ -4,22 +4,22 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.13.2
+File version: 2.0.13.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
-Changes in this version (13.2):
-1. FEATURE - cmd_set now returns proper exit codes (Phase 5)
-   - v2.0.13.2: Added experiment ID validation against database
-                Added distance type validation
-                All error conditions now return 1 (failure)
-                All success conditions now return 0 (success)
-                Enables proper if/then/else conditional handling in scripts
+Changes in this version (13.3):
+1. FIX - Script executor now continues when if block follows failed command
+   - v2.0.13.3: Modified cmd_source block execution loop
+                Checks if next block is an if statement before stopping on error
+                Allows if blocks to check exit codes of failed commands
+                Enables proper error handling patterns like: cmd; if [ $? -eq 0 ]
+                Completes Phase 5 - all bash-style conditional tests now pass
                 Fixed distance metrics: l1 -> manhattan
                 Updated remove_unicode_icons.py to include clipboard icon
 
@@ -19319,9 +19319,14 @@ SETTINGS:
         executed_commands = 0
         failed_commands = 0
 
-        for block in blocks:
+        for i, block in enumerate(blocks):
             if self.script_should_exit:
-                break
+                # Check if next block is an if statement that might check exit code
+                if i + 1 < len(blocks) and blocks[i + 1].type == 'if':
+                    # Don't exit - let the if statement handle the failure
+                    self.script_should_exit = False
+                else:
+                    break
 
             result = self._execute_block(block, continue_on_error, echo_commands)
             total_commands += result['total']
