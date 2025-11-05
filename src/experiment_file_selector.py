@@ -3,9 +3,14 @@
 Filename: experiment_file_selector.py
 Author: Kristophor Jensen
 Date Created: 20250915_090000
-Date Revised: 20250915_090000
-File version: 1.0.0.0
+Date Revised: 20251104_000000
+File version: 1.0.0.1
 Description: File selection for experiment training data
+
+Changes in v1.0.0.1:
+- Fixed SQL query to use files_x instead of files table
+- Added join with experiment_labels to get label_text
+- Removed reference to non-existent fy.label_text column
 """
 
 import psycopg2
@@ -99,15 +104,16 @@ class ExperimentFileSelector:
                     f.original_filename as file_name,
                     f.original_path as file_path,
                     fy.label_id as file_label_id,
-                    fy.label_text as file_label_name,
+                    el.label_text as file_label_name,
                     f.current_level,
                     f.voltage_level,
                     f.total_samples as file_length,
                     0.5 as quality_score
-                FROM files f
+                FROM files_x f
                 LEFT JOIN files_y fy ON f.file_id = fy.file_id
+                LEFT JOIN experiment_labels el ON fy.label_id = el.label_id
                 WHERE f.total_samples > 0
-                ORDER BY fy.label_text, f.file_id
+                ORDER BY el.label_text, f.file_id
             """)
             
             # Group by label

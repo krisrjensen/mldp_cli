@@ -35,11 +35,10 @@ echo ""
 
 # Step 2: Configure experiment settings
 echo "# Step 2: Configuring experiment settings"
-update-selection-config --random-seed 42
-update-selection-config --balanced
+update-selection-config --seed 42
+update-selection-config --balanced true
 update-selection-config --strategy position_balanced_per_file
-update-selection-config --position-balance at_least_one
-update-selection-config --max-files-per-label 50
+update-selection-config --max-files 50
 echo ""
 
 # Step 3: Select training files (150 files: 50 per label)
@@ -56,10 +55,10 @@ echo ""
 
 # Step 5: Add data types
 echo "# Step 5: Adding data types"
-add-data-type adc6
-add-data-type adc8
-add-data-type adc10
-add-data-type adc12
+add-data-type 6
+add-data-type 2
+add-data-type 3
+add-data-type 4
 echo ""
 
 # Step 6: Add decimations
@@ -74,8 +73,8 @@ echo ""
 
 # Step 7: Add distance metrics
 echo "# Step 7: Adding distance metrics"
-add-distance-metric l1
-add-distance-metric cosine
+add-distance-metric --metric l1
+add-distance-metric --metric cosine
 echo ""
 
 echo "============================================================================"

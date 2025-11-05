@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.3
+File version: 2.0.11.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,14 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 11)
 - CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (11.3):
+Changes in this version (11.4):
+1. BUG FIX - Fixed experiment_file_selector.py SQL query
+   - v2.0.11.4: Fixed select-files command SQL error
+                Changed from files to files_x table
+                Added join with experiment_labels for label_text
+                Fixed setup_experiment_42.sh command syntax errors
+
+Changes in previous version (11.3):
 1. NEW COMMAND - Added echo command for script output
    - v2.0.11.3: Added cmd_echo() method for printing text in scripts
                 Enables echo commands in source scripts for better script readability
@@ -601,7 +608,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
