@@ -4,18 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.0
+File version: 2.0.11.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (11.0):
+Changes in this version (11.2):
+1. VERSION CORRECTION - Fixed version number from incorrect rollback
+   - v2.0.11.2: Corrected version from 2.0.11.0 to 2.0.11.2
+                Previous running version was 2.0.11.1, should increment not rollback
+
+Changes in this version (11.1):
 1. TEST INFRASTRUCTURE - Added source command test scripts
-   - v2.0.11.0: Added test_source_command.sh for basic functionality tests
+   - v2.0.11.1: Added test_source_command.sh for basic functionality tests
                 Added test_source_advanced.sh for advanced scenarios
                 Added README_SOURCE_TESTS.md with complete documentation
                 Test scripts verify comment handling, blank lines, command execution
