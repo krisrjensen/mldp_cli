@@ -4,16 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.4
+File version: 2.0.11.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
-Changes in this version (11.4):
+Changes in this version (11.5):
+1. BUG FIX - Fixed SQL column name and added ID generation
+   - v2.0.11.5: Fixed experiment_file_selector.py to use experiment_label column
+                Fixed cmd_add_distance_metric to generate experiment_distance_id
+                Prevents null constraint violation errors
+                Added remove_unicode_icons.py utility script
+
+Changes in previous version (11.4):
 1. BUG FIX - Fixed experiment_file_selector.py SQL query
    - v2.0.11.4: Fixed select-files command SQL error
                 Changed from files to files_x table
@@ -608,7 +615,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
