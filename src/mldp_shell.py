@@ -3,24 +3,28 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251104_000000
-File version: 2.0.13.4
+Date Revised: 20251105_000000
+File version: 2.0.13.5
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 4)
+- CHANGE: Tracks changes within current commit cycle (currently 5)
 
-Changes in this version (13.4):
-1. FIX - Corrected logic for continuing after failed commands
-   - v2.0.13.4: Fixed loop logic to check CURRENT block instead of next block
-                Now correctly allows if blocks to check exit codes after failures
-                Enables proper error handling: cmd; if [ $? -eq 0 ]; then...fi
-                Completes Phase 5 - all bash-style conditional tests now pass
-                Fixed distance metrics: l1 -> manhattan
-                Updated remove_unicode_icons.py to include clipboard icon
+Changes in this version (13.5):
+1. CRITICAL FIX - Aggregate feature extraction shape correction
+   - v2.0.13.5: Fixed feature extractor to return shape (n_features,) for aggregate features
+                Previously returned shape (segment_length, n_features) - WRONG!
+                Spectral features (SNR, PSD, slope, SFM) are aggregate type
+                Now correctly compute ONCE per segment and return scalars
+                Output: (3,) instead of (8192, 3) for 3-feature sets
+                Reduces file size from ~200 KB to ~24 bytes per feature file
+                Total storage: ~26 MB instead of ~216 GB for 1.08M files
+                Added spectral_features.py module with relative frequency bands
+                Dynamic n_value for spectral features across decimations
+                All aggregate features now match notebook behavior
 
 Changes in previous version (11.6):
 1. CLEANUP - Removed all unicode icons from output
@@ -631,7 +635,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.13.4"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.13.5"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
