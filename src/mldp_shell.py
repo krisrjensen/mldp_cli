@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.12
+File version: 2.0.12.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.12"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.12.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1431,6 +1431,12 @@ class MLDPShell:
         self.current_classifier_id = None
         self.current_classifier_name = None
         self.last_result = None
+
+        # Scripting support
+        self.last_exit_code = 0           # Track last command exit code for $?
+        self.script_variables = {}         # Session-wide variable storage
+        self.script_should_exit = False    # Flag for early script exit
+
         self.running = True
         self.auto_connect = auto_connect
         self.auto_experiment = auto_experiment
@@ -1510,6 +1516,8 @@ class MLDPShell:
             'help': self.cmd_help,
             'source': self.cmd_source,
             'reload-modules': self.cmd_reload_modules,
+            'input': self.cmd_input,
+            'setvar': self.cmd_setvar,
             'exit': self.cmd_exit,
             'quit': self.cmd_exit,
             # Server management commands
@@ -1747,12 +1755,26 @@ class MLDPShell:
                 cmd = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
-                # Execute command
+                # Execute command and capture exit code
                 if cmd in self.commands:
-                    self.commands[cmd](args)
+                    try:
+                        result = self.commands[cmd](args)
+                        # Store exit code based on return value
+                        if isinstance(result, int):
+                            self.last_exit_code = result
+                        elif result is False:
+                            self.last_exit_code = 1
+                        elif result is True or result is None:
+                            self.last_exit_code = 0
+                        else:
+                            self.last_exit_code = 0
+                    except Exception as cmd_error:
+                        print(f"Command error: {cmd_error}")
+                        self.last_exit_code = 1
                 else:
                     print(f"Unknown command: {cmd}")
                     print("Type 'help' for available commands")
+                    self.last_exit_code = 127  # Command not found
                 
             except KeyboardInterrupt:
                 print("\nUse 'exit' or Ctrl-D to quit")
@@ -1762,9 +1784,86 @@ class MLDPShell:
                 break
             except Exception as e:
                 print(f"Error: {e}")
-    
+
+    # ========== Scripting Helper Methods ==========
+
+    def _substitute_variables(self, line):
+        """
+        Substitute variables in a script line before execution.
+
+        Supports:
+        - $? for last exit code
+        - $VARNAME for script variables
+        - ${VARNAME} for explicit variable names
+        - Backslash escaping \\$
+
+        Args:
+            line: String containing potential variable references
+
+        Returns:
+            String with variables substituted
+        """
+        import re
+
+        # Don't substitute if no $ character present
+        if '$' not in line:
+            return line
+
+        result = line
+
+        # Handle escaped $ first (replace \$ with a placeholder)
+        result = result.replace('\\$', '\x00ESCAPED_DOLLAR\x00')
+
+        # Substitute $? with last exit code
+        result = result.replace('$?', str(self.last_exit_code))
+
+        # Substitute ${VARNAME} syntax (explicit)
+        def replace_braced_var(match):
+            varname = match.group(1)
+            return self.script_variables.get(varname, '')
+
+        result = re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', replace_braced_var, result)
+
+        # Substitute $VARNAME syntax (must not be followed by alphanumeric)
+        def replace_simple_var(match):
+            varname = match.group(1)
+            return self.script_variables.get(varname, '')
+
+        result = re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])', replace_simple_var, result)
+
+        # Restore escaped dollars
+        result = result.replace('\x00ESCAPED_DOLLAR\x00', '$')
+
+        return result
+
+    def _parse_exit_code_from_output(self, output_lines):
+        """
+        Parse command output to infer exit code.
+
+        Looks for [SUCCESS], [ERROR], [INFO] markers in output.
+
+        Args:
+            output_lines: List of output lines from command
+
+        Returns:
+            0 for success, 1 for error, 0 for info/unknown
+        """
+        # Join output lines
+        output = '\n'.join(output_lines) if isinstance(output_lines, list) else str(output_lines)
+
+        # Check for error markers
+        if '[ERROR]' in output or 'Error:' in output or 'ERROR:' in output:
+            return 1
+
+        # Check for success markers
+        if '[SUCCESS]' in output or 'Success' in output:
+            return 0
+
+        # Default to success if no clear indicators
+        return 0
+
     # ========== Command Handlers ==========
-    
+
     def cmd_connect(self, args):
         """Connect to database"""
         host = args[0] if len(args) > 0 else 'localhost'
@@ -18878,11 +18977,43 @@ SETTINGS:
 
 
     def cmd_exit(self, args):
-        """Exit the shell"""
+        """
+        Exit the shell or script.
+
+        Usage:
+            exit [code]
+
+        If called from a script, sets exit flag and returns exit code.
+        If called from interactive shell, closes database and exits.
+
+        Args:
+            args: Optional exit code (default: 0)
+
+        Returns:
+            Exit code (for script context)
+        """
+        # Parse exit code argument
+        exit_code = 0
+        if args:
+            try:
+                exit_code = int(args[0])
+            except (ValueError, IndexError):
+                print(f"[ERROR] Invalid exit code: {args[0]}")
+                exit_code = 1
+
+        # Set script exit flag (will be checked by cmd_source)
+        self.script_should_exit = True
+        self.last_exit_code = exit_code
+
+        # If in interactive shell (not in script), actually exit
+        # The script execution loop will check script_should_exit flag
+        # and break before reaching here in most cases
         if self.db_conn:
             self.db_conn.close()
         print("\nGoodbye! Thank you for using MLDP.")
         self.running = False
+
+        return exit_code
 
     def cmd_reload_modules(self, args):
         """Reload Python modules to pick up code changes
@@ -18925,6 +19056,101 @@ SETTINGS:
 
         print(f"\n[SUCCESS] Reloaded {reloaded} modules")
         print("Code changes are now active in the shell")
+
+        return 0
+
+    def cmd_input(self, args):
+        """
+        Capture user input and store in a variable.
+
+        Usage:
+            input VARNAME ["prompt text"]
+
+        The variable will be stored in session-wide script_variables
+        and can be referenced with $VARNAME in subsequent commands.
+
+        Examples:
+            input USERNAME "Enter your name"
+            input CONFIRM "Continue? (y/n)"
+            echo "Hello $USERNAME"
+
+        Args:
+            args: [varname, prompt_text...]
+
+        Returns:
+            0 on success, 1 on error or user cancellation
+        """
+        if len(args) < 1:
+            print("[ERROR] Usage: input VARNAME [\"prompt text\"]")
+            print("Example: input USERNAME \"Enter your name\"")
+            return 1
+
+        varname = args[0]
+
+        # Validate variable name (alphanumeric and underscore)
+        if not varname.replace('_', '').isalnum() or varname[0].isdigit():
+            print(f"[ERROR] Invalid variable name: {varname}")
+            print("Variable names must start with a letter or underscore")
+            return 1
+
+        # Build prompt text from remaining args
+        if len(args) > 1:
+            prompt_text = ' '.join(args[1:]).strip('"\'')
+        else:
+            prompt_text = f"Enter value for {varname}"
+
+        # Get user input
+        try:
+            value = input(prompt_text + ": ")
+            self.script_variables[varname] = value
+            return 0
+        except (EOFError, KeyboardInterrupt):
+            print("\n[ERROR] Input cancelled by user")
+            return 1
+
+    def cmd_setvar(self, args):
+        """
+        Set a script variable explicitly.
+
+        Usage:
+            setvar VARNAME value
+
+        Sets a session-wide variable that persists across commands
+        and can be referenced with $VARNAME.
+
+        Examples:
+            setvar NAME "John Doe"
+            setvar COUNT 42
+            setvar PATH /home/user/data
+            echo "Name is $NAME"
+
+        Args:
+            args: [varname, value...]
+
+        Returns:
+            0 on success, 1 on error
+        """
+        if len(args) < 2:
+            print("[ERROR] Usage: setvar VARNAME value")
+            print("Example: setvar NAME \"John Doe\"")
+            return 1
+
+        varname = args[0]
+
+        # Validate variable name
+        if not varname.replace('_', '').isalnum() or varname[0].isdigit():
+            print(f"[ERROR] Invalid variable name: {varname}")
+            print("Variable names must start with a letter or underscore")
+            return 1
+
+        # Join remaining args as value
+        value = ' '.join(args[1:])
+
+        # Store variable
+        self.script_variables[varname] = value
+        print(f"[SUCCESS] Set {varname} = \"{value}\"")
+
+        return 0
 
     def cmd_source(self, args):
         """Execute commands from a script file
