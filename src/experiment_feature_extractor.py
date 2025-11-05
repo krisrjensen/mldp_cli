@@ -970,8 +970,13 @@ class ExperimentFeatureExtractor:
         # Load segment data
         seg_data = np.load(segment_file_path)
 
+        # Get amplitude method IDs that were used to generate this segment file
+        # These are in the SAME ORDER as the segment generator wrote them
+        configured_method_ids = self._get_configured_amplitude_method_ids()
+
         # Parse segment file to extract ALL amplitude-processed data
-        # Build dict: {amplitude_method_index: {'load_voltage': array, 'source_current': array}}
+        # Build dict: {method_id: {'load_voltage': array, 'source_current': array}}
+        # Map array indices to database method_ids
         amplitude_data = {}
 
         if isinstance(seg_data, np.lib.npyio.NpzFile):
@@ -981,24 +986,60 @@ class ExperimentFeatureExtractor:
         elif len(seg_data.shape) == 2:
             if seg_data.shape[1] == 2:
                 # Legacy 2-column format (raw only)
-                # Only method index 0 available
-                amplitude_data[0] = {
-                    'load_voltage': seg_data[:, 0],
-                    'source_current': seg_data[:, 1]
-                }
+                # Assume this is the first configured method
+                if configured_method_ids:
+                    amplitude_data[configured_method_ids[0]] = {
+                        'load_voltage': seg_data[:, 0],
+                        'source_current': seg_data[:, 1]
+                    }
+                else:
+                    # Fallback: use method_id=0 for raw
+                    amplitude_data[0] = {
+                        'load_voltage': seg_data[:, 0],
+                        'source_current': seg_data[:, 1]
+                    }
             elif seg_data.shape[1] >= 4 and seg_data.shape[1] % 2 == 0:
                 # Multi-column format with amplitude processing
-                # Format: [amp0_V, amp0_I, amp1_V, amp1_I, amp2_V, amp2_I, ...]
-                # Each pair represents voltage and current for that amplitude method
+                # Format: [raw_V, raw_I, method1_V, method1_I, method2_V, method2_I, ...]
+                # First pair (index 0) is always raw ADC, rest are configured methods in DB order
                 num_amplitude_methods = seg_data.shape[1] // 2
 
-                for method_idx in range(num_amplitude_methods):
-                    col_v = method_idx * 2
-                    col_i = method_idx * 2 + 1
-                    amplitude_data[method_idx] = {
-                        'load_voltage': seg_data[:, col_v],
-                        'source_current': seg_data[:, col_i]
-                    }
+                # Segment generator writes: raw (index 0) + configured methods (indices 1, 2, 3...)
+                # File has: [raw] + [method1, method2, ...]
+                # So num_amplitude_methods = 1 (raw) + len(configured_method_ids)
+                if num_amplitude_methods != 1 + len(configured_method_ids):
+                    raise ValueError(
+                        f"Segment file has {num_amplitude_methods} amplitude methods "
+                        f"(1 raw + {num_amplitude_methods-1} processed), "
+                        f"but experiment has {len(configured_method_ids)} configured methods. "
+                        f"Expected {1 + len(configured_method_ids)} methods in file. "
+                        f"Mismatch detected!"
+                    )
+
+                # Map array indices to method_ids
+                # array_idx 0 = raw ADC (skip, not in configured_method_ids)
+                # array_idx 1 = configured_method_ids[0]
+                # array_idx 2 = configured_method_ids[1]
+                # etc.
+                for array_idx in range(num_amplitude_methods):
+                    col_v = array_idx * 2
+                    col_i = array_idx * 2 + 1
+
+                    if array_idx == 0:
+                        # Skip raw ADC (index 0) unless it's explicitly in configured_method_ids
+                        # (which it typically isn't, since raw is not an amplitude processing method)
+                        continue
+                    else:
+                        # Map to configured method
+                        config_idx = array_idx - 1  # Offset by 1 because array_idx 0 is raw
+                        if config_idx < len(configured_method_ids):
+                            method_id = configured_method_ids[config_idx]
+                            amplitude_data[method_id] = {
+                                'load_voltage': seg_data[:, col_v],
+                                'source_current': seg_data[:, col_i]
+                            }
+                        else:
+                            raise ValueError(f"Array index {array_idx} exceeds configured methods")
             else:
                 raise ValueError(
                     f"Unexpected segment file shape: {seg_data.shape}. "
