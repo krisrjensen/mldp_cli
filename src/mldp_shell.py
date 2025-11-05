@@ -4,20 +4,21 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.13.0
+File version: 2.0.13.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 7)
+- COMMIT: Increments on every git commit/push (currently 13)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (11.7):
-1. FIX - Removed remaining unicode icons and fixed setup script
-   - v2.0.11.7: Removed clipboard icon (📋) from output
-                Fixed setup_experiment_42.sh with correct label names
-                Changed arc_transient -> arc, negative_load_transient -> negative_transient
+Changes in this version (13.1):
+1. FIX - Nested if statement parsing in script_parser
+   - v2.0.13.1: Modified _parse_if_block() to recursively parse nested blocks
+                Added _parse_lines_into_blocks() helper method
+                Updated _execute_block() to handle nested_blocks attribute
+                Enables proper execution of nested conditionals in scripts
                 Fixed distance metrics: l1 -> manhattan
                 Updated remove_unicode_icons.py to include clipboard icon
 
@@ -19313,23 +19314,45 @@ SETTINGS:
 
             # Execute appropriate branch
             if condition_result:
-                # Execute if block
-                for line in block.lines:
-                    if self.script_should_exit:
-                        break
-                    r = self._execute_script_line(line, continue_on_error, echo_commands)
-                    result['total'] += r['total']
-                    result['executed'] += r['executed']
-                    result['failed'] += r['failed']
+                # Execute if block (nested blocks or lines)
+                if hasattr(block, 'nested_blocks') and block.nested_blocks:
+                    # Execute nested blocks recursively
+                    for nested_block in block.nested_blocks:
+                        if self.script_should_exit:
+                            break
+                        r = self._execute_block(nested_block, continue_on_error, echo_commands)
+                        result['total'] += r['total']
+                        result['executed'] += r['executed']
+                        result['failed'] += r['failed']
+                else:
+                    # Fall back to executing lines (backward compatibility)
+                    for line in block.lines:
+                        if self.script_should_exit:
+                            break
+                        r = self._execute_script_line(line, continue_on_error, echo_commands)
+                        result['total'] += r['total']
+                        result['executed'] += r['executed']
+                        result['failed'] += r['failed']
             elif block.else_block:
-                # Execute else block
-                for line in block.else_block.lines:
-                    if self.script_should_exit:
-                        break
-                    r = self._execute_script_line(line, continue_on_error, echo_commands)
-                    result['total'] += r['total']
-                    result['executed'] += r['executed']
-                    result['failed'] += r['failed']
+                # Execute else block (nested blocks or lines)
+                if hasattr(block.else_block, 'nested_blocks') and block.else_block.nested_blocks:
+                    # Execute nested blocks recursively
+                    for nested_block in block.else_block.nested_blocks:
+                        if self.script_should_exit:
+                            break
+                        r = self._execute_block(nested_block, continue_on_error, echo_commands)
+                        result['total'] += r['total']
+                        result['executed'] += r['executed']
+                        result['failed'] += r['failed']
+                else:
+                    # Fall back to executing lines (backward compatibility)
+                    for line in block.else_block.lines:
+                        if self.script_should_exit:
+                            break
+                        r = self._execute_script_line(line, continue_on_error, echo_commands)
+                        result['total'] += r['total']
+                        result['executed'] += r['executed']
+                        result['failed'] += r['failed']
 
         else:
             # Sequential block - just execute all lines

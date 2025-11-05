@@ -122,7 +122,7 @@ class ScriptParser:
 
     def _parse_if_block(self) -> ExecutionBlock:
         """
-        Parse an if/then/else/fi block.
+        Parse an if/then/else/fi block with support for nested blocks.
 
         Returns:
             ExecutionBlock with type='if' and optional else_block
@@ -154,20 +154,52 @@ class ScriptParser:
         else:
             if_block_lines = self.lines[self.current_line:fi_line_num]
 
-        # Create if block
-        if_block = ExecutionBlock('if', if_block_lines, condition)
+        # Recursively parse if-block lines into nested blocks
+        if_nested_blocks = self._parse_lines_into_blocks(if_block_lines)
+
+        # Create if block with nested blocks instead of raw lines
+        if_block = ExecutionBlock('if', [], condition)
+        if_block.nested_blocks = if_nested_blocks
 
         # Parse else block if present
         if else_line_num != -1:
             # Skip 'else' line
             else_start = else_line_num + 1
             else_block_lines = self.lines[else_start:fi_line_num]
-            if_block.else_block = ExecutionBlock('else', else_block_lines)
+
+            # Recursively parse else-block lines
+            else_nested_blocks = self._parse_lines_into_blocks(else_block_lines)
+
+            if_block.else_block = ExecutionBlock('else', [])
+            if_block.else_block.nested_blocks = else_nested_blocks
 
         # Move past fi
         self.current_line = fi_line_num + 1
 
         return if_block
+
+    def _parse_lines_into_blocks(self, lines: List[str]) -> List[ExecutionBlock]:
+        """
+        Parse a list of lines into execution blocks (handles nested if statements).
+
+        Args:
+            lines: List of script lines to parse
+
+        Returns:
+            List of ExecutionBlock objects
+        """
+        # Create a temporary parser for these lines
+        temp_parser = ScriptParser(self.shell)
+        temp_parser.lines = lines
+        temp_parser.current_line = 0
+
+        blocks = []
+        while temp_parser.current_line < len(lines):
+            block = temp_parser._parse_next_block()
+            if block:
+                blocks.append(block)
+
+        return blocks
 
     def _parse_sequential_block(self) -> ExecutionBlock:
         """
