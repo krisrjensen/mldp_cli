@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.10
+File version: 2.0.11.11
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.10"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.11"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -3512,22 +3512,25 @@ SETTINGS:
         try:
             cursor = self.db_conn.cursor()
 
-            # Check if decimation exists in lookup table
+            # Look up decimation_id from decimation_factor
             cursor.execute("""
-                SELECT 1 FROM ml_experiment_decimation_lut
-                WHERE decimation_factor = %s
+                SELECT decimation_id FROM ml_experiment_decimation_lut
+                WHERE decimation_factor = %s AND is_active = true
             """, (decimation,))
 
-            if not cursor.fetchone():
+            result = cursor.fetchone()
+            if not result:
                 print(f"[ERROR] Decimation factor {decimation} does not exist in ml_experiment_decimation_lut")
                 cursor.close()
                 return
 
+            decimation_id = result[0]
+
             # Check if already added to experiment
             cursor.execute("""
-                SELECT 1 FROM ml_experiments_decimation
-                WHERE experiment_id = %s AND decimation_factor = %s
-            """, (self.current_experiment, decimation))
+                SELECT 1 FROM ml_experiment_decimation_junction
+                WHERE experiment_id = %s AND decimation_id = %s
+            """, (self.current_experiment, decimation_id))
 
             if cursor.fetchone():
                 print(f"[INFO] Decimation factor {decimation} already exists in experiment {self.current_experiment}")
@@ -3537,15 +3540,15 @@ SETTINGS:
             # Get next ID
             cursor.execute("""
                 SELECT COALESCE(MAX(experiment_decimation_id), 0) + 1
-                FROM ml_experiments_decimation
+                FROM ml_experiment_decimation_junction
             """)
             next_id = cursor.fetchone()[0]
 
             # Add to experiment
             cursor.execute("""
-                INSERT INTO ml_experiments_decimation (experiment_decimation_id, experiment_id, decimation_factor)
+                INSERT INTO ml_experiment_decimation_junction (experiment_decimation_id, experiment_id, decimation_id)
                 VALUES (%s, %s, %s)
-            """, (next_id, self.current_experiment, decimation))
+            """, (next_id, self.current_experiment, decimation_id))
 
             self.db_conn.commit()
             print(f"[SUCCESS] Added decimation factor {decimation} to experiment {self.current_experiment}")
