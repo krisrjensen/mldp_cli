@@ -67,8 +67,8 @@ add-decimation 0
 add-decimation 7
 add-decimation 15
 add-decimation 31
-add-decimation 64
-add-decimation 128
+add-decimation 63
+add-decimation 127
 echo ""
 
 # Step 7: Add distance metrics

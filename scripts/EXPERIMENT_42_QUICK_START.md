@@ -32,7 +32,7 @@ This will automatically:
 - Select 150 training files (50 per label)
 - Select segments with position balancing
 - Add 4 data types (adc6, adc8, adc10, adc12)
-- Add 6 decimations (0, 7, 15, 31, 64, 128)
+- Add 6 decimations (0, 7, 15, 31, 63, 127)
 - Add 2 distance metrics (L1, Cosine)
 
 ### Step 2: Generate Data & Compute Distances (~12-18 hours)
