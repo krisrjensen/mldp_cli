@@ -2193,6 +2193,35 @@ class MLDPShell:
                                             for seg_type, count in seg_types:
                                                 print(f"  {seg_type:10}: {count} segments")
 
+                                        # CRITICAL: Check original_length distribution
+                                        # All segments should have the same original_length (before decimation)
+                                        cursor.execute(f"""
+                                            SELECT
+                                                ds.original_length,
+                                                ds.segment_length,
+                                                COUNT(*) as count
+                                            FROM {seg_table} st
+                                            JOIN data_segments ds ON st.segment_id = ds.segment_id
+                                            GROUP BY ds.original_length, ds.segment_length
+                                            ORDER BY ds.original_length, ds.segment_length
+                                        """)
+
+                                        length_dist = cursor.fetchall()
+                                        if length_dist:
+                                            print("\nSegment Length Distribution:")
+                                            unique_original = set(row[0] for row in length_dist)
+
+                                            # Check if all segments have the same original_length
+                                            if len(unique_original) == 1:
+                                                print(f"  ✓ All segments have original_length = {list(unique_original)[0]}")
+                                            else:
+                                                print(f"  ⚠ WARNING: Multiple original lengths detected!")
+                                                print(f"  Expected: Single original_length per experiment")
+
+                                            print("\n  Distribution (original_length → segment_length):")
+                                            for orig_len, seg_len, count in length_dist:
+                                                print(f"    {orig_len:8} → {seg_len:8}: {count:5} segments")
+
                                 # Check for segment pairs too
                                 pairs_table = f"experiment_{exp_id:03d}_segment_pairs"
                                 cursor.execute("""

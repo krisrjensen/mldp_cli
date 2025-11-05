@@ -3,11 +3,17 @@
 Filename: experiment_segment_selector_v2.py
 Author(s): Kristophor Jensen
 Date Created: 20250920_183000
-Date Revised: 20251011_000000
-File version: 1.0.0.2
+Date Revised: 20251104_000000
+File version: 1.0.0.3
 Description: Corrected segment selection with proper per-segment-code-type logic
              Filters segments by experiment-configured segment sizes
              Fixed table names: ml_experiments_segment_sizes, ml_segment_sizes_lut
+
+Changes in v1.0.0.3:
+- CRITICAL FIX: Changed filter from segment_length to original_length
+- Experiment configuration specifies ORIGINAL segment length before decimation
+- Decimation reduces segment length, so must filter by original_length
+- Added original_length to SELECT clause for both query paths
 """
 
 import logging
@@ -94,7 +100,7 @@ class SegmentSelectorV2:
         """
         # Build query with optional segment size filter
         if self.segment_sizes:
-            # Filter by configured segment sizes
+            # Filter by configured segment sizes (ORIGINAL length, before decimation)
             size_placeholders = ','.join(['%s'] * len(self.segment_sizes))
             query = f"""
                 SELECT
@@ -102,6 +108,7 @@ class SegmentSelectorV2:
                     s.experiment_file_id as file_id,
                     s.beginning_index as start_index,
                     s.segment_length,
+                    s.original_length,
                     s.segment_type,
                     s.segment_id_code,
                     s.segment_label_id
@@ -109,7 +116,7 @@ class SegmentSelectorV2:
                 WHERE s.experiment_file_id = %s
                     AND s.enabled = true
                     AND s.segment_id_code IS NOT NULL
-                    AND s.segment_length IN ({size_placeholders})
+                    AND s.original_length IN ({size_placeholders})
                 ORDER BY s.beginning_index
             """
             params = (file_id,) + tuple(self.segment_sizes)
@@ -121,6 +128,7 @@ class SegmentSelectorV2:
                     s.experiment_file_id as file_id,
                     s.beginning_index as start_index,
                     s.segment_length,
+                    s.original_length,
                     s.segment_type,
                     s.segment_id_code,
                     s.segment_label_id
