@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.12.1
+File version: 2.0.13.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -630,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.12.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.13.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -19156,7 +19156,7 @@ SETTINGS:
         return 0
 
     def cmd_source(self, args):
-        """Execute commands from a script file
+        """Execute commands from a script file with bash-style control flow
 
         Usage: source <filename> [--continue] [--echo]
 
@@ -19165,10 +19165,18 @@ SETTINGS:
           --echo        Echo each command before executing it
 
         File Format:
-          - One command per line
+          - Supports if/then/else/fi conditional blocks
+          - Variables with $VARNAME or ${VARNAME}
+          - Exit codes with $?
           - Lines starting with # are comments
           - Blank lines are ignored
-          - Arguments with spaces should be quoted
+
+        Bash-style Features:
+          - if [ condition ]; then ... else ... fi
+          - Test expressions: [ $? -eq 0 ], [ "$VAR" = "value" ], etc.
+          - Variables: setvar, input, $VARNAME substitution
+          - Exit codes: $? contains last command exit status
+          - Early exit: exit [code]
 
         Search Path:
           1. Current directory
@@ -19182,11 +19190,12 @@ SETTINGS:
         """
         import shlex
         from pathlib import Path
+        from script_parser import ScriptParser
 
         if not args:
             print("Usage: source <filename> [--continue] [--echo]")
             print("Type 'help source' for more information")
-            return
+            return 1
 
         # Parse arguments
         filename = args[0]
@@ -19213,82 +19222,207 @@ SETTINGS:
             print(f"   Searched in:")
             for path in search_paths:
                 print(f"     - {path}")
-            return
+            return 1
 
         print(f"Executing script: {script_path}")
         print(f"   Continue on error: {continue_on_error}")
         print(f"   Echo commands: {echo_commands}")
         print()
 
-        # Read and execute commands
+        # Reset script exit flag
+        self.script_should_exit = False
+
+        # Read all lines from file
+        try:
+            with open(script_path, 'r') as f:
+                script_lines = f.readlines()
+        except FileNotFoundError:
+            print(f"Could not open file: {script_path}")
+            return 1
+        except Exception as e:
+            print(f"Error reading script: {e}")
+            return 1
+
+        # Parse script into execution blocks
+        try:
+            parser = ScriptParser(self)
+            blocks = parser.parse_script(script_lines)
+        except SyntaxError as e:
+            print(f"[ERROR] Script syntax error: {e}")
+            return 1
+        except Exception as e:
+            print(f"[ERROR] Failed to parse script: {e}")
+            return 1
+
+        # Execute blocks
         total_commands = 0
         executed_commands = 0
         failed_commands = 0
-        skipped_lines = 0
 
-        try:
-            with open(script_path, 'r') as f:
-                for line_num, line in enumerate(f, 1):
-                    # Strip whitespace
-                    line = line.strip()
+        for block in blocks:
+            if self.script_should_exit:
+                break
 
-                    # Skip empty lines and comments
-                    if not line or line.startswith('#'):
-                        skipped_lines += 1
-                        continue
-
-                    total_commands += 1
-
-                    # Echo if requested
-                    if echo_commands:
-                        print(f"[{line_num}] {line}")
-
-                    try:
-                        # Parse the command line using shlex to handle quoted arguments
-                        parts = shlex.split(line)
-                        if not parts:
-                            skipped_lines += 1
-                            continue
-
-                        cmd = parts[0]
-                        cmd_args = parts[1:]
-
-                        # Execute the command
-                        if cmd in self.commands:
-                            self.commands[cmd](cmd_args)
-                            executed_commands += 1
-                        else:
-                            print(f"Unknown command at line {line_num}: {cmd}")
-                            failed_commands += 1
-                            if not continue_on_error:
-                                print(f"Stopping execution (use --continue to continue on errors)")
-                                break
-
-                    except Exception as e:
-                        print(f"Error at line {line_num}: {e}")
-                        failed_commands += 1
-                        if not continue_on_error:
-                            print(f"Stopping execution (use --continue to continue on errors)")
-                            break
-
-        except FileNotFoundError:
-            print(f"Could not open file: {script_path}")
-            return
-        except Exception as e:
-            print(f"Error reading script: {e}")
-            return
+            result = self._execute_block(block, continue_on_error, echo_commands)
+            total_commands += result['total']
+            executed_commands += result['executed']
+            failed_commands += result['failed']
 
         # Print summary
         print()
         print("=" * 60)
         print(f"Script Execution Summary")
         print("=" * 60)
-        print(f"   Total lines: {line_num}")
-        print(f"   Skipped (blank/comments): {skipped_lines}")
+        print(f"   Total lines: {len(script_lines)}")
         print(f"   Commands found: {total_commands}")
         print(f"   Successfully executed: {executed_commands}")
         print(f"   Failed: {failed_commands}")
         print("=" * 60)
+
+        # Reset script exit flag
+        self.script_should_exit = False
+
+        return 0 if failed_commands == 0 else 1
+
+    def _execute_block(self, block, continue_on_error, echo_commands):
+        """
+        Execute an execution block (sequential, if, or else).
+
+        Args:
+            block: ExecutionBlock to execute
+            continue_on_error: Continue even if commands fail
+            echo_commands: Echo commands before executing
+
+        Returns:
+            Dict with 'total', 'executed', 'failed' counts
+        """
+        from script_parser import ScriptParser
+
+        result = {'total': 0, 'executed': 0, 'failed': 0}
+
+        if block.type == 'if':
+            # Evaluate condition with variable substitution
+            condition = self._substitute_variables(block.condition)
+            parser = ScriptParser(self)
+
+            try:
+                condition_result = parser.evaluate_condition(condition)
+            except Exception as e:
+                print(f"[ERROR] Failed to evaluate condition '{condition}': {e}")
+                condition_result = False
+
+            # Execute appropriate branch
+            if condition_result:
+                # Execute if block
+                for line in block.lines:
+                    if self.script_should_exit:
+                        break
+                    r = self._execute_script_line(line, continue_on_error, echo_commands)
+                    result['total'] += r['total']
+                    result['executed'] += r['executed']
+                    result['failed'] += r['failed']
+            elif block.else_block:
+                # Execute else block
+                for line in block.else_block.lines:
+                    if self.script_should_exit:
+                        break
+                    r = self._execute_script_line(line, continue_on_error, echo_commands)
+                    result['total'] += r['total']
+                    result['executed'] += r['executed']
+                    result['failed'] += r['failed']
+
+        else:
+            # Sequential block - just execute all lines
+            for line in block.lines:
+                if self.script_should_exit:
+                    break
+                r = self._execute_script_line(line, continue_on_error, echo_commands)
+                result['total'] += r['total']
+                result['executed'] += r['executed']
+                result['failed'] += r['failed']
+
+        return result
+
+    def _execute_script_line(self, line, continue_on_error, echo_commands):
+        """
+        Execute a single script line.
+
+        Args:
+            line: Command line to execute
+            continue_on_error: Continue even if command fails
+            echo_commands: Echo command before executing
+
+        Returns:
+            Dict with 'total', 'executed', 'failed' counts
+        """
+        import shlex
+
+        result = {'total': 0, 'executed': 0, 'failed': 0}
+
+        # Strip and check if line is empty or comment
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return result
+
+        # Substitute variables
+        line = self._substitute_variables(line)
+
+        # Echo if requested
+        if echo_commands:
+            print(f"  > {line}")
+
+        result['total'] = 1
+
+        try:
+            # Parse command
+            parts = shlex.split(line)
+            if not parts:
+                return result
+
+            cmd = parts[0].lower()
+            cmd_args = parts[1:]
+
+            # Execute command and capture return code
+            if cmd in self.commands:
+                try:
+                    exit_code = self.commands[cmd](cmd_args)
+                    # Store exit code
+                    if isinstance(exit_code, int):
+                        self.last_exit_code = exit_code
+                    elif exit_code is False:
+                        self.last_exit_code = 1
+                    else:
+                        self.last_exit_code = 0
+
+                    if self.last_exit_code == 0:
+                        result['executed'] += 1
+                    else:
+                        result['failed'] += 1
+                        if not continue_on_error:
+                            print(f"Command failed with exit code {self.last_exit_code}")
+                            self.script_should_exit = True
+
+                except Exception as cmd_error:
+                    print(f"[ERROR] Command error: {cmd_error}")
+                    result['failed'] += 1
+                    self.last_exit_code = 1
+                    if not continue_on_error:
+                        self.script_should_exit = True
+            else:
+                print(f"[ERROR] Unknown command: {cmd}")
+                result['failed'] += 1
+                self.last_exit_code = 127
+                if not continue_on_error:
+                    self.script_should_exit = True
+
+        except Exception as e:
+            print(f"[ERROR] Failed to execute line: {e}")
+            result['failed'] += 1
+            self.last_exit_code = 1
+            if not continue_on_error:
+                self.script_should_exit = True
+
+        return result
 
     # ========== Server Management Commands ==========
     
