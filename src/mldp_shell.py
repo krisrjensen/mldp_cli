@@ -4,16 +4,24 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.11.6
+File version: 2.0.11.7
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 11)
-- CHANGE: Tracks changes within current commit cycle (currently 6)
+- CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (11.6):
+Changes in this version (11.7):
+1. FIX - Removed remaining unicode icons and fixed setup script
+   - v2.0.11.7: Removed clipboard icon (📋) from output
+                Fixed setup_experiment_42.sh with correct label names
+                Changed arc_transient -> arc, negative_load_transient -> negative_transient
+                Fixed distance metrics: l1 -> manhattan
+                Updated remove_unicode_icons.py to include clipboard icon
+
+Changes in previous version (11.6):
 1. CLEANUP - Removed all unicode icons from output
    - v2.0.11.6: Removed all emoji/unicode icons from print statements
                 Replaced with plain text (SUCCESS, ERROR, WARNING, etc.)
@@ -622,7 +630,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.11.6"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.11.7"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1839,7 +1847,7 @@ class MLDPShell:
             tables = cursor.fetchall()
             
             if tables:
-                print("\n📋 Available tables:")
+                print("\nAvailable tables:")
                 for i, (table,) in enumerate(tables, 1):
                     print(f"  {i:3d}. {table}")
                 print(f"\nTotal: {len(tables)} tables")
@@ -1875,7 +1883,7 @@ class MLDPShell:
                 print("No experiments found")
                 return
             
-            print(f"\n📋 Available Experiments ({len(experiments)} total):")
+            print(f"\nAvailable Experiments ({len(experiments)} total):")
             print("-" * 80)
             
             for exp in experiments:
@@ -3340,7 +3348,7 @@ SETTINGS:
 
                 # Show strategy used
                 if 'strategy' in result:
-                    print(f"\n📋 Selection strategy: {result['strategy']}")
+                    print(f"\nSelection strategy: {result['strategy']}")
 
                 print(f"\nData saved to:")
                 print(f"   experiment_{experiment_id:03d}_segment_training_data")
@@ -6487,7 +6495,7 @@ SETTINGS:
                     print(f"\nℹ️  {len(non_empty_tables)} tables have data and were not deleted.")
                 return
 
-            print(f"\n📋 Summary:")
+            print(f"\nSummary:")
             print(f"   Empty tables to delete: {len(empty_tables)}")
             print(f"   Tables with data (protected): {len(non_empty_tables)}")
 
@@ -8146,7 +8154,7 @@ SETTINGS:
 
             # Show pre-flight plan
             print(f"\n{'='*80}")
-            print(f"📋 DISTANCE CALCULATION PLAN - Experiment {self.current_experiment}")
+            print(f"DISTANCE CALCULATION PLAN - Experiment {self.current_experiment}")
             print(f"{'='*80}\n")
 
             # Query configuration
@@ -8659,7 +8667,7 @@ SETTINGS:
 
             # Show pre-flight plan
             print(f"\n{'='*80}")
-            print(f"📋 DISTANCE INSERTION PLAN - Experiment {self.current_experiment}")
+            print(f"DISTANCE INSERTION PLAN - Experiment {self.current_experiment}")
             print(f"{'='*80}\n")
 
             # Count distance files in .processed directory
@@ -9261,7 +9269,7 @@ SETTINGS:
         print(f"\n{'='*80}")
         print(f"🚀 MPCCTL EXPERIMENT PIPELINE - Experiment {self.current_experiment}")
         print(f"{'='*80}\n")
-        print(f"📋 Configuration:")
+        print(f"Configuration:")
         print(f"   Workers: {workers}")
         print(f"   Log files: {'Enabled' if log_enabled else 'Disabled'}")
         print(f"   Verbose: {'Enabled' if verbose else 'Disabled'}")
@@ -9570,7 +9578,7 @@ SETTINGS:
 
         # Show pre-flight plan
         print(f"\n{'='*80}")
-        print(f"📋 FEATURE EXTRACTION PLAN - Experiment {self.current_experiment}")
+        print(f"FEATURE EXTRACTION PLAN - Experiment {self.current_experiment}")
         print(f"{'='*80}\n")
 
         # Query configuration with proper error handling
@@ -19074,7 +19082,7 @@ SETTINGS:
             
             log_file = logs_path / f"{service}.log"
             if log_file.exists():
-                print(f"\n📋 Last {lines} lines of {service}.log:")
+                print(f"\nLast {lines} lines of {service}.log:")
                 print("=" * 60)
                 result = subprocess.run(
                     ["tail", f"-{lines}", str(log_file)],
@@ -19292,12 +19300,12 @@ SETTINGS:
                 i += 1
 
         if use_experiment_config:
-            print(f"📋 Using experiment {experiment_id} configuration (data types & decimations)")
+            print(f"Using experiment {experiment_id} configuration (data types & decimations)")
         else:
             if data_types:
-                print(f"📋 Using custom data types: {data_types}")
+                print(f"Using custom data types: {data_types}")
             if decimations is not None:
-                print(f"📋 Using custom decimations: {decimations}")
+                print(f"Using custom decimations: {decimations}")
 
         try:
             from experiment_segment_fileset_generator_v2 import ExperimentSegmentFilesetGeneratorV2
@@ -19452,7 +19460,7 @@ SETTINGS:
 
             # Display pre-flight information
             print(f"\n{'='*80}")
-            print(f"📋 SEGMENT GENERATION PLAN - Experiment {experiment_id}")
+            print(f"SEGMENT GENERATION PLAN - Experiment {experiment_id}")
             print(f"{'='*80}")
 
             print(f"\nInput Configuration:")

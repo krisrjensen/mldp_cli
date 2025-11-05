@@ -43,8 +43,8 @@ echo ""
 
 # Step 3: Select training files (150 files: 50 per label)
 echo "# Step 3: Selecting training files (150 total: 50 per label)"
-select-files arc_transient --count 50 --strategy random --seed 42
-select-files negative_load_transient --count 50 --strategy random --seed 42
+select-files arc --count 50 --strategy random --seed 42
+select-files negative_transient --count 50 --strategy random --seed 42
 select-files parallel_motor_arc --count 50 --strategy random --seed 42
 echo ""
 
@@ -73,7 +73,7 @@ echo ""
 
 # Step 7: Add distance metrics
 echo "# Step 7: Adding distance metrics"
-add-distance-metric --metric l1
+add-distance-metric --metric manhattan
 add-distance-metric --metric cosine
 echo ""
 
