@@ -4,21 +4,22 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.13.1
+File version: 2.0.13.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (13.1):
-1. FIX - Nested if statement parsing in script_parser
-   - v2.0.13.1: Modified _parse_if_block() to recursively parse nested blocks
-                Added _parse_lines_into_blocks() helper method
-                Updated _execute_block() to handle nested_blocks attribute
-                Enables proper execution of nested conditionals in scripts
+Changes in this version (13.2):
+1. FEATURE - cmd_set now returns proper exit codes (Phase 5)
+   - v2.0.13.2: Added experiment ID validation against database
+                Added distance type validation
+                All error conditions now return 1 (failure)
+                All success conditions now return 0 (success)
+                Enables proper if/then/else conditional handling in scripts
                 Fixed distance metrics: l1 -> manhattan
                 Updated remove_unicode_icons.py to include clipboard icon
 
@@ -2824,22 +2825,76 @@ class MLDPShell:
             print("  set distance l2")
             print("  set classifier 1")
             print("  set classifier none")
-            return
+            return 1
 
         param, value = args
 
         if param == 'experiment':
-            self.current_experiment = int(value)
-            print(f"[SUCCESS] Current experiment set to: {self.current_experiment}")
+            # Validate experiment ID is an integer
+            try:
+                experiment_id = int(value)
+            except ValueError:
+                print(f"[ERROR] Invalid experiment ID: {value}")
+                print("Experiment ID must be a positive integer")
+                return 1
+
+            # Validate experiment ID is positive
+            if experiment_id <= 0:
+                print(f"[ERROR] Invalid experiment ID: {experiment_id}")
+                print("Experiment ID must be a positive integer")
+                return 1
+
+            # Validate experiment exists in database (if connected)
+            if self.db_conn:
+                try:
+                    cursor = self.db_conn.cursor()
+                    cursor.execute("""
+                        SELECT experiment_name
+                        FROM ml_experiments
+                        WHERE experiment_id = %s
+                    """, (experiment_id,))
+                    result = cursor.fetchone()
+                    cursor.close()
+
+                    if not result:
+                        print(f"[ERROR] Experiment {experiment_id} not found in database")
+                        print("Use 'experiment-list' to see available experiments")
+                        return 1
+
+                    experiment_name = result[0]
+                    self.current_experiment = experiment_id
+                    print(f"[SUCCESS] Current experiment set to: {experiment_id} ({experiment_name})")
+                    return 0
+
+                except Exception as e:
+                    print(f"[ERROR] Failed to validate experiment: {e}")
+                    return 1
+            else:
+                # Not connected to database - allow setting but warn
+                print(f"[WARNING] Not connected to database - cannot validate experiment {experiment_id}")
+                self.current_experiment = experiment_id
+                print(f"[SUCCESS] Current experiment set to: {experiment_id}")
+                return 0
+
         elif param == 'distance':
-            self.current_distance_type = value
+            # Validate distance type
+            valid_distances = ['l1', 'l2', 'manhattan', 'euclidean', 'cosine']
+            if value.lower() not in valid_distances:
+                print(f"[ERROR] Invalid distance type: {value}")
+                print(f"Valid types: {', '.join(valid_distances)}")
+                return 1
+
+            self.current_distance_type = value.lower()
             print(f"[SUCCESS] Current distance type set to: {self.current_distance_type}")
+            return 0
+
         elif param == 'classifier':
             # Handle classifier selection
             if value.lower() == 'none':
                 self.current_classifier_id = None
                 self.current_classifier_name = None
                 print("[SUCCESS] Classifier deselected")
+                return 0
             else:
                 # Validate classifier ID
                 try:
@@ -2847,17 +2902,17 @@ class MLDPShell:
                 except ValueError:
                     print(f"[ERROR] Invalid classifier ID: {value}")
                     print("Usage: set classifier <id> or set classifier none")
-                    return
+                    return 1
 
                 # Check if experiment is selected
                 if not self.current_experiment:
                     print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
-                    return
+                    return 1
 
                 # Check if classifier exists
                 if not self.db_conn:
                     print("[ERROR] Not connected to database. Use 'connect' first.")
-                    return
+                    return 1
 
                 try:
                     cursor = self.db_conn.cursor()
@@ -2867,11 +2922,12 @@ class MLDPShell:
                         WHERE experiment_id = %s AND classifier_id = %s
                     """, (self.current_experiment, classifier_id))
                     result = cursor.fetchone()
+                    cursor.close()
 
                     if not result:
                         print(f"[ERROR] Classifier {classifier_id} not found for experiment {self.current_experiment}")
                         print("Use 'classifier-list' to see available classifiers")
-                        return
+                        return 1
 
                     classifier_name, is_archived = result
 
@@ -2881,12 +2937,15 @@ class MLDPShell:
                     self.current_classifier_id = classifier_id
                     self.current_classifier_name = classifier_name
                     print(f"[SUCCESS] Current classifier set to: {classifier_id} ({classifier_name})")
+                    return 0
 
                 except Exception as e:
                     print(f"[ERROR] Failed to set classifier: {e}")
+                    return 1
         else:
             print(f"[ERROR] Unknown parameter: {param}")
             print("Parameters: experiment, distance, classifier")
+            return 1
     
     def cmd_show(self, args):
         """Show current settings"""
