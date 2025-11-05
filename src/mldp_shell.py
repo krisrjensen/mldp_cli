@@ -4,21 +4,20 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251104_000000
-File version: 2.0.13.3
+File version: 2.0.13.4
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 3)
+- CHANGE: Tracks changes within current commit cycle (currently 4)
 
-Changes in this version (13.3):
-1. FIX - Script executor now continues when if block follows failed command
-   - v2.0.13.3: Modified cmd_source block execution loop
-                Checks if next block is an if statement before stopping on error
-                Allows if blocks to check exit codes of failed commands
-                Enables proper error handling patterns like: cmd; if [ $? -eq 0 ]
+Changes in this version (13.4):
+1. FIX - Corrected logic for continuing after failed commands
+   - v2.0.13.4: Fixed loop logic to check CURRENT block instead of next block
+                Now correctly allows if blocks to check exit codes after failures
+                Enables proper error handling: cmd; if [ $? -eq 0 ]; then...fi
                 Completes Phase 5 - all bash-style conditional tests now pass
                 Fixed distance metrics: l1 -> manhattan
                 Updated remove_unicode_icons.py to include clipboard icon
@@ -632,7 +631,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.13.3"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.13.4"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -19321,8 +19320,8 @@ SETTINGS:
 
         for i, block in enumerate(blocks):
             if self.script_should_exit:
-                # Check if next block is an if statement that might check exit code
-                if i + 1 < len(blocks) and blocks[i + 1].type == 'if':
+                # Check if CURRENT block is an if statement that might check exit code
+                if block.type == 'if':
                     # Don't exit - let the if statement handle the failure
                     self.script_should_exit = False
                 else:
