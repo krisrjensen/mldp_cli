@@ -4,16 +4,26 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.13.7
+File version: 2.0.14.8
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 7)
+- COMMIT: Increments on every git commit/push (currently 14)
+- CHANGE: Tracks changes within current commit cycle (currently 8)
 
-Changes in this version (13.7):
+Changes in this version (14.8):
+1. MAJOR FEATURE - Memory caching for distance calculator
+   - v2.0.14.8: Added --memory argument to mpcctl-distance-function command
+                Implements LRU cache for feature files to eliminate I/O bottleneck
+                Memory budget splits across workers automatically
+                Example: --memory 200 with 20 workers = 10 MB per worker
+                Distance calculator v2.2.0.9
+                Expected: minutes instead of hours for experiment 42
+                Usage: mpcctl-distance-function --start --workers 20 --memory 200 --feature_sets 161
+
+Changes in previous version (13.7):
 1. CRITICAL FIX - Distance calculator aggregate feature support
    - v2.0.13.7: Fixed mpcctl_cli_distance_calculator.py validation logic
                 Was rejecting ALL aggregate features (checking for 2D, got 1D)
@@ -8386,13 +8396,15 @@ SETTINGS:
             print("\nOptions for --start:")
             print("  --workers N              Number of worker processes (default: 16)")
             print("  --feature_sets 1,2,3     Comma-separated list of feature set IDs to use")
+            print("  --memory N               Total memory budget in MB for caching (0 = disabled)")
+            print("                           Splits across workers. Example: --memory 200 with 20 workers = 10 MB/worker")
             print("  --log                    Create log file (yyyymmdd_hhmmss_mpcctl_distance_calculation.log)")
             print("  --verbose                Show verbose output in CLI")
             print("  --clean                  Start fresh (delete .mpcctl and .processed) [DEFAULT]")
             print("  --resume                 Resume from existing progress")
             print("  --force                  Skip confirmation prompt (for automation)")
             print("\nExamples:")
-            print("  mpcctl-distance-function --start --workers 20")
+            print("  mpcctl-distance-function --start --workers 20 --feature_sets 161 --memory 200")
             print("  mpcctl-distance-function --start --workers 20 --resume")
             print("  mpcctl-distance-function --start --workers 2 --feature_sets 1,2,3,4,5")
             print("  mpcctl-distance-function --start --workers 20 --log --verbose")
@@ -8411,6 +8423,7 @@ SETTINGS:
 
             # Parse options
             workers = 16
+            memory_mb = 0
             log_enabled = '--log' in args
             verbose = '--verbose' in args
             force = '--force' in args
@@ -8427,6 +8440,12 @@ SETTINGS:
                         workers = int(args[i + 1])
                     except ValueError:
                         print(f"Invalid workers value: {args[i + 1]}")
+                        return
+                elif arg == '--memory' and i + 1 < len(args):
+                    try:
+                        memory_mb = int(args[i + 1])
+                    except ValueError:
+                        print(f"Invalid memory value: {args[i + 1]}")
                         return
                 elif arg == '--feature_sets' and i + 1 < len(args):
                     try:
@@ -8572,7 +8591,7 @@ SETTINGS:
             manager = mp.Process(
                 target=manager_process,
                 args=(self.current_experiment, workers, feature_base_path,
-                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter, clean_mode)
+                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter, clean_mode, memory_mb)
             )
             manager.start()
 
