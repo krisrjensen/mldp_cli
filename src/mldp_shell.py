@@ -4,16 +4,27 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.13.5
+File version: 2.0.13.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
-Changes in this version (13.5):
+Changes in this version (13.6):
+1. PERFORMANCE FIX - Distance calculator database query optimization
+   - v2.0.13.6: Fixed mpcctl_cli_distance_calculator.py worker process
+                Eliminated 2 redundant database queries per pair (67% reduction)
+                Was doing 3 queries per pair (segment_pairs + 2x data_segments)
+                Now does 1 query with JOIN to get all data at once
+                For 101,025 pairs: eliminated 202,050 redundant queries
+                Before: ~1 pair/second (database bottleneck)
+                After: hundreds of pairs/second expected
+                Distance calculator v2.1.0.7
+
+Changes in previous version (13.5):
 1. CRITICAL FIX - Aggregate feature extraction shape correction
    - v2.0.13.5: Fixed feature extractor to return shape (n_features,) for aggregate features
                 Previously returned shape (segment_length, n_features) - WRONG!
