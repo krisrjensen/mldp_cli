@@ -4,24 +4,33 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.13.6
+File version: 2.0.13.7
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 13)
-- CHANGE: Tracks changes within current commit cycle (currently 6)
+- CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (13.6):
+Changes in this version (13.7):
+1. CRITICAL FIX - Distance calculator aggregate feature support
+   - v2.0.13.7: Fixed mpcctl_cli_distance_calculator.py validation logic
+                Was rejecting ALL aggregate features (checking for 2D, got 1D)
+                Error: "Combined vectors not 2D: a=(3,), b=(3,)"
+                Updated validation to handle both 1D aggregate and 2D per-sample
+                For 1D: verify shape[0] == num_features
+                For 2D: verify shape[1] == num_features
+                Distance calculator v2.1.0.8
+                Now works with aggregate spectral features
+
+Changes in previous version (13.6):
 1. PERFORMANCE FIX - Distance calculator database query optimization
    - v2.0.13.6: Fixed mpcctl_cli_distance_calculator.py worker process
                 Eliminated 2 redundant database queries per pair (67% reduction)
                 Was doing 3 queries per pair (segment_pairs + 2x data_segments)
                 Now does 1 query with JOIN to get all data at once
                 For 101,025 pairs: eliminated 202,050 redundant queries
-                Before: ~1 pair/second (database bottleneck)
-                After: hundreds of pairs/second expected
                 Distance calculator v2.1.0.7
 
 Changes in previous version (13.5):
