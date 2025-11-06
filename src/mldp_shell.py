@@ -4,18 +4,18 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.14.9
+File version: 2.0.15.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 14)
-- CHANGE: Tracks changes within current commit cycle (currently 9)
+- COMMIT: Increments on every git commit/push (currently 15)
+- CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (14.9):
+Changes in this version (15.0):
 1. FEATURE - Added --batch-size argument for write buffering control
-   - v2.0.14.9: Added --batch-size N argument to mpcctl-distance-function command
+   - v2.0.15.0: Added --batch-size N argument to mpcctl-distance-function command
                 Controls how many records to accumulate before writing to disk
                 Default: 1000000000 (write at end) eliminates I/O bottleneck
                 Lower values = more frequent writes, less memory usage
