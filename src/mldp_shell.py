@@ -4,16 +4,26 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.14.8
+File version: 2.0.14.9
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 14)
-- CHANGE: Tracks changes within current commit cycle (currently 8)
+- CHANGE: Tracks changes within current commit cycle (currently 9)
 
-Changes in this version (14.8):
+Changes in this version (14.9):
+1. FEATURE - Added --batch-size argument for write buffering control
+   - v2.0.14.9: Added --batch-size N argument to mpcctl-distance-function command
+                Controls how many records to accumulate before writing to disk
+                Default: 1000000000 (write at end) eliminates I/O bottleneck
+                Lower values = more frequent writes, less memory usage
+                Higher values = less I/O contention, more memory usage
+                Distance calculator v2.2.0.11
+                Usage: mpcctl-distance-function --start --workers 20 --memory 20000 --batch-size 100000
+
+Changes in previous version (14.8):
 1. MAJOR FEATURE - Memory caching for distance calculator
    - v2.0.14.8: Added --memory argument to mpcctl-distance-function command
                 Implements LRU cache for feature files to eliminate I/O bottleneck
@@ -21,7 +31,6 @@ Changes in this version (14.8):
                 Example: --memory 200 with 20 workers = 10 MB per worker
                 Distance calculator v2.2.0.9
                 Expected: minutes instead of hours for experiment 42
-                Usage: mpcctl-distance-function --start --workers 20 --memory 200 --feature_sets 161
 
 Changes in previous version (13.7):
 1. CRITICAL FIX - Distance calculator aggregate feature support
@@ -8398,13 +8407,17 @@ SETTINGS:
             print("  --feature_sets 1,2,3     Comma-separated list of feature set IDs to use")
             print("  --memory N               Total memory budget in MB for caching (0 = disabled)")
             print("                           Splits across workers. Example: --memory 200 with 20 workers = 10 MB/worker")
+            print("  --batch-size N           Write results every N records (default: 1000000000 = write at end)")
+            print("                           Lower values = more frequent writes, less memory usage")
+            print("                           Higher values = less I/O contention, more memory usage")
             print("  --log                    Create log file (yyyymmdd_hhmmss_mpcctl_distance_calculation.log)")
             print("  --verbose                Show verbose output in CLI")
             print("  --clean                  Start fresh (delete .mpcctl and .processed) [DEFAULT]")
             print("  --resume                 Resume from existing progress")
             print("  --force                  Skip confirmation prompt (for automation)")
             print("\nExamples:")
-            print("  mpcctl-distance-function --start --workers 20 --feature_sets 161 --memory 200")
+            print("  mpcctl-distance-function --start --workers 20 --memory 20000")
+            print("  mpcctl-distance-function --start --workers 20 --memory 20000 --batch-size 100000")
             print("  mpcctl-distance-function --start --workers 20 --resume")
             print("  mpcctl-distance-function --start --workers 2 --feature_sets 1,2,3,4,5")
             print("  mpcctl-distance-function --start --workers 20 --log --verbose")
@@ -8424,6 +8437,7 @@ SETTINGS:
             # Parse options
             workers = 16
             memory_mb = 0
+            batch_size = 1000000000  # Default: write at end
             log_enabled = '--log' in args
             verbose = '--verbose' in args
             force = '--force' in args
@@ -8446,6 +8460,12 @@ SETTINGS:
                         memory_mb = int(args[i + 1])
                     except ValueError:
                         print(f"Invalid memory value: {args[i + 1]}")
+                        return
+                elif arg == '--batch-size' and i + 1 < len(args):
+                    try:
+                        batch_size = int(args[i + 1])
+                    except ValueError:
+                        print(f"Invalid batch-size value: {args[i + 1]}")
                         return
                 elif arg == '--feature_sets' and i + 1 < len(args):
                     try:
@@ -8591,7 +8611,7 @@ SETTINGS:
             manager = mp.Process(
                 target=manager_process,
                 args=(self.current_experiment, workers, feature_base_path,
-                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter, clean_mode, memory_mb)
+                      db_config, log_file, verbose, mpcctl_base_dir, feature_set_filter, clean_mode, memory_mb, batch_size)
             )
             manager.start()
 
