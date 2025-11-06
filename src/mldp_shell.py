@@ -4,16 +4,24 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251105_000000
-File version: 2.0.15.0
+File version: 2.0.16.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 15)
+- COMMIT: Increments on every git commit/push (currently 16)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (15.0):
+Changes in this version (16.0):
+1. FEATURE - Added --feature-path argument for custom feature file location
+   - v2.0.16.0: Added --feature-path <path> argument to mpcctl-distance-function command
+                Allows overriding default feature file location
+                Use case: Point to RAM disk for 100x faster I/O
+                Example: --feature-path /tmp/experiment042_features
+                Default: /Volumes/ArcData/V3_database/experiment042/feature_files
+
+Changes in previous version (15.0):
 1. FEATURE - Added --batch-size argument for write buffering control
    - v2.0.15.0: Added --batch-size N argument to mpcctl-distance-function command
                 Controls how many records to accumulate before writing to disk
@@ -8405,6 +8413,8 @@ SETTINGS:
             print("\nOptions for --start:")
             print("  --workers N              Number of worker processes (default: 16)")
             print("  --feature_sets 1,2,3     Comma-separated list of feature set IDs to use")
+            print("  --feature-path <path>    Override feature files location (default: /Volumes/ArcData/.../feature_files)")
+            print("                           Use for RAM disk: --feature-path /tmp/experiment042_features")
             print("  --memory N               Total memory budget in MB for caching (0 = disabled)")
             print("                           Splits across workers. Example: --memory 200 with 20 workers = 10 MB/worker")
             print("  --batch-size N           Write results every N records (default: 1000000000 = write at end)")
@@ -8417,6 +8427,7 @@ SETTINGS:
             print("  --force                  Skip confirmation prompt (for automation)")
             print("\nExamples:")
             print("  mpcctl-distance-function --start --workers 20 --memory 20000")
+            print("  mpcctl-distance-function --start --workers 20 --feature-path /tmp/experiment042_features")
             print("  mpcctl-distance-function --start --workers 20 --memory 20000 --batch-size 100000")
             print("  mpcctl-distance-function --start --workers 20 --resume")
             print("  mpcctl-distance-function --start --workers 2 --feature_sets 1,2,3,4,5")
@@ -8442,6 +8453,7 @@ SETTINGS:
             verbose = '--verbose' in args
             force = '--force' in args
             feature_set_filter = None
+            feature_path_override = None
             clean_mode = True  # Default: start fresh
 
             # Parse --clean/--resume (mutually exclusive, --clean is default)
@@ -8467,6 +8479,8 @@ SETTINGS:
                     except ValueError:
                         print(f"Invalid batch-size value: {args[i + 1]}")
                         return
+                elif arg == '--feature-path' and i + 1 < len(args):
+                    feature_path_override = args[i + 1]
                 elif arg == '--feature_sets' and i + 1 < len(args):
                     try:
                         feature_set_filter = [int(x.strip()) for x in args[i + 1].split(',')]
@@ -8492,7 +8506,12 @@ SETTINGS:
                 'user': 'kjensen'
             }
 
-            feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/feature_files')
+            # Use override path if provided, otherwise default location
+            if feature_path_override:
+                feature_base_path = Path(feature_path_override)
+            else:
+                feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/feature_files')
+
             mpcctl_base_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}')
 
             # Show pre-flight plan
