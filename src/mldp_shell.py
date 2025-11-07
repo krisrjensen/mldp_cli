@@ -4,16 +4,24 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.17.2
+File version: 2.0.17.3
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 17)
-- CHANGE: Tracks changes within current commit cycle (currently 2)
+- CHANGE: Tracks changes within current commit cycle (currently 3)
 
-Changes in this version (17.2):
+Changes in this version (17.3):
+1. BUG FIX - Added error handling and database fallback
+   - v2.0.17.3: Pre-warming now has try/catch with detailed error logging
+                Added database query fallback if segment_details missing
+                Workers can now process pairs even if pre-warming fails
+                Will log actual error causing 0.2s pre-warm completion
+                Distance calculator v2.2.1.7
+
+Changes in previous version (17.2):
 1. CRITICAL FIX - Fixed cache path mismatch causing 100% cache misses
    - v2.0.17.2: Pre-warming now constructs EXACT same paths as main loop
                 Was using different directory structure and filename format
@@ -712,7 +720,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.17.2"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.3"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
