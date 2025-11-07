@@ -746,7 +746,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.17.8"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.9"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
