@@ -1,0 +1,6 @@
+[console_scripts]
+mldp = mldp:main
+mldp-basic-shell = interactive_cli:main
+mldp-cli = cli:cli
+mldp-shell = mldp_shell:main
+
