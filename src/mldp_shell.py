@@ -4,22 +4,23 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.18.0
+File version: 2.0.17.1
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 0)
+- COMMIT: Increments on every git commit/push (currently 17)
+- CHANGE: Tracks changes within current commit cycle (currently 1)
 
-Changes in this version (18.0):
-1. BUG FIX - Fixed RealDictCursor column access in prewarm_cache
-   - v2.0.18.0: Fixed KeyError: 0 by using column names instead of indices
-                Changed row[0] to row['seg_id'], row['segment_id'], etc.
-                Workers now correctly access dictionary-style cursor rows
-                Distance calculator v2.2.1.4
-                Pre-warming should now work correctly
+Changes in this version (17.1):
+1. CRITICAL FIX - Eliminated ALL worker database queries during pair processing
+   - v2.0.17.1: TODO files now contain pair_id, segment_id_1, segment_id_2
+                Workers extract unique segments directly from TODO file (no query)
+                Workers get file_ids from prewarm_cache results (no query)
+                Main processing loop has ZERO database queries per pair
+                Distance calculator v2.2.1.5
+                Expected: 20-50+ pairs/sec (pure computation, no I/O or DB overhead)
 
 Changes in previous version (17.0):
 1. MAJOR PERFORMANCE - Cache pre-warming for zero-I/O pair processing
@@ -700,7 +701,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.0"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.1"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
