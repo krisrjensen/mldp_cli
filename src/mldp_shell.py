@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251105_000000
-File version: 2.0.16.0
+Date Revised: 20251107_000000
+File version: 2.0.17.0
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,17 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 16)
 - CHANGE: Tracks changes within current commit cycle (currently 0)
 
-Changes in this version (16.0):
+Changes in this version (17.0):
+1. MAJOR PERFORMANCE - Cache pre-warming for zero-I/O pair processing
+   - v2.0.17.0: Distance calculator now pre-loads all feature files before processing
+                Analyzes assigned pairs to find unique segments needed
+                Loads all feature files into cache upfront (one-time I/O)
+                Achieves 100% cache hit rate during pair processing
+                Distance calculator v2.2.1.0
+                Expected: 10-20+ pairs/sec (vs 0.3 before) for experiment 42
+                Pre-warming takes 2-3 min, saves hours of repeated I/O
+
+Changes in previous version (16.0):
 1. FEATURE - Added --feature-path argument for custom feature file location
    - v2.0.16.0: Added --feature-path <path> argument to mpcctl-distance-function command
                 Allows overriding default feature file location
@@ -682,7 +692,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.13.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.0"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
