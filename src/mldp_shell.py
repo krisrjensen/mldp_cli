@@ -4,16 +4,27 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.17.1
+File version: 2.0.17.2
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 17)
-- CHANGE: Tracks changes within current commit cycle (currently 1)
+- CHANGE: Tracks changes within current commit cycle (currently 2)
 
-Changes in this version (17.1):
+Changes in this version (17.2):
+1. CRITICAL FIX - Fixed cache path mismatch causing 100% cache misses
+   - v2.0.17.2: Pre-warming now constructs EXACT same paths as main loop
+                Was using different directory structure and filename format
+                Pre-warm: S{segment_length}/{data_type_name}/...
+                Main loop: S{stored_length}/T{data_type_name.upper()}/...
+                Missing N value and wrong R parameter
+                Result: Cache 100% missing, massive I/O on every pair
+                Distance calculator v2.2.1.6
+                Now: 100% cache hit rate, zero I/O after pre-warming
+
+Changes in previous version (17.1):
 1. CRITICAL FIX - Eliminated ALL worker database queries during pair processing
    - v2.0.17.1: TODO files now contain pair_id, segment_id_1, segment_id_2
                 Workers extract unique segments directly from TODO file (no query)
@@ -701,7 +712,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.17.1"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.2"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
