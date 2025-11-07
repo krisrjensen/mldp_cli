@@ -4,16 +4,24 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.17.5
+File version: 2.0.17.6
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 17)
-- CHANGE: Tracks changes within current commit cycle (currently 5)
+- CHANGE: Tracks changes within current commit cycle (currently 6)
 
-Changes in this version (17.5):
+Changes in this version (17.6):
+1. MAJOR PERFORMANCE FIX - Use glob to find existing files first
+   - v2.0.17.6: Glob filesystem once (~2 sec), filter by segment ID, load only those
+                Previous: Try loading 1M+ files, catch exceptions (VERY slow)
+                Now: Load only files that exist (~108K files)
+                Pre-warming: < 1 minute (down from 10+ minutes)
+                Distance calculator v2.2.2.0
+
+Changes in previous version (17.5):
 1. PERFORMANCE FIX - Optimized pre-warming by removing exists() check
    - v2.0.17.5: Remove exists() before np.load() - 50% fewer I/O ops for existing files
                 Try loading directly, catch FileNotFoundError
@@ -738,7 +746,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.17.5"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.17.8"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
