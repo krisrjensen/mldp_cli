@@ -4,14 +4,14 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.17.6
+File version: 2.0.17.7
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 17)
-- CHANGE: Tracks changes within current commit cycle (currently 6)
+- CHANGE: Tracks changes within current commit cycle (currently 7)
 
 Changes in this version (17.6):
 1. MAJOR PERFORMANCE FIX - Use glob to find existing files first
