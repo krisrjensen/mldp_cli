@@ -818,7 +818,7 @@ class MLDPCompleter(Completer):
             'feature-plot': ['--file', '--save', '--output-folder'],
 
             # Distance calculations
-            'init-distance-tables': ['--drop-existing', '--help'],
+            'init-distance-tables': ['--drop-existing', '--truncate', '--help'],
             'show-distance-metrics': [],
             'add-distance-metric': ['--metric', 'L1', 'L2', 'cosine', 'pearson', 'euclidean', 'manhattan', 'wasserstein'],
             'remove-distance-metric': ['--metric', '--all-except', 'L1', 'L2', 'cosine', 'pearson'],
@@ -6387,14 +6387,16 @@ SETTINGS:
 
         Options:
             --drop-existing    Drop existing tables before creating (WARNING: destroys data)
+            --truncate         Clear all data from existing tables (keeps table structure)
             --help             Show this help message
 
         This command creates all necessary distance result tables for the current experiment
         based on the distance functions configured in ml_distance_functions_lut.
 
         Examples:
-            init-distance-tables
-            init-distance-tables --drop-existing
+            init-distance-tables                    # Create tables if they don't exist
+            init-distance-tables --truncate         # Clear data from existing tables
+            init-distance-tables --drop-existing    # Drop and recreate tables
         """
         if not self.db_conn:
             print("Not connected to database. Use 'connect' first.")
@@ -6402,11 +6404,19 @@ SETTINGS:
 
         # Parse arguments
         drop_existing = False
+        truncate_tables = False
         if '--help' in args:
             print(self.cmd_init_distance_tables.__doc__)
             return
         if '--drop-existing' in args:
             drop_existing = True
+        if '--truncate' in args:
+            truncate_tables = True
+
+        # Can't use both options
+        if drop_existing and truncate_tables:
+            print("ERROR: Cannot use both --drop-existing and --truncate")
+            return
 
         print(f"\nInitializing distance tables for experiment {self.current_experiment}...")
 
@@ -6433,6 +6443,63 @@ SETTINGS:
 
             print(f"Found {len(distance_functions)} active distance functions")
             print()
+
+            # If --truncate is specified, clear data from existing tables
+            if truncate_tables:
+                tables_to_truncate = []
+                for func_id, func_name, table_prefix, display_name in distance_functions:
+                    table_name = f"experiment_{self.current_experiment:03d}_{table_prefix}".lower()
+
+                    # Check if table exists and get row count
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = %s
+                        )
+                    """, (table_name,))
+
+                    if cursor.fetchone()[0]:
+                        # Get row count
+                        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        row_count = cursor.fetchone()[0]
+                        tables_to_truncate.append((table_name, display_name, row_count))
+
+                if not tables_to_truncate:
+                    print("No tables found to truncate")
+                    return
+
+                print(f"\nWARNING: The following tables will be CLEARED (data deleted, structure kept):")
+                print()
+                total_rows = 0
+                for table_name, display_name, row_count in tables_to_truncate:
+                    print(f"   {table_name}")
+                    print(f"      ({display_name}): {row_count:,} records")
+                    total_rows += row_count
+                print()
+                print(f"   Total records to delete: {total_rows:,}")
+                print()
+                response = input("Type 'TRUNCATE' to confirm: ").strip()
+
+                if response != 'TRUNCATE':
+                    print("Cancelled - no tables were truncated")
+                    return
+
+                print()
+                truncated_count = 0
+                for table_name, display_name, row_count in tables_to_truncate:
+                    print(f"Truncating {table_name}...")
+                    cursor.execute(f"TRUNCATE TABLE {table_name}")
+                    self.db_conn.commit()
+                    truncated_count += 1
+
+                print()
+                print(f"Summary:")
+                print(f"   Tables truncated: {truncated_count}")
+                print(f"   Records deleted: {total_rows:,}")
+                print()
+                print(f"Distance tables cleared for experiment {self.current_experiment}")
+                return
 
             # If --drop-existing is specified, first check which tables exist and get confirmation
             if drop_existing:
