@@ -4,7 +4,7 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251107_000000
-File version: 2.0.17.7
+File version: 2.0.17.16
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -2085,7 +2085,7 @@ class MLDPShell:
             print(f"Database browser not found")
             return
         
-        print("🚀 Launching database browser...")
+        print("Launching database browser...")
         subprocess.Popen([sys.executable, str(browser_path)])
         print("Database browser launched in background")
     
@@ -3214,7 +3214,7 @@ DATABASE COMMANDS:
   remove-files <id1> <id2>...         Remove specific files by ID from training data
   remove-segments <id1> <id2>...      Remove specific segments by ID from training data
 
-📐 DISTANCE OPERATIONS:
+DISTANCE OPERATIONS:
   calculate [options]                 Calculate distances using mpcctl
   insert_distances [options]          Insert distances into database
   stats [distance_type]               Show distance statistics
@@ -8634,11 +8634,11 @@ SETTINGS:
             print(f"   Total pairs: {total_pairs:,}")
             print(f"   Feature files: {feature_file_count:,}")
 
-            print(f"\n🎯 Distance Functions ({len(distance_functions)}):")
+            print(f"\nDistance Functions ({len(distance_functions)}):")
             for func_name, display_name in distance_functions:
                 print(f"   - {display_name} ({func_name})")
 
-            print(f"\n📐 Amplitude Methods ({len(amplitude_methods)}):")
+            print(f"\nAmplitude Methods ({len(amplitude_methods)}):")
             for method in amplitude_methods:
                 print(f"   - {method}")
 
@@ -8647,11 +8647,11 @@ SETTINGS:
             computations_per_pair = len(distance_functions) * len(amplitude_methods)
             if clean_mode:
                 total_computations = pairs_to_compute * computations_per_pair
-                print(f"\n📄 Expected Computations:")
+                print(f"\nExpected Computations:")
                 print(f"   {total_pairs:,} pairs × {len(distance_functions)} functions × {len(amplitude_methods)} methods")
                 print(f"   = {total_computations:,} total distance calculations")
             else:
-                print(f"\n📄 Resume Mode:")
+                print(f"\nResume Mode:")
                 print(f"   Will continue from existing progress")
 
             print(f"\nOutput:")
@@ -8670,7 +8670,7 @@ SETTINGS:
             else:
                 print("--force flag set: Skipping confirmation prompt\n")
 
-            print(f"\n🚀 Starting distance calculation...\n")
+            print(f"\nStarting distance calculation...\n")
 
             # Clean up state file BEFORE spawning manager if in clean mode
             # This prevents race condition where shell reads old state file before manager deletes it
@@ -8698,7 +8698,7 @@ SETTINGS:
             )
             manager.start()
 
-            print(f"🚀 Distance calculation started in background")
+            print(f"Distance calculation started in background")
             print(f"   Experiment: {self.current_experiment}")
             print(f"   Workers: {workers}")
             print(f"   Mode: {'Clean' if clean_mode else 'Resume'}")
@@ -8727,7 +8727,9 @@ SETTINGS:
 
             # Live progress monitoring loop
             try:
-                last_status = None
+                last_line_count = None
+                mpcctl_dir = Path(f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl')
+
                 while True:
                     try:
                         with open(state_file, 'r') as f:
@@ -8735,8 +8737,9 @@ SETTINGS:
 
                         progress = state.get('progress', {})
                         status = state.get('status', 'unknown')
+                        worker_ids = state.get('worker_pids', [])
 
-                        # Progress bar
+                        # Overall progress bar
                         bar_width = 50
                         percent = progress.get('percent_complete', 0)
                         filled = int(bar_width * percent / 100)
@@ -8747,20 +8750,63 @@ SETTINGS:
                         eta_minutes = eta_seconds // 60
                         eta_seconds_remainder = eta_seconds % 60
 
+                        # Read per-worker progress from mpcctl files
+                        worker_stats = []
+                        for worker_id in worker_ids:
+                            todo_file = mpcctl_dir / f"{worker_id}_todo.dat"
+                            done_file = mpcctl_dir / f"{worker_id}_done.dat"
+
+                            if todo_file.exists() and done_file.exists():
+                                try:
+                                    with open(todo_file, 'r') as f:
+                                        total = sum(1 for line in f if line.strip())
+                                    with open(done_file, 'r') as f:
+                                        done = sum(1 for line in f if line.strip())
+                                    worker_percent = (done / total * 100) if total > 0 else 0
+                                    worker_stats.append((worker_id, done, total, worker_percent))
+                                except:
+                                    pass
+
                         # Clear previous output (move cursor up and clear lines)
-                        if last_status is not None:
-                            # Move cursor up 6 lines and clear to end of screen
-                            print('\033[6A\033[J', end='')
+                        if last_line_count is not None:
+                            print(f'\033[{last_line_count}A\033[J', end='')
 
-                        # Display progress
-                        print(f"Status: {status}")
-                        print(f"[{bar}] {percent:.1f}%")
-                        print(f"Completed: {progress.get('completed_pairs', 0):,} / {progress.get('total_pairs', 0):,} pairs")
-                        print(f"Rate: {progress.get('pairs_per_second', 0):.0f} pairs/sec")
-                        print(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
-                        print(f"Workers: {state.get('workers_count', 0)}")
+                        # Display overall progress
+                        output_lines = []
+                        output_lines.append(f"Status: {status}")
+                        output_lines.append(f"[{bar}] {percent:.1f}%")
+                        output_lines.append(f"Completed: {progress.get('completed_pairs', 0):,} / {progress.get('total_pairs', 0):,} pairs")
+                        output_lines.append(f"Rate: {progress.get('pairs_per_second', 0):.0f} pairs/sec")
+                        output_lines.append(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
+                        output_lines.append(f"Workers: {len(worker_ids)}")
+                        output_lines.append("")
 
-                        last_status = status
+                        # Display per-worker progress (compact: 4 workers per line)
+                        # Always reserve fixed space for workers to prevent scrolling
+                        output_lines.append("Worker Progress:")
+                        num_workers = len(worker_ids)
+                        num_worker_lines = (num_workers + 3) // 4  # Ceiling division
+
+                        if worker_stats:
+                            for i in range(0, len(worker_stats), 4):
+                                line_workers = worker_stats[i:i+4]
+                                worker_line = "  "
+                                for wid, done, total, wpct in line_workers:
+                                    # Mini bar: 10 chars wide
+                                    mini_filled = int(10 * wpct / 100)
+                                    mini_bar = '█' * mini_filled + '░' * (10 - mini_filled)
+                                    worker_line += f"W{wid-10000:02d}:[{mini_bar}]{wpct:5.1f}%  "
+                                output_lines.append(worker_line)
+                        else:
+                            # Workers not ready yet - add placeholder lines
+                            for i in range(num_worker_lines):
+                                output_lines.append("  Loading worker data...")
+
+                        # Print all lines
+                        for line in output_lines:
+                            print(line)
+
+                        last_line_count = len(output_lines)
 
                         # Check if completed or stopped
                         if status in ['completed', 'stopped', 'killed']:
@@ -8775,10 +8821,10 @@ SETTINGS:
                         continue
 
             except KeyboardInterrupt:
-                print(f"\n\n⏸️  Detached from monitoring (calculation continues in background)")
+                print(f"\n\nDetached from monitoring (calculation continues in background)")
                 print(f"\nMonitor progress:")
                 print(f"   mpcctl-distance-function --status")
-                print(f"\n⏸️  Control:")
+                print(f"\nControl:")
                 print(f"   mpcctl-distance-function --pause")
                 print(f"   mpcctl-distance-function --continue")
                 print(f"   mpcctl-distance-function --stop")
@@ -9163,7 +9209,7 @@ SETTINGS:
                 print(f"   - Distance files contain duplicate keys")
                 print(f"   Use INSERT method for safer incremental inserts")
 
-            print(f"\n📄 Expected Action:")
+            print(f"\nExpected Action:")
             print(f"   Process {total_files:,} distance files from .processed/")
             print(f"   Insert records into 4 distance tables")
 
@@ -9178,7 +9224,7 @@ SETTINGS:
             else:
                 print("--force flag set: Skipping confirmation prompt\n")
 
-            print(f"\n🚀 Starting distance insertion...\n")
+            print(f"\nStarting distance insertion...\n")
 
             # Clean up state file BEFORE spawning manager
             # This prevents race condition where shell reads old state file before manager deletes it
@@ -9205,7 +9251,7 @@ SETTINGS:
             )
             manager.start()
 
-            print(f"🚀 Distance insertion started in background")
+            print(f"Distance insertion started in background")
             print(f"   Experiment: {self.current_experiment}")
             print(f"   Workers: {workers}")
             if distances:
@@ -9693,7 +9739,7 @@ SETTINGS:
 
         # Banner
         print(f"\n{'='*80}")
-        print(f"🚀 MPCCTL EXPERIMENT PIPELINE - Experiment {self.current_experiment}")
+        print(f"MPCCTL EXPERIMENT PIPELINE - Experiment {self.current_experiment}")
         print(f"{'='*80}\n")
         print(f"Configuration:")
         print(f"   Workers: {workers}")
@@ -9893,7 +9939,7 @@ SETTINGS:
             for cmd in failed_commands:
                 print(f"      - {cmd}")
 
-        print(f"\n⏱️  Execution Times:")
+        print(f"\nExecution Times:")
         for step, duration in step_times.items():
             hours = int(duration // 3600)
             minutes = int((duration % 3600) // 60)
@@ -10059,11 +10105,11 @@ SETTINGS:
         else:
             print(f"   Will process: All {segment_file_count:,} files")
 
-        print(f"\n🎯 Feature Sets to Extract ({len(feature_sets)}):")
+        print(f"\nFeature Sets to Extract ({len(feature_sets)}):")
         for fs_id, fs_name in feature_sets:
             print(f"   - ID {fs_id}: {fs_name}")
 
-        print(f"\n📄 Expected Output:")
+        print(f"\nExpected Output:")
         files_to_create = (max_segments if max_segments else segment_file_count) * len(feature_sets)
         print(f"   Feature files to create: ~{files_to_create:,}")
         if force_reextract:
@@ -10112,7 +10158,7 @@ SETTINGS:
                             print(f"     Segment {fail['segment_id']}, FS {fail['feature_set_id']}: {fail['error']}")
                 
                 if result.get('average_extraction_time'):
-                    print(f"\n⏱️  Performance:")
+                    print(f"\nPerformance:")
                     print(f"   Average time per extraction: {result['average_extraction_time']:.2f}s")
                     print(f"   Total extraction time: {result['total_extraction_time']:.2f}s")
             else:
@@ -19698,7 +19744,7 @@ SETTINGS:
             print(f"start_services.sh not found at {scripts_path}")
             return
         
-        print("🚀 Starting all MLDP servers...")
+        print("Starting all MLDP servers...")
         print("This may take a moment...")
         print("─" * 60)
         
@@ -20240,12 +20286,12 @@ SETTINGS:
             if total_directories > examples_shown:
                 print(f"      ... and {total_directories - examples_shown} more directories")
 
-            print(f"\n📄 Files to Generate:")
+            print(f"\nFiles to Generate:")
             print(f"   Files per directory: {total_segments:,} files")
             print(f"   (Each directory contains all {total_segments:,} segments processed with one type/decimation combination)")
             print(f"   Total files: {total_segments:,} segments × {total_directories} directories = {total_files:,} files")
 
-            print(f"\n🎯 TOTAL FILES TO CREATE: {total_files:,}")
+            print(f"\nTOTAL FILES TO CREATE: {total_files:,}")
             print(f"   ({total_segments:,} segments × {num_data_types} data types × {num_decimations} decimations)")
 
             print(f"\n{'='*80}")
