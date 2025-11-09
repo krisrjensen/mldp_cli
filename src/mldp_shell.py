@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_180000
-File version: 2.0.18.14
+Date Revised: 20251108_190000
+File version: 2.0.18.15
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,14 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (17.6):
+Changes in this version (18.15):
+1. BUG FIX - Handle both 1D and 2D feature arrays in classifier-select-references
+   - v2.0.18.15: Added dimension checking before array indexing at 5 locations
+                 Now handles both 1D arrays (shape (3,)) and 2D arrays (shape (8192, 3))
+                 For 1D arrays: use directly; for 2D: extract amplitude column
+                 Fixed: lines 15016, 15563, 15861, 16445, 16507
+
+Changes in previous version (17.6):
 1. MAJOR PERFORMANCE FIX - Use glob to find existing files first
    - v2.0.17.6: Glob filesystem once (~2 sec), filter by segment ID, load only those
                 Previous: Try loading 1M+ files, catch exceptions (VERY slow)
@@ -15011,9 +15018,14 @@ SETTINGS:
                                     for segment_id, feature_file_path in feature_files:
                                         try:
                                             features = np.load(feature_file_path)
-                                            # Select correct amplitude column
+                                            # Handle both 1D and 2D arrays
                                             column_idx = amplitude_method_id - 1
-                                            features_1d = features[:, column_idx]  # Shape: (8192,)
+                                            if features.ndim == 1:
+                                                # 1D array (e.g., shape (3,)) - use directly
+                                                features_1d = features
+                                            else:
+                                                # 2D array (e.g., shape (8192, 3)) - extract column
+                                                features_1d = features[:, column_idx]
 
                                             # Initialize or append to this segment's feature list
                                             if segment_id not in segment_feature_vectors:
@@ -15555,7 +15567,11 @@ SETTINGS:
                             try:
                                 features = np.load(feature_file_path)
                                 column_idx = amp - 1
-                                features_1d = features[:, column_idx]
+                                # Handle both 1D and 2D arrays
+                                if features.ndim == 1:
+                                    features_1d = features  # Use directly
+                                else:
+                                    features_1d = features[:, column_idx]  # Extract column
 
                                 if segment_id not in segment_feature_vectors:
                                     segment_feature_vectors[segment_id] = []
@@ -15853,7 +15869,11 @@ SETTINGS:
                             features = np.load(feature_file_path)
                             # Select correct amplitude column
                             column_idx = amp - 1
-                            features_1d = features[:, column_idx]
+                            # Handle both 1D and 2D arrays
+                            if features.ndim == 1:
+                                features_1d = features  # Use directly
+                            else:
+                                features_1d = features[:, column_idx]  # Extract column
                             feature_data.append((feature_name, features_1d))
                         except Exception as e:
                             print(f"  [WARNING] Failed to load {feature_file_path}: {e}")
@@ -16437,7 +16457,11 @@ SETTINGS:
                                             try:
                                                 features = np.load(feature_file_path)
                                                 column_idx = amp - 1
-                                                features_1d = features[:, column_idx]
+                                                # Handle both 1D and 2D arrays
+                                                if features.ndim == 1:
+                                                    features_1d = features  # Use directly
+                                                else:
+                                                    features_1d = features[:, column_idx]  # Extract column
                                                 ref_feature_parts.append(features_1d)
                                             except Exception as e:
                                                 print(f"[ERROR] Failed to load reference {ref_segment_id} feature {feature_id}: {e}")
@@ -16499,7 +16523,11 @@ SETTINGS:
                                             feature_file_path = result[0]
                                             features = np.load(feature_file_path)
                                             column_idx = amp - 1
-                                            features_1d = features[:, column_idx]
+                                            # Handle both 1D and 2D arrays
+                                            if features.ndim == 1:
+                                                features_1d = features  # Use directly
+                                            else:
+                                                features_1d = features[:, column_idx]  # Extract column
                                             segment_feature_parts.append(features_1d)
                                         else:
                                             raise ValueError(f"Missing feature file for segment {segment_id}, feature {feature_id}")
