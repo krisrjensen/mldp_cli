@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_190000
-File version: 2.0.18.15
+Date Revised: 20251108_200000
+File version: 2.0.18.16
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,14 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.15):
+Changes in this version (18.16):
+1. BUG FIX - Display actual feature_set_id in classifier-config-list
+   - v2.0.18.16: Fixed query to join through ml_experiments_feature_sets
+                 Now displays actual feature_set_id (31, 41, 50...) instead of
+                 experiment_feature_set_id (6, 7, 8...)
+                 Matches fix applied to heatmap generator
+
+Changes in previous version (18.15):
 1. BUG FIX - Handle both 1D and 2D feature arrays in classifier-select-references
    - v2.0.18.15: Added dimension checking before array indexing at 5 locations
                  Now handles both 1D arrays (shape (3,)) and 2D arrays (shape (8192, 3))
@@ -753,7 +760,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.15"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.16"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -13018,8 +13025,8 @@ SETTINGS:
                         FILTER (WHERE dt.data_type_id IS NOT NULL) as data_type_ids,
                     ARRAY_AGG(DISTINCT am.amplitude_processing_method_id ORDER BY am.amplitude_processing_method_id)
                         FILTER (WHERE am.amplitude_processing_method_id IS NOT NULL) as amplitude_methods,
-                    ARRAY_AGG(DISTINCT efs.experiment_feature_set_id ORDER BY efs.experiment_feature_set_id)
-                        FILTER (WHERE efs.experiment_feature_set_id IS NOT NULL) as feature_set_ids,
+                    ARRAY_AGG(DISTINCT mefs.feature_set_id ORDER BY mefs.feature_set_id)
+                        FILTER (WHERE mefs.feature_set_id IS NOT NULL) as feature_set_ids,
                     ARRAY_AGG(DISTINCT dfunc.distance_function_id ORDER BY dfunc.distance_function_id)
                         FILTER (WHERE dfunc.distance_function_id IS NOT NULL) as distance_function_ids,
                     CASE WHEN fb.feature_builder_id IS NOT NULL THEN true ELSE false END as has_feature_builder
@@ -13030,8 +13037,10 @@ SETTINGS:
                     ON c.config_id = dt.config_id
                 LEFT JOIN ml_classifier_config_amplitude_methods am
                     ON c.config_id = am.config_id
-                LEFT JOIN ml_classifier_config_experiment_feature_sets efs
-                    ON c.config_id = efs.config_id
+                LEFT JOIN ml_classifier_config_experiment_feature_sets cefs
+                    ON c.config_id = cefs.config_id
+                LEFT JOIN ml_experiments_feature_sets mefs
+                    ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
                 LEFT JOIN ml_classifier_config_distance_functions dfunc
                     ON c.config_id = dfunc.config_id
                 LEFT JOIN ml_classifier_feature_builder fb
