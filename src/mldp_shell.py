@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.34"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.35"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1649,6 +1649,220 @@ def save_svm_model_worker(svm_model, exp_id, cls_id, dec, dtype, amp, efs, svm_p
     joblib.dump(svm_model, filepath, compress=3)
 
     return filepath
+
+
+def _process_verification_batch(batch_info):
+    """
+    Worker function for parallel processing of verification segments.
+
+    Args:
+        batch_info: dict with keys:
+            - segments: list of (segment_id, segment_label_id, file_label) tuples
+            - model_path: path to SVM model
+            - exp_id: experiment ID
+            - dec: decimation factor
+            - dtype: data type ID
+            - amp: amplitude method ID
+            - efs: experiment feature set ID
+            - feature_set_id: actual feature set ID
+            - c_val: SVM C parameter value
+            - segment_length: segment length
+            - feature_ids: list of feature IDs
+            - force: whether to force reprocessing
+            - results_table_name: name of results table
+            - db_config: database connection parameters
+
+    Returns:
+        List of result tuples ready for database insertion
+    """
+    import psycopg2
+    import numpy as np
+    import joblib
+    import tempfile
+    import os
+    import time
+    from segment_processor import SegmentFilesetProcessor
+    from experiment_feature_extractor import ExperimentFeatureExtractor
+
+    segments = batch_info['segments']
+    model_path = batch_info['model_path']
+    exp_id = batch_info['exp_id']
+    dec = batch_info['dec']
+    dtype = batch_info['dtype']
+    amp = batch_info['amp']
+    efs = batch_info['efs']
+    feature_set_id = batch_info['feature_set_id']
+    c_val = batch_info['c_val']
+    segment_length = batch_info['segment_length']
+    feature_ids = batch_info['feature_ids']
+    force = batch_info['force']
+    results_table_name = batch_info['results_table_name']
+    db_config = batch_info['db_config']
+
+    results = []
+    errors = 0
+
+    # Create database connection for this worker
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    # Load SVM model
+    svm_model = joblib.load(model_path)
+
+    # Initialize segment processor and feature extractor
+    segment_processor = SegmentFilesetProcessor(experiment_id=exp_id)
+    feature_extractor = ExperimentFeatureExtractor(exp_id, conn)
+
+    # Get label map
+    cursor.execute("SELECT label_id, label_name FROM segment_labels ORDER BY label_id")
+    label_map = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Get configured amplitude method IDs
+    configured_method_ids = feature_extractor._get_configured_amplitude_method_ids()
+
+    for segment_id, segment_label_id, file_label in segments:
+        temp_file_path = None
+
+        try:
+            # Check if already exists (unless force=True)
+            if not force:
+                cursor.execute(f"""
+                    SELECT 1 FROM {results_table_name}
+                    WHERE segment_id = %s
+                      AND decimation_factor = %s
+                      AND data_type_id = %s
+                      AND amplitude_processing_method_id = %s
+                      AND experiment_feature_set_id = %s
+                      AND svm_c_parameter = %s
+                """, (segment_id, dec, dtype, amp, efs, c_val))
+                if cursor.fetchone():
+                    continue
+
+            pred_start_time = time.time()
+
+            # Get segment info from data_segments
+            cursor.execute("""
+                SELECT experiment_file_id, beginning_index, segment_length
+                FROM data_segments
+                WHERE segment_id = %s
+            """, (segment_id,))
+            seg_info = cursor.fetchone()
+            if not seg_info:
+                raise ValueError(f"Segment {segment_id} not found in data_segments")
+
+            file_id, beginning_index, seg_length = seg_info
+
+            # Load raw file data from fileset
+            data_type_name = f"ADC{dtype}"
+            raw_data = segment_processor.load_file_data(file_id, data_type_name)
+
+            if raw_data is None:
+                raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
+
+            # Extract segment slice
+            end_index = beginning_index + seg_length
+            segment_data = raw_data[beginning_index:end_index]
+
+            # Apply data type conversion
+            converted_data = segment_processor.apply_data_type_conversion(segment_data, data_type_name)
+
+            # Apply decimation
+            decimated_data = segment_processor.apply_decimation(converted_data, dec)
+
+            # Create temporary file for feature extraction
+            temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False)
+            temp_file_path = temp_file.name
+            temp_file.close()
+
+            # Save transformed segment to temp file
+            np.save(temp_file_path, decimated_data)
+
+            # Get feature set configuration
+            feature_set_config = feature_extractor._get_feature_set_with_overrides(
+                feature_set_id
+            )
+
+            # Extract features from segment file
+            features_array = feature_extractor._extract_feature_set_from_segment(
+                temp_file_path,
+                feature_set_config
+            )
+
+            # Extract the column for the specific amplitude method
+            if amp not in configured_method_ids:
+                raise ValueError(f"Amplitude method {amp} not in configured methods {configured_method_ids}")
+
+            method_idx = configured_method_ids.index(amp)
+            num_features = len(feature_ids)
+            num_methods = len(configured_method_ids)
+
+            # Features are organized as [feat0_amp0, feat0_amp1, ..., feat1_amp0, feat1_amp1, ...]
+            if features_array.ndim == 1:
+                # Aggregate features: 1D array of scalars
+                indices = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                segment_features = features_array[indices]
+            else:
+                # Sample-wise or chunk features: 2D array
+                cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                segment_features = features_array[:, cols].flatten()
+
+            # Clean up temp file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    temp_file_path = None
+                except:
+                    pass
+
+            # Run prediction
+            feature_vector = segment_features.reshape(1, -1)
+            predicted_label_id = svm_model.predict(feature_vector)[0]
+            probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
+            confidence = probabilities[predicted_label_id] if probabilities is not None else None
+
+            prediction_time = time.time() - pred_start_time
+
+            # Get label names
+            actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
+            predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
+
+            # Generate feature file path
+            classifier_dir = f"classifier_{batch_info.get('cls_id', 1):03d}"
+            dec_dir = f"D{dec:06d}"
+            dtype_name = f"TADC{dtype}"
+            amp_name = f"A{amp}"
+            fs_dir = f"FS{efs:04d}"
+
+            feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
+            feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
+            feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
+            feature_path = os.path.join(feature_dir, feature_filename)
+
+            # Store result tuple (don't write to DB yet - return for batch insertion)
+            results.append((
+                segment_id, segment_label_id, actual_label_name,
+                dec, dtype, amp, efs, c_val,
+                predicted_label_id, predicted_label_name,
+                confidence,
+                probabilities.tolist() if probabilities is not None else None,
+                feature_path,
+                model_path,
+                prediction_time
+            ))
+
+        except Exception as e:
+            errors += 1
+            # Clean up temp file on error
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass
+
+    cursor.close()
+    conn.close()
+
+    return {'results': results, 'errors': errors}
 
 
 class MLDPShell:
@@ -18228,11 +18442,6 @@ SETTINGS:
             print(f"  C values: {c_values}")
             print(f"  Workers: {workers}")
 
-            if workers > 1:
-                print(f"[WARNING] Parallel processing with --workers > 1 is not yet implemented.")
-                print(f"[WARNING] Continuing with sequential processing (workers=1).")
-                workers = 1
-
             # Get label mapping
             cursor.execute("SELECT label_id, label_name FROM segment_labels ORDER BY label_id")
             label_map = {row[0]: row[1] for row in cursor.fetchall()}
@@ -18291,198 +18500,312 @@ SETTINGS:
                                 segments_processed = 0
                                 predictions_made = 0
 
-                                for segment_id, segment_label_id, file_label in verification_segments:
-                                    segments_processed += 1
+                                # Use parallel processing if workers > 1
+                                if workers > 1:
+                                    from concurrent.futures import ProcessPoolExecutor, as_completed
 
-                                    if segments_processed % 10 == 0:
-                                        elapsed = time.time() - start_time
-                                        rate = segments_processed / elapsed if elapsed > 0 else 0
-                                        pct = (segments_processed / total_verification * 100) if total_verification > 0 else 0
-                                        print(f"  Progress: {segments_processed}/{total_verification} ({pct:.1f}%) - {rate:.2f} seg/sec - Predictions: {predictions_made}", end='\r')
+                                    # Get DB connection parameters for workers
+                                    db_config = {
+                                        'host': 'localhost',
+                                        'port': 5432,
+                                        'database': 'arc_detection',
+                                        'user': os.environ.get('USER', 'kjensen')
+                                    }
 
-                                    try:
-                                        # Check if already exists
-                                        if not force:
-                                            cursor.execute(f"""
-                                                SELECT 1 FROM {results_table_name}
-                                                WHERE segment_id = %s
-                                                  AND decimation_factor = %s
-                                                  AND data_type_id = %s
-                                                  AND amplitude_processing_method_id = %s
-                                                  AND experiment_feature_set_id = %s
-                                                  AND svm_c_parameter = %s
-                                            """, (segment_id, dec, dtype, amp, efs, c_val))
-                                            if cursor.fetchone():
-                                                continue
+                                    # Get feature_set_id for workers
+                                    cursor.execute("""
+                                        SELECT feature_set_id
+                                        FROM ml_experiments_feature_sets
+                                        WHERE experiment_feature_set_id = %s
+                                    """, (efs,))
+                                    fs_row = cursor.fetchone()
+                                    if not fs_row:
+                                        print(f"[ERROR] Feature set {efs} not found")
+                                        continue
+                                    feature_set_id = fs_row[0]
 
-                                        pred_start_time = time.time()
+                                    # Split segments into batches for workers
+                                    batch_size_per_worker = max(1, len(verification_segments) // workers)
+                                    batches = []
+                                    for i in range(0, len(verification_segments), batch_size_per_worker):
+                                        batch_segments = verification_segments[i:i + batch_size_per_worker]
+                                        batch_info = {
+                                            'segments': batch_segments,
+                                            'model_path': model_path,
+                                            'exp_id': exp_id,
+                                            'cls_id': cls_id,
+                                            'dec': dec,
+                                            'dtype': dtype,
+                                            'amp': amp,
+                                            'efs': efs,
+                                            'feature_set_id': feature_set_id,
+                                            'c_val': c_val,
+                                            'segment_length': segment_length,
+                                            'feature_ids': feature_ids,
+                                            'force': force,
+                                            'results_table_name': results_table_name,
+                                            'db_config': db_config
+                                        }
+                                        batches.append(batch_info)
 
-                                        # Generate features on-the-fly by loading from raw fileset
-                                        temp_file = None
+                                    print(f"[INFO] Processing {len(verification_segments)} segments with {workers} workers ({len(batches)} batches)...")
+
+                                    # Process batches in parallel
+                                    with ProcessPoolExecutor(max_workers=workers) as executor:
+                                        future_to_batch = {executor.submit(_process_verification_batch, batch): i
+                                                          for i, batch in enumerate(batches)}
+
+                                        for future in as_completed(future_to_batch):
+                                            batch_idx = future_to_batch[future]
+                                            try:
+                                                result = future.result()
+                                                batch_results = result['results']
+                                                batch_errors = result['errors']
+
+                                                # Insert results into database
+                                                if batch_results:
+                                                    # Create feature directories
+                                                    feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
+                                                    feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
+                                                    os.makedirs(feature_dir, exist_ok=True)
+
+                                                    for result_tuple in batch_results:
+                                                        cursor.execute(f"""
+                                                            INSERT INTO {results_table_name} (
+                                                                segment_id, actual_label_id, actual_label_name,
+                                                                decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                                experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
+                                                                confidence, prediction_probabilities, feature_file_path,
+                                                                model_file_path, prediction_time_seconds
+                                                            ) VALUES (
+                                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                                            )
+                                                            ON CONFLICT (segment_id, decimation_factor, data_type_id,
+                                                                         amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
+                                                            DO UPDATE SET
+                                                                predicted_label_id = EXCLUDED.predicted_label_id,
+                                                                predicted_label_name = EXCLUDED.predicted_label_name,
+                                                                confidence = EXCLUDED.confidence,
+                                                                prediction_probabilities = EXCLUDED.prediction_probabilities,
+                                                                feature_file_path = EXCLUDED.feature_file_path,
+                                                                model_file_path = EXCLUDED.model_file_path,
+                                                                prediction_time_seconds = EXCLUDED.prediction_time_seconds,
+                                                                created_at = NOW()
+                                                        """, result_tuple)
+
+                                                    predictions_made += len(batch_results)
+                                                    total_predictions += len(batch_results)
+
+                                                total_errors += batch_errors
+                                                segments_processed += len(batches[batch_idx]['segments'])
+
+                                                # Update progress
+                                                elapsed = time.time() - start_time
+                                                rate = segments_processed / elapsed if elapsed > 0 else 0
+                                                pct = (segments_processed / total_verification * 100) if total_verification > 0 else 0
+                                                print(f"  Progress: {segments_processed}/{total_verification} ({pct:.1f}%) - {rate:.2f} seg/sec - Predictions: {predictions_made}", end='\r')
+
+                                                # Commit batch
+                                                self.db_conn.commit()
+
+                                            except Exception as e:
+                                                print(f"\n[ERROR] Batch {batch_idx} failed: {e}")
+                                                total_errors += len(batches[batch_idx]['segments'])
+
+                                else:
+                                    # Sequential processing (original code)
+                                    for segment_id, segment_label_id, file_label in verification_segments:
+                                        segments_processed += 1
+
+                                        if segments_processed % 10 == 0:
+                                            elapsed = time.time() - start_time
+                                            rate = segments_processed / elapsed if elapsed > 0 else 0
+                                            pct = (segments_processed / total_verification * 100) if total_verification > 0 else 0
+                                            print(f"  Progress: {segments_processed}/{total_verification} ({pct:.1f}%) - {rate:.2f} seg/sec - Predictions: {predictions_made}", end='\r')
+
                                         try:
-                                            # Get segment info from data_segments
-                                            cursor.execute("""
-                                                SELECT experiment_file_id, beginning_index, segment_length
-                                                FROM data_segments
-                                                WHERE segment_id = %s
-                                            """, (segment_id,))
-                                            seg_info = cursor.fetchone()
-                                            if not seg_info:
-                                                raise ValueError(f"Segment {segment_id} not found in data_segments")
+                                            # Check if already exists
+                                            if not force:
+                                                cursor.execute(f"""
+                                                    SELECT 1 FROM {results_table_name}
+                                                    WHERE segment_id = %s
+                                                      AND decimation_factor = %s
+                                                      AND data_type_id = %s
+                                                      AND amplitude_processing_method_id = %s
+                                                      AND experiment_feature_set_id = %s
+                                                      AND svm_c_parameter = %s
+                                                """, (segment_id, dec, dtype, amp, efs, c_val))
+                                                if cursor.fetchone():
+                                                    continue
 
-                                            file_id, beginning_index, seg_length = seg_info
+                                            pred_start_time = time.time()
 
-                                            # Load raw file data from fileset
-                                            # Data type mapping: 6->ADC6, 8->ADC8, 10->ADC10, 12->ADC12
-                                            data_type_name = f"ADC{dtype}"
-                                            raw_data = segment_processor.load_file_data(file_id, data_type_name)
+                                            # Generate features on-the-fly by loading from raw fileset
+                                            temp_file = None
+                                            try:
+                                                # Get segment info from data_segments
+                                                cursor.execute("""
+                                                    SELECT experiment_file_id, beginning_index, segment_length
+                                                    FROM data_segments
+                                                    WHERE segment_id = %s
+                                                """, (segment_id,))
+                                                seg_info = cursor.fetchone()
+                                                if not seg_info:
+                                                    raise ValueError(f"Segment {segment_id} not found in data_segments")
 
-                                            if raw_data is None:
-                                                raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
+                                                file_id, beginning_index, seg_length = seg_info
 
-                                            # Extract segment slice
-                                            end_index = beginning_index + seg_length
-                                            segment_data = raw_data[beginning_index:end_index]
+                                                # Load raw file data from fileset
+                                                # Data type mapping: 6->ADC6, 8->ADC8, 10->ADC10, 12->ADC12
+                                                data_type_name = f"ADC{dtype}"
+                                                raw_data = segment_processor.load_file_data(file_id, data_type_name)
 
-                                            # Apply data type conversion
-                                            converted_data = segment_processor.apply_data_type_conversion(segment_data, data_type_name)
+                                                if raw_data is None:
+                                                    raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
 
-                                            # Apply decimation
-                                            decimated_data = segment_processor.apply_decimation(converted_data, dec)
+                                                # Extract segment slice
+                                                end_index = beginning_index + seg_length
+                                                segment_data = raw_data[beginning_index:end_index]
 
-                                            # Create temporary file for feature extraction
-                                            temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False)
-                                            temp_file_path = temp_file.name
-                                            temp_file.close()
+                                                # Apply data type conversion
+                                                converted_data = segment_processor.apply_data_type_conversion(segment_data, data_type_name)
 
-                                            # Save transformed segment to temp file
-                                            np.save(temp_file_path, decimated_data)
+                                                # Apply decimation
+                                                decimated_data = segment_processor.apply_decimation(converted_data, dec)
 
-                                            segment_file_path = temp_file_path
+                                                # Create temporary file for feature extraction
+                                                temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False)
+                                                temp_file_path = temp_file.name
+                                                temp_file.close()
 
-                                            # Get feature set configuration
-                                            cursor.execute("""
-                                                SELECT feature_set_id, windowing_strategy
-                                                FROM ml_experiments_feature_sets
-                                                WHERE experiment_feature_set_id = %s
-                                            """, (efs,))
-                                            fs_config = cursor.fetchone()
-                                            if not fs_config:
-                                                raise ValueError(f"Feature set {efs} not found")
+                                                # Save transformed segment to temp file
+                                                np.save(temp_file_path, decimated_data)
 
-                                            feature_set_id, windowing_strategy = fs_config
+                                                segment_file_path = temp_file_path
 
-                                            # Get feature set with overrides
-                                            feature_set_config = feature_extractor._get_feature_set_with_overrides(
-                                                feature_set_id
-                                            )
+                                                # Get feature set configuration
+                                                cursor.execute("""
+                                                    SELECT feature_set_id, windowing_strategy
+                                                    FROM ml_experiments_feature_sets
+                                                    WHERE experiment_feature_set_id = %s
+                                                """, (efs,))
+                                                fs_config = cursor.fetchone()
+                                                if not fs_config:
+                                                    raise ValueError(f"Feature set {efs} not found")
 
-                                            # Extract features from segment file
-                                            # Returns shape (segment_length, num_features * num_amplitude_methods)
-                                            features_array = feature_extractor._extract_feature_set_from_segment(
-                                                segment_file_path,
-                                                feature_set_config
-                                            )
+                                                feature_set_id, windowing_strategy = fs_config
 
-                                            # Extract the column for the specific amplitude method
-                                            # amp is the method_id (1=minmax, 2=zscore, etc.)
-                                            # We need to find which column index corresponds to this method
-                                            configured_method_ids = feature_extractor._get_configured_amplitude_method_ids()
+                                                # Get feature set with overrides
+                                                feature_set_config = feature_extractor._get_feature_set_with_overrides(
+                                                    feature_set_id
+                                                )
 
-                                            if amp not in configured_method_ids:
-                                                raise ValueError(f"Amplitude method {amp} not in configured methods {configured_method_ids}")
+                                                # Extract features from segment file
+                                                # Returns shape (segment_length, num_features * num_amplitude_methods)
+                                                features_array = feature_extractor._extract_feature_set_from_segment(
+                                                    segment_file_path,
+                                                    feature_set_config
+                                                )
 
-                                            method_idx = configured_method_ids.index(amp)
-                                            num_features = len(feature_ids)
-                                            num_methods = len(configured_method_ids)
+                                                # Extract the column for the specific amplitude method
+                                                # amp is the method_id (1=minmax, 2=zscore, etc.)
+                                                # We need to find which column index corresponds to this method
+                                                configured_method_ids = feature_extractor._get_configured_amplitude_method_ids()
 
-                                            # Features are organized as [feat0_amp0, feat0_amp1, ..., feat1_amp0, feat1_amp1, ...]
-                                            # For each feature, extract the value for this amplitude method
-                                            if features_array.ndim == 1:
-                                                # Aggregate features: 1D array of scalars
-                                                # Shape: (num_features * num_methods,)
-                                                # Extract indices for this amplitude method
-                                                indices = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
-                                                segment_features = features_array[indices]
-                                            else:
-                                                # Sample-wise or chunk features: 2D array
-                                                # Shape: (segment_length, num_features * num_methods)
-                                                # Extract columns for this amplitude method
-                                                cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
-                                                # Flatten to 1D by concatenating selected columns
-                                                segment_features = features_array[:, cols].flatten()
+                                                if amp not in configured_method_ids:
+                                                    raise ValueError(f"Amplitude method {amp} not in configured methods {configured_method_ids}")
 
-                                        except Exception as feat_error:
-                                            raise ValueError(f"Feature generation failed: {feat_error}")
-                                        finally:
-                                            # Clean up temporary segment file
-                                            if temp_file is not None and os.path.exists(temp_file_path):
-                                                try:
-                                                    os.unlink(temp_file_path)
-                                                except:
-                                                    pass  # Ignore cleanup errors
+                                                method_idx = configured_method_ids.index(amp)
+                                                num_features = len(feature_ids)
+                                                num_methods = len(configured_method_ids)
 
-                                        # Generate full verification feature file
-                                        feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
-                                        feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
-                                        os.makedirs(feature_dir, exist_ok=True)
+                                                # Features are organized as [feat0_amp0, feat0_amp1, ..., feat1_amp0, feat1_amp1, ...]
+                                                # For each feature, extract the value for this amplitude method
+                                                if features_array.ndim == 1:
+                                                    # Aggregate features: 1D array of scalars
+                                                    # Shape: (num_features * num_methods,)
+                                                    # Extract indices for this amplitude method
+                                                    indices = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                                                    segment_features = features_array[indices]
+                                                else:
+                                                    # Sample-wise or chunk features: 2D array
+                                                    # Shape: (segment_length, num_features * num_methods)
+                                                    # Extract columns for this amplitude method
+                                                    cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                                                    # Flatten to 1D by concatenating selected columns
+                                                    segment_features = features_array[:, cols].flatten()
 
-                                        feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
-                                        feature_path = os.path.join(feature_dir, feature_filename)
-                                        np.save(feature_path, segment_features)
+                                            except Exception as feat_error:
+                                                raise ValueError(f"Feature generation failed: {feat_error}")
+                                            finally:
+                                                # Clean up temporary segment file
+                                                if temp_file is not None and os.path.exists(temp_file_path):
+                                                    try:
+                                                        os.unlink(temp_file_path)
+                                                    except:
+                                                        pass  # Ignore cleanup errors
 
-                                        # Run prediction
-                                        feature_vector = segment_features.reshape(1, -1)
-                                        predicted_label_id = svm_model.predict(feature_vector)[0]
-                                        probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
-                                        confidence = probabilities[predicted_label_id] if probabilities is not None else None
+                                            # Generate full verification feature file
+                                            feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
+                                            feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
+                                            os.makedirs(feature_dir, exist_ok=True)
 
-                                        prediction_time = time.time() - pred_start_time
+                                            feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
+                                            feature_path = os.path.join(feature_dir, feature_filename)
+                                            np.save(feature_path, segment_features)
 
-                                        # Get label names
-                                        actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
-                                        predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
+                                            # Run prediction
+                                            feature_vector = segment_features.reshape(1, -1)
+                                            predicted_label_id = svm_model.predict(feature_vector)[0]
+                                            probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
+                                            confidence = probabilities[predicted_label_id] if probabilities is not None else None
 
-                                        # Store result
-                                        cursor.execute(f"""
-                                            INSERT INTO {results_table_name} (
-                                                segment_id, actual_label_id, actual_label_name,
-                                                decimation_factor, data_type_id, amplitude_processing_method_id,
-                                                experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
-                                                confidence, prediction_probabilities, feature_file_path,
-                                                model_file_path, prediction_time_seconds
-                                            ) VALUES (
-                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                                            )
-                                            ON CONFLICT (segment_id, decimation_factor, data_type_id,
-                                                         amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
-                                            DO UPDATE SET
-                                                predicted_label_id = EXCLUDED.predicted_label_id,
-                                                predicted_label_name = EXCLUDED.predicted_label_name,
-                                                confidence = EXCLUDED.confidence,
-                                                prediction_probabilities = EXCLUDED.prediction_probabilities,
-                                                feature_file_path = EXCLUDED.feature_file_path,
-                                                model_file_path = EXCLUDED.model_file_path,
-                                                prediction_time_seconds = EXCLUDED.prediction_time_seconds,
-                                                created_at = NOW()
-                                        """, (
-                                            segment_id, segment_label_id, actual_label_name,
-                                            dec, dtype, amp, efs, c_val, predicted_label_id, predicted_label_name,
-                                            confidence, probabilities.tolist() if probabilities is not None else None,
-                                            feature_path, model_path, prediction_time
-                                        ))
+                                            prediction_time = time.time() - pred_start_time
 
-                                        predictions_made += 1
-                                        total_predictions += 1
+                                            # Get label names
+                                            actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
+                                            predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
 
-                                        # Commit every batch
-                                        if predictions_made % batch_size == 0:
-                                            self.db_conn.commit()
+                                            # Store result
+                                            cursor.execute(f"""
+                                                INSERT INTO {results_table_name} (
+                                                    segment_id, actual_label_id, actual_label_name,
+                                                    decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                    experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
+                                                    confidence, prediction_probabilities, feature_file_path,
+                                                    model_file_path, prediction_time_seconds
+                                                ) VALUES (
+                                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                                )
+                                                ON CONFLICT (segment_id, decimation_factor, data_type_id,
+                                                             amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
+                                                DO UPDATE SET
+                                                    predicted_label_id = EXCLUDED.predicted_label_id,
+                                                    predicted_label_name = EXCLUDED.predicted_label_name,
+                                                    confidence = EXCLUDED.confidence,
+                                                    prediction_probabilities = EXCLUDED.prediction_probabilities,
+                                                    feature_file_path = EXCLUDED.feature_file_path,
+                                                    model_file_path = EXCLUDED.model_file_path,
+                                                    prediction_time_seconds = EXCLUDED.prediction_time_seconds,
+                                                    created_at = NOW()
+                                            """, (
+                                                segment_id, segment_label_id, actual_label_name,
+                                                dec, dtype, amp, efs, c_val, predicted_label_id, predicted_label_name,
+                                                confidence, probabilities.tolist() if probabilities is not None else None,
+                                                feature_path, model_path, prediction_time
+                                            ))
 
-                                    except Exception as e:
-                                        total_errors += 1
-                                        if total_errors < 10:  # Only print first 10 errors
-                                            print(f"\n[ERROR] Segment {segment_id}: {e}")
+                                            predictions_made += 1
+                                            total_predictions += 1
+
+                                            # Commit every batch
+                                            if predictions_made % batch_size == 0:
+                                                self.db_conn.commit()
+
+                                        except Exception as e:
+                                            total_errors += 1
+                                            if total_errors < 10:  # Only print first 10 errors
+                                                print(f"\n[ERROR] Segment {segment_id}: {e}")
 
                                 # Final commit for this configuration
                                 self.db_conn.commit()
