@@ -17977,8 +17977,10 @@ SETTINGS:
             import joblib
             import time
             import glob
+            import tempfile
             from pathlib import Path
             from experiment_feature_extractor import ExperimentFeatureExtractor
+            from segment_processor import SegmentFilesetProcessor
 
             cursor = self.db_conn.cursor()
             exp_id = self.current_experiment
@@ -18069,9 +18071,10 @@ SETTINGS:
                 print("[WARNING] No verification segments found")
                 return
 
-            # Initialize feature extractor for on-the-fly feature generation
-            print(f"[INFO] Initializing feature extractor...")
+            # Initialize feature extractor and segment processor for on-the-fly feature generation
+            print(f"[INFO] Initializing feature extractor and segment processor...")
             feature_extractor = ExperimentFeatureExtractor(exp_id, self.db_conn)
+            segment_processor = SegmentFilesetProcessor(experiment_id=exp_id)
 
             # Create results table if needed
             results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_full_verification_results"
@@ -18297,11 +18300,12 @@ SETTINGS:
 
                                         pred_start_time = time.time()
 
-                                        # Generate features on-the-fly instead of loading pre-computed features
+                                        # Generate features on-the-fly by loading from raw fileset
+                                        temp_file = None
                                         try:
-                                            # Find segment file
+                                            # Get segment info from data_segments
                                             cursor.execute("""
-                                                SELECT experiment_file_id
+                                                SELECT experiment_file_id, beginning_index, segment_length
                                                 FROM data_segments
                                                 WHERE segment_id = %s
                                             """, (segment_id,))
@@ -18309,17 +18313,35 @@ SETTINGS:
                                             if not seg_info:
                                                 raise ValueError(f"Segment {segment_id} not found in data_segments")
 
-                                            file_id = seg_info[0]
+                                            file_id, beginning_index, seg_length = seg_info
 
-                                            # Construct segment file path
-                                            base_path = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/segment_files"
-                                            pattern = f"{base_path}/S{segment_length:06d}/TADC{dtype}/D{dec:06d}/SID{segment_id:08d}_F{file_id:08d}_*.npy"
-                                            matches = glob.glob(pattern)
+                                            # Load raw file data from fileset
+                                            # Data type mapping: 6->ADC6, 8->ADC8, 10->ADC10, 12->ADC12
+                                            data_type_name = f"ADC{dtype}"
+                                            raw_data = segment_processor.load_file_data(file_id, data_type_name)
 
-                                            if not matches:
-                                                raise ValueError(f"Segment file not found: {pattern}")
+                                            if raw_data is None:
+                                                raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
 
-                                            segment_file_path = matches[0]
+                                            # Extract segment slice
+                                            end_index = beginning_index + seg_length
+                                            segment_data = raw_data[beginning_index:end_index]
+
+                                            # Apply data type conversion
+                                            converted_data = segment_processor.apply_data_type_conversion(segment_data, data_type_name)
+
+                                            # Apply decimation
+                                            decimated_data = segment_processor.apply_decimation(converted_data, dec)
+
+                                            # Create temporary file for feature extraction
+                                            temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False)
+                                            temp_file_path = temp_file.name
+                                            temp_file.close()
+
+                                            # Save transformed segment to temp file
+                                            np.save(temp_file_path, decimated_data)
+
+                                            segment_file_path = temp_file_path
 
                                             # Get feature set configuration
                                             cursor.execute("""
@@ -18377,6 +18399,13 @@ SETTINGS:
 
                                         except Exception as feat_error:
                                             raise ValueError(f"Feature generation failed: {feat_error}")
+                                        finally:
+                                            # Clean up temporary segment file
+                                            if temp_file is not None and os.path.exists(temp_file_path):
+                                                try:
+                                                    os.unlink(temp_file_path)
+                                                except:
+                                                    pass  # Ignore cleanup errors
 
                                         # Generate full verification feature file
                                         feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
