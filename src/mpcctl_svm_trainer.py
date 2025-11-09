@@ -85,9 +85,9 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         for line in f:
             if line.strip():
                 parts = line.strip().split()
-                if len(parts) >= 6:
-                    dec, dtype, amp, efs, kernel, c_val = parts[:6]
-                    gamma_val = parts[6] if len(parts) > 6 and parts[6] != 'None' else None
+                if len(parts) >= 7:
+                    dec, dtype, amp, efs, fs_id, kernel, c_val = parts[:7]
+                    gamma_val = parts[7] if len(parts) > 7 and parts[7] != 'None' else None
 
                     # Parse gamma: can be numeric, 'scale', 'auto', or None
                     gamma = None
@@ -102,6 +102,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                         'dtype': int(dtype),
                         'amp': int(amp),
                         'efs': int(efs),
+                        'fs_id': int(fs_id),
                         'kernel': kernel,
                         'C': float(c_val),
                         'gamma': gamma
@@ -189,6 +190,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
         dtype = cfg['dtype']
         amp = cfg['amp']
         efs = cfg['efs']
+        fs_id = cfg['fs_id']  # Actual feature_set_id for file paths
         svm_params = {'kernel': cfg['kernel'], 'C': cfg['C'], 'gamma': cfg['gamma']}
 
         # Update status at start of task
@@ -439,7 +441,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
 
             # Save model
             base_dir = f"/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/classifier_files"
-            model_dir = f"{base_dir}/svm_models/classifier_{classifier_id:03d}/D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+            model_dir = f"{base_dir}/trained_models/classifier_{classifier_id:03d}/D{dec:06d}/TADC{dtype}/A{amp}/FS{fs_id:04d}"
             os.makedirs(model_dir, exist_ok=True)
 
             model_filename = f"svm_{svm_params['kernel']}_C{svm_params['C']}"
@@ -451,7 +453,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
             joblib.dump(svm, model_path)
 
             # Save visualizations
-            viz_dir = f"{base_dir}/svm_results/classifier_{classifier_id:03d}/D{dec:06d}_TADC{dtype}_A{amp}_EFS{efs:03d}"
+            viz_dir = f"{base_dir}/svm_results/classifier_{classifier_id:03d}/D{dec:06d}/TADC{dtype}/A{amp}/FS{fs_id:04d}"
             svm_viz_dir = f"{viz_dir}/{svm_params['kernel']}_C{svm_params['C']}"
             if svm_params.get('gamma'):
                 svm_viz_dir += f"_G{svm_params['gamma']}"
@@ -900,11 +902,10 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
 
         # Query hyperparameters
         cursor.execute("""
-            SELECT DISTINCT lut.decimation_factor
+            SELECT DISTINCT cfg.decimation_factor
             FROM ml_classifier_config_decimation_factors cfg
-            JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
             WHERE cfg.config_id = %s
-            ORDER BY lut.decimation_factor
+            ORDER BY cfg.decimation_factor
         """, (config_id,))
         decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -925,12 +926,15 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
         amplitude_methods = [row[0] for row in cursor.fetchall()]
 
         cursor.execute("""
-            SELECT DISTINCT experiment_feature_set_id
-            FROM ml_classifier_config_experiment_feature_sets
-            WHERE config_id = %s
-            ORDER BY experiment_feature_set_id
+            SELECT DISTINCT cefs.experiment_feature_set_id, mefs.feature_set_id
+            FROM ml_classifier_config_experiment_feature_sets cefs
+            JOIN ml_experiments_feature_sets mefs ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
+            WHERE cefs.config_id = %s
+            ORDER BY mefs.feature_set_id
         """, (config_id,))
-        experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+        feature_set_rows = cursor.fetchall()
+        experiment_feature_sets = [row[0] for row in feature_set_rows]
+        efs_to_fs_map = {row[0]: row[1] for row in feature_set_rows}
 
         cursor.close()
         conn.close()
@@ -974,8 +978,9 @@ def manager_process(experiment_id: int, classifier_id: int, workers_count: int,
             for dtype in data_type_ids:
                 for amp in amplitude_methods:
                     for efs in experiment_feature_sets:
+                        actual_fs_id = efs_to_fs_map[efs]  # Map to actual feature_set_id
                         for kernel, c_val, gamma_val in svm_hyperparams:
-                            config_line = f"{dec} {dtype} {amp} {efs} {kernel} {c_val} {gamma_val if gamma_val else 'None'}"
+                            config_line = f"{dec} {dtype} {amp} {efs} {actual_fs_id} {kernel} {c_val} {gamma_val if gamma_val else 'None'}"
                             all_configs.append(config_line)
 
         total_configs = len(all_configs)
