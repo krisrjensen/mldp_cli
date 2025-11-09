@@ -18313,7 +18313,7 @@ SETTINGS:
 
                                             # Construct segment file path
                                             base_path = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/segment_files"
-                                            pattern = f"{base_path}/S*/T{dtype:02d}/D{dec:06d}/SID{segment_id:08d}_F{file_id:08d}_*.npy"
+                                            pattern = f"{base_path}/S{segment_length:06d}/TADC{dtype}/D{dec:06d}/SID{segment_id:08d}_F{file_id:08d}_*.npy"
                                             matches = glob.glob(pattern)
 
                                             if not matches:
