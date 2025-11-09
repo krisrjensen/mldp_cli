@@ -3,17 +3,23 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_030001
-File version: 2.0.18.27
+Date Revised: 20251109_030002
+File version: 2.0.18.28
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 27)
+- CHANGE: Tracks changes within current commit cycle (currently 28)
 
-Changes in this version (18.27):
+Changes in this version (18.28):
+1. BUG FIX - classifier-full-test column name error in data_segments query
+   - v2.0.18.28: Fixed query to use experiment_file_id instead of file_id (line 18298)
+                 data_segments table uses experiment_file_id, not file_id
+                 Fixed SQL error: column "file_id" does not exist
+
+Changes in previous version (18.27):
 1. MAJOR ENHANCEMENT - classifier-full-test generates features on-the-fly
    - v2.0.18.27: Replaced pre-computed feature loading with dynamic feature generation
                  Removed dependency on experiment_042_feature_fileset table (lines 18274-18305)
@@ -861,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.27"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.28"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18295,7 +18301,7 @@ SETTINGS:
                                         try:
                                             # Find segment file
                                             cursor.execute("""
-                                                SELECT file_id, segment_index
+                                                SELECT experiment_file_id, segment_index
                                                 FROM data_segments
                                                 WHERE segment_id = %s
                                             """, (segment_id,))
