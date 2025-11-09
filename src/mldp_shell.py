@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_200000
-File version: 2.0.18.16
+Date Revised: 20251108_210000
+File version: 2.0.18.17
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,18 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.16):
+Changes in this version (18.17):
+1. BUG FIX - classifier-build-features decimation factor query
+   - v2.0.18.17: Fixed decimation factor query - removed incorrect JOIN
+                 Config table stores actual values (0,7,15,31,63,127), not IDs
+                 Was joining cfg.decimation_factor = lut.decimation_id causing wrong matches
+                 Now queries cfg.decimation_factor directly
+2. BUG FIX - Use actual feature_set_id in SVM feature file paths
+   - v2.0.18.17: Added mapping from experiment_feature_set_id to feature_set_id
+                 File paths now use FS0031, FS0041, etc. instead of EFS006, EFS007
+                 Matches fix applied to heatmap generator and config-list
+
+Changes in previous version (18.16):
 1. BUG FIX - Display actual feature_set_id in classifier-config-list
    - v2.0.18.16: Fixed query to join through ml_experiments_feature_sets
                  Now displays actual feature_set_id (31, 41, 50...) instead of
@@ -760,7 +771,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.16"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.17"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -16193,11 +16204,10 @@ SETTINGS:
 
             # Query hyperparameters from active configuration
             cursor.execute("""
-                SELECT DISTINCT lut.decimation_factor
+                SELECT DISTINCT cfg.decimation_factor
                 FROM ml_classifier_config_decimation_factors cfg
-                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
                 WHERE cfg.config_id = %s
-                ORDER BY lut.decimation_factor
+                ORDER BY cfg.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -16218,12 +16228,16 @@ SETTINGS:
             amplitude_methods = [row[0] for row in cursor.fetchall()]
 
             cursor.execute("""
-                SELECT DISTINCT experiment_feature_set_id
-                FROM ml_classifier_config_experiment_feature_sets
-                WHERE config_id = %s
-                ORDER BY experiment_feature_set_id
+                SELECT DISTINCT cefs.experiment_feature_set_id, mefs.feature_set_id
+                FROM ml_classifier_config_experiment_feature_sets cefs
+                JOIN ml_experiments_feature_sets mefs ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
+                WHERE cefs.config_id = %s
+                ORDER BY mefs.feature_set_id
             """, (config_id,))
-            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+            feature_set_rows = cursor.fetchall()
+            experiment_feature_sets = [row[0] for row in feature_set_rows]
+            # Create mapping from experiment_feature_set_id to actual feature_set_id
+            efs_to_fs_map = {row[0]: row[1] for row in feature_set_rows}
 
             # Query distance functions from configuration (only if computing distances)
             distance_functions = []
@@ -16578,7 +16592,9 @@ SETTINGS:
                                     dec_dir = f"D{dec:06d}"
                                     dtype_name = f"TADC{dtype}"  # Assuming data_type_id maps to ADC bit depth
                                     amp_name = f"A{amp}"
-                                    efs_dir = f"EFS{efs:03d}"
+                                    # Use actual feature_set_id instead of experiment_feature_set_id
+                                    actual_fs_id = efs_to_fs_map[efs]
+                                    efs_dir = f"FS{actual_fs_id:04d}"
 
                                     full_dir = os.path.join(base_dir, classifier_dir, dec_dir, dtype_name, amp_name, efs_dir)
                                     os.makedirs(full_dir, exist_ok=True)
