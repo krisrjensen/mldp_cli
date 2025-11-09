@@ -3,17 +3,27 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_000000
-File version: 2.0.18.22
+Date Revised: 20251109_010000
+File version: 2.0.18.23
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
-- COMMIT: Increments on every git commit/push (currently 17)
-- CHANGE: Tracks changes within current commit cycle (currently 7)
+- COMMIT: Increments on every git commit/push (currently 18)
+- CHANGE: Tracks changes within current commit cycle (currently 23)
 
-Changes in this version (18.22):
+Changes in this version (18.23):
+1. ENHANCEMENT - classifier-full-test supports multiple C values and svm_models directory
+   - v2.0.18.23: Added --c-value parameter (default: test all C values)
+                 Changed model directory from trained_models to svm_models
+                 Query available C values from database if not specified
+                 Loop through all C values and test each model
+                 Load actual model filenames: svm_linear_C{c_val}.pkl
+                 Added svm_c_parameter column to full_verification_results table
+                 Updated UNIQUE constraint to include svm_c_parameter
+
+Changes in previous version (18.22):
 1. BUG FIX - classifier-full-test file_labels_lut table error
    - v2.0.18.22: Fixed query for verification segments (line 17973-17989)
                  Table file_labels_lut doesn't exist in database
@@ -17839,6 +17849,7 @@ SETTINGS:
             --data-type <id>          Test only this data type
             --amplitude-method <id>   Test only this amplitude method
             --feature-set <id>        Test only this feature set (actual feature_set_id, e.g., 325)
+            --c-value <n>             Test only this C value (e.g., 0.1, 1.0, 10.0, 100.0)
             --batch-size <n>          Segments per batch (default: 100)
 
         Examples:
@@ -17866,6 +17877,7 @@ SETTINGS:
         filter_dtype = None
         filter_amp = None
         filter_efs = None
+        filter_c = None
 
         i = 0
         while args and i < len(args):
@@ -17906,6 +17918,13 @@ SETTINGS:
                     i += 2
                 else:
                     print("[ERROR] --feature-set requires an ID")
+                    return
+            elif args[i] == '--c-value':
+                if i + 1 < len(args):
+                    filter_c = float(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --c-value requires a number")
                     return
             else:
                 print(f"[WARNING] Unknown option: {args[i]}")
@@ -18029,6 +18048,7 @@ SETTINGS:
                     data_type_id INTEGER NOT NULL,
                     amplitude_processing_method_id INTEGER NOT NULL,
                     experiment_feature_set_id BIGINT NOT NULL,
+                    svm_c_parameter DOUBLE PRECISION NOT NULL,
                     predicted_label_id INTEGER,
                     predicted_label_name TEXT,
                     confidence DOUBLE PRECISION,
@@ -18039,7 +18059,7 @@ SETTINGS:
                     created_at TIMESTAMP DEFAULT NOW(),
 
                     UNIQUE (segment_id, decimation_factor, data_type_id,
-                            amplitude_processing_method_id, experiment_feature_set_id),
+                            amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter),
 
                     FOREIGN KEY (segment_id)
                         REFERENCES data_segments(segment_id)
@@ -18119,11 +18139,25 @@ SETTINGS:
                     print(f"[INFO] Converted feature_set_id {filter_efs} to experiment_feature_set_id")
                 experiment_feature_sets = [e for e in experiment_feature_sets if e == filter_efs]
 
+            # Query C values from database
+            cursor.execute("""
+                SELECT DISTINCT svm_c_parameter
+                FROM ml_classifier_svm_c_parameters
+                WHERE config_id = %s
+                ORDER BY svm_c_parameter
+            """, (config_id,))
+            c_values = [row[0] for row in cursor.fetchall()]
+
+            # Apply C value filter
+            if filter_c is not None:
+                c_values = [c for c in c_values if c == filter_c]
+
             print(f"[INFO] Hyperparameters:")
             print(f"  Decimation factors: {decimation_factors}")
             print(f"  Data types: {data_type_ids}")
             print(f"  Amplitude methods: {amplitude_methods}")
             print(f"  Feature sets: {len(experiment_feature_sets)}")
+            print(f"  C values: {c_values}")
 
             # Get label mapping
             cursor.execute("SELECT label_id, label_name FROM segment_labels ORDER BY label_id")
@@ -18138,174 +18172,176 @@ SETTINGS:
                 for dtype in data_type_ids:
                     for amp in amplitude_methods:
                         for efs in experiment_feature_sets:
-                            actual_fs_id = efs_to_fs_map[efs]
+                            for c_val in c_values:
+                                actual_fs_id = efs_to_fs_map[efs]
 
-                            print(f"\n{'='*60}")
-                            print(f"Processing: dec={dec}, dtype={dtype}, amp={amp}, fs={actual_fs_id}")
-                            print(f"{'='*60}")
+                                print(f"\n{'='*60}")
+                                print(f"Processing: dec={dec}, dtype={dtype}, amp={amp}, fs={actual_fs_id}, C={c_val}")
+                                print(f"{'='*60}")
 
-                            # Load trained SVM model
-                            model_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/trained_models"
-                            classifier_dir = f"classifier_{cls_id:03d}"
-                            dec_dir = f"D{dec:06d}"
-                            dtype_name = f"TADC{dtype}"
-                            amp_name = f"A{amp}"
-                            fs_dir = f"FS{actual_fs_id:04d}"
+                                # Load trained SVM model
+                                model_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/svm_models"
+                                classifier_dir = f"classifier_{cls_id:03d}"
+                                dec_dir = f"D{dec:06d}"
+                                dtype_name = f"TADC{dtype}"
+                                amp_name = f"A{amp}"
+                                fs_dir = f"FS{actual_fs_id:04d}"
 
-                            model_path = os.path.join(model_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir, "svm_model.pkl")
+                                model_path = os.path.join(model_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir, f"svm_linear_C{c_val}.pkl")
 
-                            if not os.path.exists(model_path):
-                                print(f"[WARNING] Model not found: {model_path}")
-                                print(f"[SKIP] Skipping this configuration")
-                                continue
-
-                            try:
-                                with open(model_path, 'rb') as f:
-                                    model_data = pickle.load(f)
-                                svm_model = model_data['model']
-                                print(f"[INFO] Loaded model: {model_path}")
-                            except Exception as e:
-                                print(f"[ERROR] Failed to load model: {e}")
-                                continue
-
-                            # Query features in this feature_set
-                            cursor.execute("""
-                                SELECT f.feature_id, f.feature_name, fsf.feature_order
-                                FROM ml_experiments_feature_sets efs_tbl
-                                JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
-                                JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
-                                WHERE efs_tbl.experiment_feature_set_id = %s
-                                ORDER BY fsf.feature_order
-                            """, (efs,))
-                            features_in_set = cursor.fetchall()
-                            feature_ids = [row[0] for row in features_in_set]
-
-                            # Process each verification segment
-                            segments_processed = 0
-                            predictions_made = 0
-
-                            for segment_id, segment_label_id, file_label in verification_segments:
-                                segments_processed += 1
-
-                                if segments_processed % 100 == 0:
-                                    elapsed = time.time() - start_time
-                                    rate = segments_processed / elapsed if elapsed > 0 else 0
-                                    print(f"  Progress: {segments_processed}/{total_verification} ({rate:.1f} seg/sec)", end='\r')
+                                if not os.path.exists(model_path):
+                                    print(f"[WARNING] Model not found: {model_path}")
+                                    print(f"[SKIP] Skipping this configuration")
+                                    continue
 
                                 try:
-                                    # Check if already exists
-                                    if not force:
-                                        cursor.execute(f"""
-                                            SELECT 1 FROM {results_table_name}
-                                            WHERE segment_id = %s
-                                              AND decimation_factor = %s
-                                              AND data_type_id = %s
-                                              AND amplitude_processing_method_id = %s
-                                              AND experiment_feature_set_id = %s
-                                        """, (segment_id, dec, dtype, amp, efs))
-                                        if cursor.fetchone():
-                                            continue
-
-                                    pred_start_time = time.time()
-
-                                    # Load segment features
-                                    segment_feature_parts = []
-                                    for feature_id in feature_ids:
-                                        cursor.execute(f"""
-                                            SELECT feature_file_path
-                                            FROM experiment_{exp_id:03d}_feature_fileset
-                                            WHERE segment_id = %s
-                                              AND decimation_factor = %s
-                                              AND data_type_id = %s
-                                              AND amplitude_processing_method_id = %s
-                                              AND experiment_feature_set_id = %s
-                                              AND feature_set_feature_id = %s
-                                        """, (segment_id, dec, dtype, amp, efs, feature_id))
-
-                                        result = cursor.fetchone()
-                                        if result:
-                                            feature_file_path = result[0]
-                                            features = np.load(feature_file_path)
-                                            column_idx = amp - 1
-                                            if features.ndim == 1:
-                                                features_1d = features
-                                            else:
-                                                features_1d = features[:, column_idx]
-                                            segment_feature_parts.append(features_1d)
-                                        else:
-                                            raise ValueError(f"Missing feature for segment {segment_id}, feature {feature_id}")
-
-                                    if len(segment_feature_parts) != len(feature_ids):
-                                        raise ValueError(f"Incomplete features for segment {segment_id}")
-
-                                    # Concatenate features
-                                    segment_features = np.concatenate(segment_feature_parts)
-
-                                    # Generate full verification feature file
-                                    feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
-                                    feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
-                                    os.makedirs(feature_dir, exist_ok=True)
-
-                                    feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
-                                    feature_path = os.path.join(feature_dir, feature_filename)
-                                    np.save(feature_path, segment_features)
-
-                                    # Run prediction
-                                    feature_vector = segment_features.reshape(1, -1)
-                                    predicted_label_id = svm_model.predict(feature_vector)[0]
-                                    probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
-                                    confidence = probabilities[predicted_label_id] if probabilities is not None else None
-
-                                    prediction_time = time.time() - pred_start_time
-
-                                    # Get label names
-                                    actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
-                                    predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
-
-                                    # Store result
-                                    cursor.execute(f"""
-                                        INSERT INTO {results_table_name} (
-                                            segment_id, actual_label_id, actual_label_name,
-                                            decimation_factor, data_type_id, amplitude_processing_method_id,
-                                            experiment_feature_set_id, predicted_label_id, predicted_label_name,
-                                            confidence, prediction_probabilities, feature_file_path,
-                                            model_file_path, prediction_time_seconds
-                                        ) VALUES (
-                                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                                        )
-                                        ON CONFLICT (segment_id, decimation_factor, data_type_id,
-                                                     amplitude_processing_method_id, experiment_feature_set_id)
-                                        DO UPDATE SET
-                                            predicted_label_id = EXCLUDED.predicted_label_id,
-                                            predicted_label_name = EXCLUDED.predicted_label_name,
-                                            confidence = EXCLUDED.confidence,
-                                            prediction_probabilities = EXCLUDED.prediction_probabilities,
-                                            feature_file_path = EXCLUDED.feature_file_path,
-                                            model_file_path = EXCLUDED.model_file_path,
-                                            prediction_time_seconds = EXCLUDED.prediction_time_seconds,
-                                            created_at = NOW()
-                                    """, (
-                                        segment_id, segment_label_id, actual_label_name,
-                                        dec, dtype, amp, efs, predicted_label_id, predicted_label_name,
-                                        confidence, probabilities.tolist() if probabilities is not None else None,
-                                        feature_path, model_path, prediction_time
-                                    ))
-
-                                    predictions_made += 1
-                                    total_predictions += 1
-
-                                    # Commit every batch
-                                    if predictions_made % batch_size == 0:
-                                        self.db_conn.commit()
-
+                                    with open(model_path, 'rb') as f:
+                                        model_data = pickle.load(f)
+                                    svm_model = model_data['model']
+                                    print(f"[INFO] Loaded model: {model_path}")
                                 except Exception as e:
-                                    total_errors += 1
-                                    if total_errors < 10:  # Only print first 10 errors
-                                        print(f"\n[ERROR] Segment {segment_id}: {e}")
+                                    print(f"[ERROR] Failed to load model: {e}")
+                                    continue
 
-                            # Final commit for this configuration
-                            self.db_conn.commit()
-                            print(f"\n  Predictions: {predictions_made}")
+                                # Query features in this feature_set
+                                cursor.execute("""
+                                    SELECT f.feature_id, f.feature_name, fsf.feature_order
+                                    FROM ml_experiments_feature_sets efs_tbl
+                                    JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
+                                    JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                                    WHERE efs_tbl.experiment_feature_set_id = %s
+                                    ORDER BY fsf.feature_order
+                                """, (efs,))
+                                features_in_set = cursor.fetchall()
+                                feature_ids = [row[0] for row in features_in_set]
+
+                                # Process each verification segment
+                                segments_processed = 0
+                                predictions_made = 0
+
+                                for segment_id, segment_label_id, file_label in verification_segments:
+                                    segments_processed += 1
+
+                                    if segments_processed % 100 == 0:
+                                        elapsed = time.time() - start_time
+                                        rate = segments_processed / elapsed if elapsed > 0 else 0
+                                        print(f"  Progress: {segments_processed}/{total_verification} ({rate:.1f} seg/sec)", end='\r')
+
+                                    try:
+                                        # Check if already exists
+                                        if not force:
+                                            cursor.execute(f"""
+                                                SELECT 1 FROM {results_table_name}
+                                                WHERE segment_id = %s
+                                                  AND decimation_factor = %s
+                                                  AND data_type_id = %s
+                                                  AND amplitude_processing_method_id = %s
+                                                  AND experiment_feature_set_id = %s
+                                                  AND svm_c_parameter = %s
+                                            """, (segment_id, dec, dtype, amp, efs, c_val))
+                                            if cursor.fetchone():
+                                                continue
+
+                                        pred_start_time = time.time()
+
+                                        # Load segment features
+                                        segment_feature_parts = []
+                                        for feature_id in feature_ids:
+                                            cursor.execute(f"""
+                                                SELECT feature_file_path
+                                                FROM experiment_{exp_id:03d}_feature_fileset
+                                                WHERE segment_id = %s
+                                                  AND decimation_factor = %s
+                                                  AND data_type_id = %s
+                                                  AND amplitude_processing_method_id = %s
+                                                  AND experiment_feature_set_id = %s
+                                                  AND feature_set_feature_id = %s
+                                            """, (segment_id, dec, dtype, amp, efs, feature_id))
+
+                                            result = cursor.fetchone()
+                                            if result:
+                                                feature_file_path = result[0]
+                                                features = np.load(feature_file_path)
+                                                column_idx = amp - 1
+                                                if features.ndim == 1:
+                                                    features_1d = features
+                                                else:
+                                                    features_1d = features[:, column_idx]
+                                                segment_feature_parts.append(features_1d)
+                                            else:
+                                                raise ValueError(f"Missing feature for segment {segment_id}, feature {feature_id}")
+
+                                        if len(segment_feature_parts) != len(feature_ids):
+                                            raise ValueError(f"Incomplete features for segment {segment_id}")
+
+                                        # Concatenate features
+                                        segment_features = np.concatenate(segment_feature_parts)
+
+                                        # Generate full verification feature file
+                                        feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
+                                        feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
+                                        os.makedirs(feature_dir, exist_ok=True)
+
+                                        feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
+                                        feature_path = os.path.join(feature_dir, feature_filename)
+                                        np.save(feature_path, segment_features)
+
+                                        # Run prediction
+                                        feature_vector = segment_features.reshape(1, -1)
+                                        predicted_label_id = svm_model.predict(feature_vector)[0]
+                                        probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
+                                        confidence = probabilities[predicted_label_id] if probabilities is not None else None
+
+                                        prediction_time = time.time() - pred_start_time
+
+                                        # Get label names
+                                        actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
+                                        predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
+
+                                        # Store result
+                                        cursor.execute(f"""
+                                            INSERT INTO {results_table_name} (
+                                                segment_id, actual_label_id, actual_label_name,
+                                                decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
+                                                confidence, prediction_probabilities, feature_file_path,
+                                                model_file_path, prediction_time_seconds
+                                            ) VALUES (
+                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                            )
+                                            ON CONFLICT (segment_id, decimation_factor, data_type_id,
+                                                         amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
+                                            DO UPDATE SET
+                                                predicted_label_id = EXCLUDED.predicted_label_id,
+                                                predicted_label_name = EXCLUDED.predicted_label_name,
+                                                confidence = EXCLUDED.confidence,
+                                                prediction_probabilities = EXCLUDED.prediction_probabilities,
+                                                feature_file_path = EXCLUDED.feature_file_path,
+                                                model_file_path = EXCLUDED.model_file_path,
+                                                prediction_time_seconds = EXCLUDED.prediction_time_seconds,
+                                                created_at = NOW()
+                                        """, (
+                                            segment_id, segment_label_id, actual_label_name,
+                                            dec, dtype, amp, efs, c_val, predicted_label_id, predicted_label_name,
+                                            confidence, probabilities.tolist() if probabilities is not None else None,
+                                            feature_path, model_path, prediction_time
+                                        ))
+
+                                        predictions_made += 1
+                                        total_predictions += 1
+
+                                        # Commit every batch
+                                        if predictions_made % batch_size == 0:
+                                            self.db_conn.commit()
+
+                                    except Exception as e:
+                                        total_errors += 1
+                                        if total_errors < 10:  # Only print first 10 errors
+                                            print(f"\n[ERROR] Segment {segment_id}: {e}")
+
+                                # Final commit for this configuration
+                                self.db_conn.commit()
+                                print(f"\n  Predictions: {predictions_made}")
 
             # Final summary
             elapsed_total = time.time() - start_time
