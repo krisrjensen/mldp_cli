@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.37"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.38"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18750,9 +18750,9 @@ SETTINGS:
                                                     # Flatten to 1D by concatenating selected columns
                                                     segment_features = features_array[:, cols].flatten()
 
-                                            # WORKAROUND: Training features were replicated 3 times (bug in feature extraction)
-                                            # Model expects features repeated 3 times, so replicate to match training format
-                                            segment_features = np.tile(segment_features, 3)
+                                                # WORKAROUND: Training features were replicated 3 times (bug in feature extraction)
+                                                # Model expects features repeated 3 times, so replicate to match training format
+                                                segment_features = np.tile(segment_features, 3)
 
                                             except Exception as feat_error:
                                                 raise ValueError(f"Feature generation failed: {feat_error}")
