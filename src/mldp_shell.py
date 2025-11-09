@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_171500
-File version: 2.0.17.17
+Date Revised: 20251108_173000
+File version: 2.0.17.18
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -2723,43 +2723,131 @@ class MLDPShell:
             print(f"Error: {e}")
     
     def cmd_heatmap(self, args):
-        """Generate heatmap"""
-        version = 7
-        output_dir = None
-        
+        """Generate distance heatmap for current experiment
+
+        Usage: heatmap [options]
+
+        Options:
+            --distance FUNC       Distance function (manhattan, cosine, euclidean)
+                                 Default: uses current distance type
+            --decimation N        Filter by decimation factor (0, 7, 15, 31, 63, 127)
+            --data-type TYPE      Filter by data type (adc6, adc8, adc10, adc12)
+            --amplitude-method M  Filter by amplitude method (zscore, etc.)
+            --feature-set ID      Filter by specific feature set ID
+            --aggregation AGG     Aggregation method (mean, median, min, max)
+                                 Default: mean
+            --output DIR          Output directory
+                                 Default: ./heatmaps
+            --help               Show this help message
+
+        Examples:
+            heatmap
+            heatmap --distance manhattan --decimation 0 --data-type adc8
+            heatmap --distance cosine --aggregation median --output ./plots
+        """
+        if '--help' in args:
+            print(self.cmd_heatmap.__doc__)
+            return
+
+        if not self.current_experiment:
+            print("No experiment selected. Use 'use-experiment <id>' first.")
+            return
+
+        # Parse arguments
+        distance_func = None
+        decimation = None
+        data_type = None
+        amplitude_method = None
+        feature_set = None
+        aggregation = 'mean'
+        output_dir = './heatmaps'
+
         i = 0
         while i < len(args):
-            if args[i] == '--version' and i + 1 < len(args):
-                version = args[i + 1]
+            if args[i] == '--distance' and i + 1 < len(args):
+                distance_func = args[i + 1]
                 i += 2
-            elif args[i] == '--output-dir' and i + 1 < len(args):
+            elif args[i] == '--decimation' and i + 1 < len(args):
+                decimation = args[i + 1]
+                i += 2
+            elif args[i] == '--data-type' and i + 1 < len(args):
+                data_type = args[i + 1]
+                i += 2
+            elif args[i] == '--amplitude-method' and i + 1 < len(args):
+                amplitude_method = args[i + 1]
+                i += 2
+            elif args[i] == '--feature-set' and i + 1 < len(args):
+                feature_set = args[i + 1]
+                i += 2
+            elif args[i] == '--aggregation' and i + 1 < len(args):
+                aggregation = args[i + 1]
+                i += 2
+            elif args[i] == '--output' and i + 1 < len(args):
                 output_dir = args[i + 1]
                 i += 2
             else:
                 i += 1
-        
-        heatmap_path = MLDP_ROOT / "experiment_generator" / "src" / "heatmaps" / f"generate_exp18_heatmaps_v{version}.py"
-        
+
+        # Use current distance type if not specified
+        if not distance_func:
+            if self.current_distance_type:
+                # Map internal names to generator names
+                distance_map = {
+                    'L1': 'manhattan',
+                    'L2': 'euclidean',
+                    'cosine': 'cosine'
+                }
+                distance_func = distance_map.get(self.current_distance_type, 'manhattan')
+            else:
+                distance_func = 'manhattan'
+
+        # Find generator script
+        heatmap_path = MLDP_ROOT / "experiment_generator" / "src" / "heatmaps" / "generate_experiment_heatmap.py"
+
         if not heatmap_path.exists():
-            heatmap_path = MLDP_ROOT / "experiment_generator" / "src" / "heatmaps" / "generate_exp18_heatmaps.py"
-        
-        if not heatmap_path.exists():
-            print(f"Heatmap generator not found")
+            print(f"Heatmap generator not found at {heatmap_path}")
             return
-        
+
+        # Build command
         cmd = [sys.executable, str(heatmap_path)]
-        cmd.extend(['--distance-type', self.current_distance_type])
-        
-        if output_dir:
-            cmd.extend(['--output-dir', output_dir])
-        
-        print(f"🎨 Generating {self.current_distance_type} heatmap (v{version})...")
-        
+        cmd.extend(['--experiment', str(self.current_experiment)])
+        cmd.extend(['--distance', distance_func])
+        cmd.extend(['--aggregation', aggregation])
+        cmd.extend(['--output', output_dir])
+
+        if decimation is not None:
+            cmd.extend(['--decimation', str(decimation)])
+        if data_type:
+            cmd.extend(['--data-type', data_type])
+        if amplitude_method:
+            cmd.extend(['--amplitude-method', amplitude_method])
+        if feature_set:
+            cmd.extend(['--feature-set', str(feature_set)])
+
+        # Build description
+        desc_parts = [f"Experiment {self.current_experiment}", distance_func.upper()]
+        if decimation is not None:
+            desc_parts.append(f"decimation={decimation}")
+        if data_type:
+            desc_parts.append(data_type.upper())
+        if amplitude_method:
+            desc_parts.append(amplitude_method)
+        if feature_set:
+            desc_parts.append(f"feature_set={feature_set}")
+        desc_parts.append(f"({aggregation})")
+
+        description = " - ".join(desc_parts)
+
+        print(f"Generating heatmap: {description}...")
+        print(f"Output directory: {output_dir}")
+
         try:
             subprocess.run(cmd, check=True)
-            print("Heatmap generated!")
-        except subprocess.CalledProcessError:
-            print("Heatmap generation failed")
+            print("Heatmap generated successfully!")
+        except subprocess.CalledProcessError as e:
+            print(f"Heatmap generation failed with error code {e.returncode}")
+        except FileNotFoundError:
+            print(f"Python interpreter not found: {sys.executable}")
     
     def cmd_histogram(self, args):
         """Generate histogram"""
@@ -3226,7 +3314,7 @@ MPCCTL DISTANCE PIPELINE:
   mpcctl-execute-experiment           Execute complete pipeline (--workers N --log --verbose)
 
 🎨 VISUALIZATION:
-  heatmap [--version N]               Generate distance heatmap
+  heatmap [options]                   Generate distance heatmap (use --help for options)
   histogram [--version] [--bins]      Generate distance histogram
   visualize --segment-id ID           Visualize segment data
 
