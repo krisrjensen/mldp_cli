@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.36"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.37"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1807,6 +1807,10 @@ def _process_verification_batch(batch_info):
                 # Sample-wise or chunk features: 2D array
                 cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
                 segment_features = features_array[:, cols].flatten()
+
+            # WORKAROUND: Training features were replicated 3 times (bug in feature extraction)
+            # Model expects features repeated 3 times, so replicate to match training format
+            segment_features = np.tile(segment_features, 3)
 
             # Clean up temp file
             if temp_file_path and os.path.exists(temp_file_path):
@@ -18745,6 +18749,10 @@ SETTINGS:
                                                     cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
                                                     # Flatten to 1D by concatenating selected columns
                                                     segment_features = features_array[:, cols].flatten()
+
+                                            # WORKAROUND: Training features were replicated 3 times (bug in feature extraction)
+                                            # Model expects features repeated 3 times, so replicate to match training format
+                                            segment_features = np.tile(segment_features, 3)
 
                                             except Exception as feat_error:
                                                 raise ValueError(f"Feature generation failed: {feat_error}")
