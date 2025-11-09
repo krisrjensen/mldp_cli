@@ -3,17 +3,28 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_020000
-File version: 2.0.18.25
+Date Revised: 20251109_030000
+File version: 2.0.18.26
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 25)
+- CHANGE: Tracks changes within current commit cycle (currently 26)
 
-Changes in this version (18.25):
+Changes in this version (18.26):
+1. ENHANCEMENT - classifier-full-test generates comprehensive plots
+   - v2.0.18.26: Added automatic plot generation after predictions complete (lines 18364-18549)
+                 Generates 4 plot types for each C value:
+                   - Multi-class confusion matrix (dynamic size based on labels found)
+                   - Binary confusion matrix (arc vs non-arc)
+                   - ROC curve for binary arc detection
+                   - Precision-Recall curve
+                 Plots saved to: full_verification_plots/classifier_NNN/D{dec}/TADC{dtype}/A{amp}/FS{fs}/C{c}/
+                 Handles edge cases: dynamic class counts, missing arc labels, probability arrays
+
+Changes in previous version (18.25):
 1. BUG FIX - classifier-full-test use joblib instead of pickle to load models
    - v2.0.18.25: Changed import from pickle to joblib (line 17941)
                  Changed model loading from pickle.load() to joblib.load() (line 18209)
@@ -838,7 +849,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.25"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.26"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18358,6 +18369,195 @@ SETTINGS:
                                 # Final commit for this configuration
                                 self.db_conn.commit()
                                 print(f"\n  Predictions: {predictions_made}")
+
+                                # Generate plots for this configuration
+                                try:
+                                    print(f"\n[INFO] Generating plots for C={c_val}...")
+
+                                    # Import plotting libraries
+                                    import matplotlib
+                                    matplotlib.use('Agg')
+                                    import matplotlib.pyplot as plt
+                                    import seaborn as sns
+                                    from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score
+
+                                    # Query all predictions for this configuration
+                                    cursor.execute(f"""
+                                        SELECT
+                                            actual_label_id,
+                                            actual_label_name,
+                                            predicted_label_id,
+                                            predicted_label_name,
+                                            prediction_probabilities
+                                        FROM {results_table_name}
+                                        WHERE decimation_factor = %s
+                                          AND data_type_id = %s
+                                          AND amplitude_processing_method_id = %s
+                                          AND experiment_feature_set_id = %s
+                                          AND svm_c_parameter = %s
+                                    """, (dec, dtype, amp, efs, c_val))
+
+                                    results = cursor.fetchall()
+
+                                    if len(results) == 0:
+                                        print(f"[WARNING] No results found for plotting")
+                                    else:
+                                        # Extract data
+                                        actual_label_ids = [r[0] for r in results]
+                                        actual_label_names = [r[1] for r in results]
+                                        predicted_label_ids = [r[2] for r in results]
+                                        predicted_label_names = [r[3] for r in results]
+                                        prediction_probs = [r[4] for r in results]
+
+                                        # Get unique labels (ordered by label_id)
+                                        unique_label_ids = sorted(list(set(actual_label_ids + predicted_label_ids)))
+                                        unique_label_names = [label_map.get(lid, f"Unknown_{lid}") for lid in unique_label_ids]
+
+                                        # Create label category mapping (arc vs non-arc)
+                                        cursor.execute("""
+                                            SELECT label_id, label_name, label_category
+                                            FROM segment_labels
+                                            WHERE label_id = ANY(%s)
+                                            ORDER BY label_id
+                                        """, (unique_label_ids,))
+                                        label_category_map = {row[0]: row[2] for row in cursor.fetchall()}
+
+                                        # Map to binary (arc=1, non-arc=0)
+                                        actual_binary = [1 if label_category_map.get(lid, 'non-arc') == 'arc' else 0
+                                                        for lid in actual_label_ids]
+                                        predicted_binary = [1 if label_category_map.get(lid, 'non-arc') == 'arc' else 0
+                                                           for lid in predicted_label_ids]
+
+                                        # Create output directory
+                                        plot_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_plots"
+                                        plot_dir = os.path.join(
+                                            plot_base_dir,
+                                            f"classifier_{cls_id:03d}",
+                                            f"D{dec:06d}",
+                                            f"TADC{dtype}",
+                                            f"A{amp}",
+                                            f"FS{actual_fs_id:04d}",
+                                            f"C{c_val}"
+                                        )
+                                        os.makedirs(plot_dir, exist_ok=True)
+
+                                        # 1. Multi-class confusion matrix
+                                        try:
+                                            cm_multiclass = confusion_matrix(actual_label_ids, predicted_label_ids, labels=unique_label_ids)
+
+                                            plt.figure(figsize=(max(10, len(unique_label_ids)), max(8, len(unique_label_ids) * 0.8)))
+                                            sns.heatmap(cm_multiclass, annot=True, fmt='d', cmap='Blues',
+                                                       xticklabels=unique_label_names, yticklabels=unique_label_names)
+                                            plt.title(f'Multi-class Confusion Matrix\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
+                                            plt.ylabel('Actual Label')
+                                            plt.xlabel('Predicted Label')
+                                            plt.xticks(rotation=45, ha='right')
+                                            plt.yticks(rotation=0)
+                                            plt.tight_layout()
+
+                                            cm_multiclass_path = os.path.join(plot_dir, 'confusion_matrix_multiclass.png')
+                                            plt.savefig(cm_multiclass_path, dpi=150, bbox_inches='tight')
+                                            plt.close()
+                                            print(f"[SUCCESS] Saved: {cm_multiclass_path}")
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to create multi-class confusion matrix: {e}")
+
+                                        # 2. Binary confusion matrix (arc vs non-arc)
+                                        try:
+                                            cm_binary = confusion_matrix(actual_binary, predicted_binary, labels=[0, 1])
+
+                                            plt.figure(figsize=(8, 6))
+                                            sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Blues',
+                                                       xticklabels=['Non-Arc', 'Arc'], yticklabels=['Non-Arc', 'Arc'])
+                                            plt.title(f'Binary Confusion Matrix (Arc vs Non-Arc)\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
+                                            plt.ylabel('Actual Category')
+                                            plt.xlabel('Predicted Category')
+                                            plt.tight_layout()
+
+                                            cm_binary_path = os.path.join(plot_dir, 'confusion_matrix_binary.png')
+                                            plt.savefig(cm_binary_path, dpi=150, bbox_inches='tight')
+                                            plt.close()
+                                            print(f"[SUCCESS] Saved: {cm_binary_path}")
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to create binary confusion matrix: {e}")
+
+                                        # 3. ROC curve for binary classification
+                                        try:
+                                            # Get arc probabilities (sum of all arc class probabilities)
+                                            arc_label_ids = [lid for lid, cat in label_category_map.items() if cat == 'arc']
+
+                                            if len(arc_label_ids) > 0 and any(p is not None for p in prediction_probs):
+                                                # Calculate arc probability for each prediction
+                                                arc_probs = []
+                                                for probs, lid_list in zip(prediction_probs, [unique_label_ids] * len(prediction_probs)):
+                                                    if probs is not None and len(probs) == len(unique_label_ids):
+                                                        # Sum probabilities of all arc classes
+                                                        arc_prob = sum(probs[i] for i, lid in enumerate(unique_label_ids)
+                                                                      if lid in arc_label_ids)
+                                                        arc_probs.append(arc_prob)
+                                                    else:
+                                                        arc_probs.append(0.0)
+
+                                                # Compute ROC curve
+                                                fpr, tpr, thresholds = roc_curve(actual_binary, arc_probs)
+                                                roc_auc = auc(fpr, tpr)
+
+                                                plt.figure(figsize=(8, 6))
+                                                plt.plot(fpr, tpr, color='darkorange', lw=2,
+                                                        label=f'ROC curve (AUC = {roc_auc:.3f})')
+                                                plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random')
+                                                plt.xlim([0.0, 1.0])
+                                                plt.ylim([0.0, 1.05])
+                                                plt.xlabel('False Positive Rate')
+                                                plt.ylabel('True Positive Rate')
+                                                plt.title(f'ROC Curve - Binary Arc Detection\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
+                                                plt.legend(loc="lower right")
+                                                plt.grid(alpha=0.3)
+                                                plt.tight_layout()
+
+                                                roc_path = os.path.join(plot_dir, 'roc_curve_binary.png')
+                                                plt.savefig(roc_path, dpi=150, bbox_inches='tight')
+                                                plt.close()
+                                                print(f"[SUCCESS] Saved: {roc_path}")
+                                            else:
+                                                print(f"[WARNING] No arc labels or probabilities for ROC curve")
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to create ROC curve: {e}")
+
+                                        # 4. Precision-Recall curve for binary classification
+                                        try:
+                                            if len(arc_label_ids) > 0 and any(p is not None for p in prediction_probs):
+                                                # Use same arc_probs calculated above
+                                                precision, recall, thresholds_pr = precision_recall_curve(actual_binary, arc_probs)
+                                                avg_precision = average_precision_score(actual_binary, arc_probs)
+
+                                                plt.figure(figsize=(8, 6))
+                                                plt.plot(recall, precision, color='darkorange', lw=2,
+                                                        label=f'PR curve (AP = {avg_precision:.3f})')
+                                                plt.xlim([0.0, 1.0])
+                                                plt.ylim([0.0, 1.05])
+                                                plt.xlabel('Recall')
+                                                plt.ylabel('Precision')
+                                                plt.title(f'Precision-Recall Curve - Binary Arc Detection\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
+                                                plt.legend(loc="lower left")
+                                                plt.grid(alpha=0.3)
+                                                plt.tight_layout()
+
+                                                pr_path = os.path.join(plot_dir, 'pr_curve_binary.png')
+                                                plt.savefig(pr_path, dpi=150, bbox_inches='tight')
+                                                plt.close()
+                                                print(f"[SUCCESS] Saved: {pr_path}")
+                                            else:
+                                                print(f"[WARNING] No arc labels or probabilities for PR curve")
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to create PR curve: {e}")
+
+                                        print(f"[INFO] Plotting complete for C={c_val}")
+
+                                except Exception as e:
+                                    print(f"[ERROR] Failed to generate plots: {e}")
+                                    import traceback
+                                    traceback.print_exc()
 
             # Final summary
             elapsed_total = time.time() - start_time
