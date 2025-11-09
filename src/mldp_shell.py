@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_233000
-File version: 2.0.18.20
+Date Revised: 20251108_234500
+File version: 2.0.18.21
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,14 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.20):
+Changes in this version (18.21):
+1. ENHANCEMENT - classifier-full-test --feature-set accepts actual feature_set_id
+   - v2.0.18.21: Updated filter logic to accept actual feature_set_id values (line 18095-18102)
+                 Automatically converts feature_set_id (e.g., 325) to experiment_feature_set_id (e.g., 66)
+                 User can now use: --feature-set 325 instead of --feature-set 66
+                 Updated help text to clarify parameter accepts actual feature_set_id
+
+Changes in previous version (18.20):
 1. BUG FIX - classifier-full-test segment_size column error
    - v2.0.18.20: Fixed query for segment length (line 17946-17952)
                  Column name is segment_length, not segment_size
@@ -800,7 +807,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.20"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.21"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17823,12 +17830,13 @@ SETTINGS:
             --decimation-factor <n>   Test only this decimation factor
             --data-type <id>          Test only this data type
             --amplitude-method <id>   Test only this amplitude method
-            --feature-set <id>        Test only this feature set
+            --feature-set <id>        Test only this feature set (actual feature_set_id, e.g., 325)
             --batch-size <n>          Segments per batch (default: 100)
 
         Examples:
             classifier-full-test
             classifier-full-test --decimation-factor 0 --data-type 2
+            classifier-full-test --feature-set 325
             classifier-full-test --force
         """
         if not self.db_conn:
@@ -18093,6 +18101,12 @@ SETTINGS:
             if filter_amp is not None:
                 amplitude_methods = [a for a in amplitude_methods if a == filter_amp]
             if filter_efs is not None:
+                # Check if filter_efs is an actual feature_set_id (not experiment_feature_set_id)
+                if filter_efs in efs_to_fs_map.values():
+                    # Convert actual feature_set_id to experiment_feature_set_id
+                    fs_to_efs_map = {v: k for k, v in efs_to_fs_map.items()}
+                    filter_efs = fs_to_efs_map[filter_efs]
+                    print(f"[INFO] Converted feature_set_id {filter_efs} to experiment_feature_set_id")
                 experiment_feature_sets = [e for e in experiment_feature_sets if e == filter_efs]
 
             print(f"[INFO] Hyperparameters:")
