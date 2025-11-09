@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.35"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.36"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1701,6 +1701,7 @@ def _process_verification_batch(batch_info):
 
     results = []
     errors = 0
+    error_messages = []
 
     # Create database connection for this worker
     conn = psycopg2.connect(**db_config)
@@ -1752,12 +1753,13 @@ def _process_verification_batch(batch_info):
 
             file_id, beginning_index, seg_length = seg_info
 
-            # Load raw file data from fileset
+            # Load ADC data (dtype specifies bit depth, but we load full ADC data)
+            # load_file_data expects "RAW" or any non-RAW string (loads from adc_data)
             data_type_name = f"ADC{dtype}"
-            raw_data = segment_processor.load_file_data(file_id, data_type_name)
+            raw_data = segment_processor.load_file_data(file_id, "ADC")  # Load from adc_data directory
 
             if raw_data is None:
-                raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
+                raise ValueError(f"Could not load ADC file {file_id:08d}.npy from adc_data directory")
 
             # Extract segment slice
             end_index = beginning_index + seg_length
@@ -1852,6 +1854,7 @@ def _process_verification_batch(batch_info):
 
         except Exception as e:
             errors += 1
+            error_messages.append(f"Segment {segment_id}: {str(e)}")
             # Clean up temp file on error
             if temp_file_path and os.path.exists(temp_file_path):
                 try:
@@ -1862,7 +1865,7 @@ def _process_verification_batch(batch_info):
     cursor.close()
     conn.close()
 
-    return {'results': results, 'errors': errors}
+    return {'results': results, 'errors': errors, 'error_messages': error_messages}
 
 
 class MLDPShell:
@@ -18561,6 +18564,14 @@ SETTINGS:
                                                 result = future.result()
                                                 batch_results = result['results']
                                                 batch_errors = result['errors']
+                                                batch_error_messages = result.get('error_messages', [])
+
+                                                # Print first few errors from this batch
+                                                if batch_error_messages:
+                                                    for err_msg in batch_error_messages[:5]:  # Print first 5 errors
+                                                        print(f"\n[ERROR] {err_msg}")
+                                                    if len(batch_error_messages) > 5:
+                                                        print(f"\n[ERROR] ... and {len(batch_error_messages) - 5} more errors in this batch")
 
                                                 # Insert results into database
                                                 if batch_results:
@@ -18655,13 +18666,13 @@ SETTINGS:
 
                                                 file_id, beginning_index, seg_length = seg_info
 
-                                                # Load raw file data from fileset
+                                                # Load ADC data (dtype specifies bit depth, but we load full ADC data)
                                                 # Data type mapping: 6->ADC6, 8->ADC8, 10->ADC10, 12->ADC12
                                                 data_type_name = f"ADC{dtype}"
-                                                raw_data = segment_processor.load_file_data(file_id, data_type_name)
+                                                raw_data = segment_processor.load_file_data(file_id, "ADC")  # Load from adc_data directory
 
                                                 if raw_data is None:
-                                                    raise ValueError(f"Could not load file {file_id} with data type {data_type_name}")
+                                                    raise ValueError(f"Could not load ADC file {file_id:08d}.npy from adc_data directory")
 
                                                 # Extract segment slice
                                                 end_index = beginning_index + seg_length
