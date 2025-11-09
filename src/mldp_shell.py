@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_173000
-File version: 2.0.18.13
+Date Revised: 20251108_180000
+File version: 2.0.18.14
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -746,7 +746,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.13"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.14"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -2734,6 +2734,8 @@ class MLDPShell:
             --data-type TYPE      Filter by data type (adc6, adc8, adc10, adc12)
             --amplitude-method M  Filter by amplitude method (zscore, etc.)
             --feature-set ID      Filter by specific feature set ID
+            --all-feature-sets    Generate heatmaps for ALL combinations of
+                                 decimation/data_type/feature_set (creates 2400 heatmaps)
             --aggregation AGG     Aggregation method (mean, median, min, max)
                                  Default: mean
             --output DIR          Output directory
@@ -2744,6 +2746,7 @@ class MLDPShell:
             heatmap
             heatmap --distance manhattan --decimation 0 --data-type adc8
             heatmap --distance cosine --aggregation median --output ./plots
+            heatmap --all-feature-sets --distance manhattan --output ./plots
         """
         if '--help' in args:
             print(self.cmd_heatmap.__doc__)
@@ -2759,6 +2762,7 @@ class MLDPShell:
         data_type = None
         amplitude_method = None
         feature_set = None
+        all_feature_sets = False
         aggregation = 'mean'
         output_dir = './heatmaps'
 
@@ -2779,6 +2783,9 @@ class MLDPShell:
             elif args[i] == '--feature-set' and i + 1 < len(args):
                 feature_set = args[i + 1]
                 i += 2
+            elif args[i] == '--all-feature-sets':
+                all_feature_sets = True
+                i += 1
             elif args[i] == '--aggregation' and i + 1 < len(args):
                 aggregation = args[i + 1]
                 i += 2
@@ -2815,14 +2822,17 @@ class MLDPShell:
         cmd.extend(['--aggregation', aggregation])
         cmd.extend(['--output', output_dir])
 
+        if all_feature_sets:
+            cmd.append('--all-feature-sets')
+        elif feature_set:
+            cmd.extend(['--feature-set', str(feature_set)])
+
         if decimation is not None:
             cmd.extend(['--decimation', str(decimation)])
         if data_type:
             cmd.extend(['--data-type', data_type])
         if amplitude_method:
             cmd.extend(['--amplitude-method', amplitude_method])
-        if feature_set:
-            cmd.extend(['--feature-set', str(feature_set)])
 
         # Build description
         desc_parts = [f"Experiment {self.current_experiment}", distance_func.upper()]
