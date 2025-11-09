@@ -4,16 +4,22 @@ Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
 Date Revised: 20251109_010000
-File version: 2.0.18.23
+File version: 2.0.18.24
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 23)
+- CHANGE: Tracks changes within current commit cycle (currently 24)
 
-Changes in this version (18.23):
+Changes in this version (18.24):
+1. BUG FIX - classifier-full-test C value query from wrong table
+   - v2.0.18.24: Fixed query to use experiment_NNN_classifier_NNN_svm_results (line 18143-18154)
+                 Removed reference to non-existent ml_classifier_svm_c_parameters table
+                 Added fallback to default C values [0.1, 1.0, 10.0, 100.0] if no results found
+
+Changes in previous version (18.23):
 1. ENHANCEMENT - classifier-full-test supports multiple C values and svm_models directory
    - v2.0.18.23: Added --c-value parameter (default: test all C values)
                  Changed model directory from trained_models to svm_models
@@ -825,7 +831,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.23"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.24"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18139,14 +18145,19 @@ SETTINGS:
                     print(f"[INFO] Converted feature_set_id {filter_efs} to experiment_feature_set_id")
                 experiment_feature_sets = [e for e in experiment_feature_sets if e == filter_efs]
 
-            # Query C values from database
-            cursor.execute("""
+            # Query C values from svm_results table
+            results_table = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+            cursor.execute(f"""
                 SELECT DISTINCT svm_c_parameter
-                FROM ml_classifier_svm_c_parameters
-                WHERE config_id = %s
+                FROM {results_table}
                 ORDER BY svm_c_parameter
-            """, (config_id,))
+            """)
             c_values = [row[0] for row in cursor.fetchall()]
+
+            if not c_values:
+                print(f"[WARNING] No C values found in {results_table}")
+                print(f"[INFO] Using default C values: [0.1, 1.0, 10.0, 100.0]")
+                c_values = [0.1, 1.0, 10.0, 100.0]
 
             # Apply C value filter
             if filter_c is not None:
