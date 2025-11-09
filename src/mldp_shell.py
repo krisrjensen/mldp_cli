@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.38"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.39"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1845,15 +1845,16 @@ def _process_verification_batch(batch_info):
             feature_path = os.path.join(feature_dir, feature_filename)
 
             # Store result tuple (don't write to DB yet - return for batch insertion)
+            # Convert numpy types to Python types for PostgreSQL compatibility
             results.append((
-                segment_id, segment_label_id, actual_label_name,
-                dec, dtype, amp, efs, c_val,
-                predicted_label_id, predicted_label_name,
-                confidence,
+                int(segment_id), int(segment_label_id), actual_label_name,
+                int(dec), int(dtype), int(amp), int(efs), float(c_val),
+                int(predicted_label_id), predicted_label_name,
+                float(confidence) if confidence is not None else None,
                 probabilities.tolist() if probabilities is not None else None,
                 feature_path,
                 model_path,
-                prediction_time
+                float(prediction_time)
             ))
 
         except Exception as e:
