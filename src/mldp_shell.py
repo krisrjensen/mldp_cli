@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.39"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.40"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18876,7 +18876,7 @@ SETTINGS:
 
                                         # Create label category mapping (arc vs non-arc)
                                         cursor.execute("""
-                                            SELECT label_id, label_name, label_category
+                                            SELECT label_id, label_name, category
                                             FROM segment_labels
                                             WHERE label_id = ANY(%s)
                                             ORDER BY label_id
@@ -19019,6 +19019,8 @@ SETTINGS:
                                     print(f"[ERROR] Failed to generate plots: {e}")
                                     import traceback
                                     traceback.print_exc()
+                                    # Rollback transaction on plot error to prevent cascading failures
+                                    self.db_conn.rollback()
 
             # Final summary
             elapsed_total = time.time() - start_time
