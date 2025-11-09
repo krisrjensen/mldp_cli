@@ -3,17 +3,24 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_010000
-File version: 2.0.18.24
+Date Revised: 20251109_020000
+File version: 2.0.18.25
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 24)
+- CHANGE: Tracks changes within current commit cycle (currently 25)
 
-Changes in this version (18.24):
+Changes in this version (18.25):
+1. BUG FIX - classifier-full-test use joblib instead of pickle to load models
+   - v2.0.18.25: Changed import from pickle to joblib (line 17941)
+                 Changed model loading from pickle.load() to joblib.load() (line 18209)
+                 Models are saved with joblib.dump() so must be loaded with joblib.load()
+                 Fixed "invalid load key" error when loading SVM models
+
+Changes in previous version (18.24):
 1. BUG FIX - classifier-full-test C value query from wrong table
    - v2.0.18.24: Fixed query to use experiment_NNN_classifier_NNN_svm_results (line 18143-18154)
                  Removed reference to non-existent ml_classifier_svm_c_parameters table
@@ -831,7 +838,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.24"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.25"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17938,7 +17945,7 @@ SETTINGS:
 
         try:
             import numpy as np
-            import pickle
+            import joblib
             import time
 
             cursor = self.db_conn.cursor()
@@ -18206,9 +18213,7 @@ SETTINGS:
                                     continue
 
                                 try:
-                                    with open(model_path, 'rb') as f:
-                                        model_data = pickle.load(f)
-                                    svm_model = model_data['model']
+                                    svm_model = joblib.load(model_path)
                                     print(f"[INFO] Loaded model: {model_path}")
                                 except Exception as e:
                                     print(f"[ERROR] Failed to load model: {e}")

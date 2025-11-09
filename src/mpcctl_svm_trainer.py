@@ -441,7 +441,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
 
             # Save model
             base_dir = f"/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/classifier_files"
-            model_dir = f"{base_dir}/trained_models/classifier_{classifier_id:03d}/D{dec:06d}/TADC{dtype}/A{amp}/FS{fs_id:04d}"
+            model_dir = f"{base_dir}/svm_models/classifier_{classifier_id:03d}/D{dec:06d}/TADC{dtype}/A{amp}/FS{fs_id:04d}"
             os.makedirs(model_dir, exist_ok=True)
 
             model_filename = f"svm_{svm_params['kernel']}_C{svm_params['C']}"
