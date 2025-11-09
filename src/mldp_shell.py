@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_234500
-File version: 2.0.18.21
+Date Revised: 20251109_000000
+File version: 2.0.18.22
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,15 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.21):
+Changes in this version (18.22):
+1. BUG FIX - classifier-full-test file_labels_lut table error
+   - v2.0.18.22: Fixed query for verification segments (line 17973-17989)
+                 Table file_labels_lut doesn't exist in database
+                 Correct path: data_segments → files_x → files_y → experiment_labels
+                 Changed JOIN from file_labels_lut to files_x/files_y/experiment_labels
+                 Changed filter column from fl.file_label to el.experiment_label
+
+Changes in previous version (18.21):
 1. ENHANCEMENT - classifier-full-test --feature-set accepts actual feature_set_id
    - v2.0.18.21: Updated filter logic to accept actual feature_set_id values (line 18095-18102)
                  Automatically converts feature_set_id (e.g., 325) to experiment_feature_set_id (e.g., 66)
@@ -807,7 +815,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.21"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.22"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17971,18 +17979,20 @@ SETTINGS:
             # Query all segments NOT in training data, excluding trash/voltage_only/other
             print(f"[INFO] Querying verification segments...")
             cursor.execute(f"""
-                SELECT DISTINCT ds.segment_id, ds.segment_label_id, fl.file_label
+                SELECT DISTINCT ds.segment_id, ds.segment_label_id, el.experiment_label
                 FROM data_segments ds
-                JOIN file_labels_lut fl ON ds.file_label_id = fl.file_label_id
+                JOIN files_x fx ON ds.experiment_file_id = fx.file_id
+                JOIN files_y fy ON fx.file_id = fy.file_id
+                JOIN experiment_labels el ON fy.label_id = el.label_id
                 WHERE ds.segment_length = %s
                   AND ds.segment_id NOT IN (
                       SELECT segment_id
                       FROM experiment_{exp_id:03d}_segment_training_data
                   )
-                  AND fl.file_label NOT ILIKE '%%trash%%'
-                  AND fl.file_label NOT ILIKE '%%voltage_only%%'
-                  AND fl.file_label NOT ILIKE '%%voltage only%%'
-                  AND fl.file_label NOT ILIKE '%%other%%'
+                  AND el.experiment_label NOT ILIKE '%%trash%%'
+                  AND el.experiment_label NOT ILIKE '%%voltage_only%%'
+                  AND el.experiment_label NOT ILIKE '%%voltage only%%'
+                  AND el.experiment_label NOT ILIKE '%%other%%'
                 ORDER BY ds.segment_id
             """, (segment_length,))
 
