@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.32"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.34"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17915,6 +17915,7 @@ SETTINGS:
         # Parse arguments
         force = False
         batch_size = 100
+        workers = 1  # Default to sequential processing
         filter_dec = None
         filter_dtype = None
         filter_amp = None
@@ -17932,6 +17933,16 @@ SETTINGS:
                     i += 2
                 else:
                     print("[ERROR] --batch-size requires a number")
+                    return
+            elif args[i] == '--workers':
+                if i + 1 < len(args):
+                    workers = int(args[i + 1])
+                    if workers < 1:
+                        print("[ERROR] --workers must be >= 1")
+                        return
+                    i += 2
+                else:
+                    print("[ERROR] --workers requires a number")
                     return
             elif args[i] == '--decimation-factor':
                 if i + 1 < len(args):
@@ -18215,6 +18226,12 @@ SETTINGS:
             print(f"  Amplitude methods: {amplitude_methods}")
             print(f"  Feature sets: {len(experiment_feature_sets)}")
             print(f"  C values: {c_values}")
+            print(f"  Workers: {workers}")
+
+            if workers > 1:
+                print(f"[WARNING] Parallel processing with --workers > 1 is not yet implemented.")
+                print(f"[WARNING] Continuing with sequential processing (workers=1).")
+                workers = 1
 
             # Get label mapping
             cursor.execute("SELECT label_id, label_name FROM segment_labels ORDER BY label_id")
@@ -18357,8 +18374,7 @@ SETTINGS:
 
                                             # Get feature set with overrides
                                             feature_set_config = feature_extractor._get_feature_set_with_overrides(
-                                                feature_set_id,
-                                                efs
+                                                feature_set_id
                                             )
 
                                             # Extract features from segment file
