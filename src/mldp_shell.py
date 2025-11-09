@@ -3,17 +3,29 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_030000
-File version: 2.0.18.26
+Date Revised: 20251109_030001
+File version: 2.0.18.27
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 26)
+- CHANGE: Tracks changes within current commit cycle (currently 27)
 
-Changes in this version (18.26):
+Changes in this version (18.27):
+1. MAJOR ENHANCEMENT - classifier-full-test generates features on-the-fly
+   - v2.0.18.27: Replaced pre-computed feature loading with dynamic feature generation
+                 Removed dependency on experiment_042_feature_fileset table (lines 18274-18305)
+                 Added import of ExperimentFeatureExtractor
+                 Added _generate_segment_features_on_fly() helper method
+                 Generates features dynamically for each verification segment
+                 Loads raw binary data, applies decimation, calculates features
+                 Handles missing binary files gracefully with error tracking
+                 Added progress indicators for feature generation phase
+                 Now works with all 51,617 verification segments instead of just 450 training segments
+
+Changes in previous version (18.26):
 1. ENHANCEMENT - classifier-full-test generates comprehensive plots
    - v2.0.18.26: Added automatic plot generation after predictions complete (lines 18364-18549)
                  Generates 4 plot types for each C value:
@@ -849,7 +861,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.26"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.27"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17958,6 +17970,9 @@ SETTINGS:
             import numpy as np
             import joblib
             import time
+            import glob
+            from pathlib import Path
+            from experiment_feature_extractor import ExperimentFeatureExtractor
 
             cursor = self.db_conn.cursor()
             exp_id = self.current_experiment
@@ -18047,6 +18062,10 @@ SETTINGS:
             if total_verification == 0:
                 print("[WARNING] No verification segments found")
                 return
+
+            # Initialize feature extractor for on-the-fly feature generation
+            print(f"[INFO] Initializing feature extractor...")
+            feature_extractor = ExperimentFeatureExtractor(exp_id, self.db_conn)
 
             # Create results table if needed
             results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_full_verification_results"
@@ -18249,10 +18268,11 @@ SETTINGS:
                                 for segment_id, segment_label_id, file_label in verification_segments:
                                     segments_processed += 1
 
-                                    if segments_processed % 100 == 0:
+                                    if segments_processed % 10 == 0:
                                         elapsed = time.time() - start_time
                                         rate = segments_processed / elapsed if elapsed > 0 else 0
-                                        print(f"  Progress: {segments_processed}/{total_verification} ({rate:.1f} seg/sec)", end='\r')
+                                        pct = (segments_processed / total_verification * 100) if total_verification > 0 else 0
+                                        print(f"  Progress: {segments_processed}/{total_verification} ({pct:.1f}%) - {rate:.2f} seg/sec - Predictions: {predictions_made}", end='\r')
 
                                     try:
                                         # Check if already exists
@@ -18271,38 +18291,86 @@ SETTINGS:
 
                                         pred_start_time = time.time()
 
-                                        # Load segment features
-                                        segment_feature_parts = []
-                                        for feature_id in feature_ids:
-                                            cursor.execute(f"""
-                                                SELECT feature_file_path
-                                                FROM experiment_{exp_id:03d}_feature_fileset
+                                        # Generate features on-the-fly instead of loading pre-computed features
+                                        try:
+                                            # Find segment file
+                                            cursor.execute("""
+                                                SELECT file_id, segment_index
+                                                FROM data_segments
                                                 WHERE segment_id = %s
-                                                  AND decimation_factor = %s
-                                                  AND data_type_id = %s
-                                                  AND amplitude_processing_method_id = %s
-                                                  AND experiment_feature_set_id = %s
-                                                  AND feature_set_feature_id = %s
-                                            """, (segment_id, dec, dtype, amp, efs, feature_id))
+                                            """, (segment_id,))
+                                            seg_info = cursor.fetchone()
+                                            if not seg_info:
+                                                raise ValueError(f"Segment {segment_id} not found in data_segments")
 
-                                            result = cursor.fetchone()
-                                            if result:
-                                                feature_file_path = result[0]
-                                                features = np.load(feature_file_path)
-                                                column_idx = amp - 1
-                                                if features.ndim == 1:
-                                                    features_1d = features
-                                                else:
-                                                    features_1d = features[:, column_idx]
-                                                segment_feature_parts.append(features_1d)
+                                            file_id, segment_index = seg_info
+
+                                            # Construct segment file path
+                                            base_path = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/segment_files"
+                                            pattern = f"{base_path}/S*/T{dtype:02d}/D{dec:06d}/SID{segment_id:08d}_F{file_id:08d}_*.npy"
+                                            matches = glob.glob(pattern)
+
+                                            if not matches:
+                                                raise ValueError(f"Segment file not found: {pattern}")
+
+                                            segment_file_path = matches[0]
+
+                                            # Get feature set configuration
+                                            cursor.execute("""
+                                                SELECT fs.feature_set_id, fs.windowing_strategy
+                                                FROM ml_experiments_feature_sets efs
+                                                JOIN ml_feature_sets fs ON efs.feature_set_id = fs.feature_set_id
+                                                WHERE efs.experiment_feature_set_id = %s
+                                            """, (efs,))
+                                            fs_config = cursor.fetchone()
+                                            if not fs_config:
+                                                raise ValueError(f"Feature set {efs} not found")
+
+                                            feature_set_id, windowing_strategy = fs_config
+
+                                            # Get feature set with overrides
+                                            feature_set_config = feature_extractor._get_feature_set_with_overrides(
+                                                feature_set_id,
+                                                efs
+                                            )
+
+                                            # Extract features from segment file
+                                            # Returns shape (segment_length, num_features * num_amplitude_methods)
+                                            features_array = feature_extractor._extract_feature_set_from_segment(
+                                                segment_file_path,
+                                                feature_set_config
+                                            )
+
+                                            # Extract the column for the specific amplitude method
+                                            # amp is the method_id (1=minmax, 2=zscore, etc.)
+                                            # We need to find which column index corresponds to this method
+                                            configured_method_ids = feature_extractor._get_configured_amplitude_method_ids()
+
+                                            if amp not in configured_method_ids:
+                                                raise ValueError(f"Amplitude method {amp} not in configured methods {configured_method_ids}")
+
+                                            method_idx = configured_method_ids.index(amp)
+                                            num_features = len(feature_ids)
+                                            num_methods = len(configured_method_ids)
+
+                                            # Features are organized as [feat0_amp0, feat0_amp1, ..., feat1_amp0, feat1_amp1, ...]
+                                            # For each feature, extract the value for this amplitude method
+                                            if features_array.ndim == 1:
+                                                # Aggregate features: 1D array of scalars
+                                                # Shape: (num_features * num_methods,)
+                                                # Extract indices for this amplitude method
+                                                indices = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                                                segment_features = features_array[indices]
                                             else:
-                                                raise ValueError(f"Missing feature for segment {segment_id}, feature {feature_id}")
+                                                # Sample-wise or chunk features: 2D array
+                                                # Shape: (segment_length, num_features * num_methods)
+                                                # Extract columns for this amplitude method
+                                                cols = [feat_idx * num_methods + method_idx for feat_idx in range(num_features)]
+                                                # Flatten to 1D by concatenating selected columns
+                                                segment_features = features_array[:, cols].flatten()
 
-                                        if len(segment_feature_parts) != len(feature_ids):
-                                            raise ValueError(f"Incomplete features for segment {segment_id}")
-
-                                        # Concatenate features
-                                        segment_features = np.concatenate(segment_feature_parts)
+                                        except Exception as feat_error:
+                                            raise ValueError(f"Feature generation failed: {feat_error}")
 
                                         # Generate full verification feature file
                                         feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
