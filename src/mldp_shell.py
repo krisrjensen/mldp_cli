@@ -867,7 +867,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.28"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.32"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -18345,10 +18345,9 @@ SETTINGS:
 
                                             # Get feature set configuration
                                             cursor.execute("""
-                                                SELECT fs.feature_set_id, fs.windowing_strategy
-                                                FROM ml_experiments_feature_sets efs
-                                                JOIN ml_feature_sets fs ON efs.feature_set_id = fs.feature_set_id
-                                                WHERE efs.experiment_feature_set_id = %s
+                                                SELECT feature_set_id, windowing_strategy
+                                                FROM ml_experiments_feature_sets
+                                                WHERE experiment_feature_set_id = %s
                                             """, (efs,))
                                             fs_config = cursor.fetchone()
                                             if not fs_config:
