@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_230000
-File version: 2.0.18.19
+Date Revised: 20251108_233000
+File version: 2.0.18.20
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,14 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.19):
+Changes in this version (18.20):
+1. BUG FIX - classifier-full-test segment_size column error
+   - v2.0.18.20: Fixed query for segment length (line 17946-17952)
+                 Column name is segment_length, not segment_size
+                 Changed from querying ml_experiments (which doesn't have this column)
+                 Now queries from training data table with JOIN to data_segments
+
+Changes in previous version (18.19):
 1. BUG FIX - classifier-select-references and classifier-train-svm decimation factor query
    - v2.0.18.19: Fixed decimation factor query in both commands (lines 14855, 17531)
                  Removed incorrect JOIN with ml_experiment_decimation_lut
@@ -793,7 +800,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.19"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.20"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -17942,15 +17949,16 @@ SETTINGS:
             include_original, compute_inter, compute_intra = fb_row
             needs_references = compute_inter or compute_intra
 
-            # Get experiment segment size
-            cursor.execute("""
-                SELECT segment_size
-                FROM ml_experiments
-                WHERE experiment_id = %s
-            """, (exp_id,))
-            segment_size = cursor.fetchone()[0]
+            # Get experiment segment length from training data
+            cursor.execute(f"""
+                SELECT DISTINCT ds.segment_length
+                FROM experiment_{exp_id:03d}_segment_training_data std
+                JOIN data_segments ds ON std.segment_id = ds.segment_id
+                LIMIT 1
+            """)
+            segment_length = cursor.fetchone()[0]
 
-            print(f"[INFO] Segment size: {segment_size}")
+            print(f"[INFO] Segment length: {segment_length}")
 
             # Query all segments NOT in training data, excluding trash/voltage_only/other
             print(f"[INFO] Querying verification segments...")
@@ -17958,7 +17966,7 @@ SETTINGS:
                 SELECT DISTINCT ds.segment_id, ds.segment_label_id, fl.file_label
                 FROM data_segments ds
                 JOIN file_labels_lut fl ON ds.file_label_id = fl.file_label_id
-                WHERE ds.segment_size = %s
+                WHERE ds.segment_length = %s
                   AND ds.segment_id NOT IN (
                       SELECT segment_id
                       FROM experiment_{exp_id:03d}_segment_training_data
@@ -17968,7 +17976,7 @@ SETTINGS:
                   AND fl.file_label NOT ILIKE '%%voltage only%%'
                   AND fl.file_label NOT ILIKE '%%other%%'
                 ORDER BY ds.segment_id
-            """, (segment_size,))
+            """, (segment_length,))
 
             verification_segments = cursor.fetchall()
             total_verification = len(verification_segments)
