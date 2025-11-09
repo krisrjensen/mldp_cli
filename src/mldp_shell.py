@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_220000
-File version: 2.0.18.18
+Date Revised: 20251108_230000
+File version: 2.0.18.19
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,18 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.18):
+Changes in this version (18.19):
+1. BUG FIX - classifier-select-references and classifier-train-svm decimation factor query
+   - v2.0.18.19: Fixed decimation factor query in both commands (lines 14855, 17531)
+                 Removed incorrect JOIN with ml_experiment_decimation_lut
+                 Config table stores actual values (0,7,15,31,63,127), not IDs
+                 Now queries cfg.decimation_factor directly
+2. BUG FIX - Added feature_set_id mapping in both commands
+   - v2.0.18.19: Added mapping query for experiment_feature_set_id to feature_set_id
+                 Creates efs_to_fs_map dictionary (lines 14877-14886, 17555-17564)
+                 Required for correct file path generation
+
+Changes in previous version (18.18):
 1. NEW FEATURE - classifier-full-test command
    - v2.0.18.18: Test trained models on ALL non-training segments
                  Tests segments NOT in training/test/verify splits
@@ -782,7 +793,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.18"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.19"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -14852,11 +14863,10 @@ SETTINGS:
 
             # Query hyperparameters from active configuration
             cursor.execute("""
-                SELECT DISTINCT lut.decimation_factor
+                SELECT DISTINCT cfg.decimation_factor
                 FROM ml_classifier_config_decimation_factors cfg
-                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
                 WHERE cfg.config_id = %s
-                ORDER BY lut.decimation_factor
+                ORDER BY cfg.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -14876,11 +14886,15 @@ SETTINGS:
             amplitude_methods = [row[0] for row in cursor.fetchall()]
 
             cursor.execute("""
-                SELECT DISTINCT experiment_feature_set_id
-                FROM ml_classifier_config_experiment_feature_sets
-                WHERE config_id = %s
+                SELECT DISTINCT cefs.experiment_feature_set_id, mefs.feature_set_id
+                FROM ml_classifier_config_experiment_feature_sets cefs
+                JOIN ml_experiments_feature_sets mefs ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
+                WHERE cefs.config_id = %s
+                ORDER BY mefs.feature_set_id
             """, (config_id,))
-            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+            feature_set_rows = cursor.fetchall()
+            experiment_feature_sets = [row[0] for row in feature_set_rows]
+            efs_to_fs_map = {row[0]: row[1] for row in feature_set_rows}
 
             print(f"\nProcessing {len(decimation_factors)} decimation factor(s)")
             print(f"Processing {len(data_type_ids)} data type(s)")
@@ -17526,11 +17540,10 @@ SETTINGS:
 
             # Query hyperparameter combinations from active configuration
             cursor.execute("""
-                SELECT DISTINCT lut.decimation_factor
+                SELECT DISTINCT cfg.decimation_factor
                 FROM ml_classifier_config_decimation_factors cfg
-                JOIN ml_experiment_decimation_lut lut ON cfg.decimation_factor = lut.decimation_id
                 WHERE cfg.config_id = %s
-                ORDER BY lut.decimation_factor
+                ORDER BY cfg.decimation_factor
             """, (config_id,))
             decimation_factors = [row[0] for row in cursor.fetchall()]
 
@@ -17551,12 +17564,15 @@ SETTINGS:
             amplitude_methods = [row[0] for row in cursor.fetchall()]
 
             cursor.execute("""
-                SELECT DISTINCT experiment_feature_set_id
-                FROM ml_classifier_config_experiment_feature_sets
-                WHERE config_id = %s
-                ORDER BY experiment_feature_set_id
+                SELECT DISTINCT cefs.experiment_feature_set_id, mefs.feature_set_id
+                FROM ml_classifier_config_experiment_feature_sets cefs
+                JOIN ml_experiments_feature_sets mefs ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
+                WHERE cefs.config_id = %s
+                ORDER BY mefs.feature_set_id
             """, (config_id,))
-            experiment_feature_sets = [row[0] for row in cursor.fetchall()]
+            feature_set_rows = cursor.fetchall()
+            experiment_feature_sets = [row[0] for row in feature_set_rows]
+            efs_to_fs_map = {row[0]: row[1] for row in feature_set_rows}
 
             # Apply filters if specified
             if filter_dec is not None:
