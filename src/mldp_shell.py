@@ -18301,7 +18301,7 @@ SETTINGS:
                                         try:
                                             # Find segment file
                                             cursor.execute("""
-                                                SELECT experiment_file_id, segment_index
+                                                SELECT experiment_file_id
                                                 FROM data_segments
                                                 WHERE segment_id = %s
                                             """, (segment_id,))
@@ -18309,7 +18309,7 @@ SETTINGS:
                                             if not seg_info:
                                                 raise ValueError(f"Segment {segment_id} not found in data_segments")
 
-                                            file_id, segment_index = seg_info
+                                            file_id = seg_info[0]
 
                                             # Construct segment file path
                                             base_path = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/segment_files"
