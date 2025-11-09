@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251108_210000
-File version: 2.0.18.17
+Date Revised: 20251108_220000
+File version: 2.0.18.18
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -13,7 +13,18 @@ Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - COMMIT: Increments on every git commit/push (currently 17)
 - CHANGE: Tracks changes within current commit cycle (currently 7)
 
-Changes in this version (18.17):
+Changes in this version (18.18):
+1. NEW FEATURE - classifier-full-test command
+   - v2.0.18.18: Test trained models on ALL non-training segments
+                 Tests segments NOT in training/test/verify splits
+                 Excludes trash/voltage_only/other files
+                 Includes segments from classes not in training set (outlier detection)
+                 Generates features in full_verification_features/ folder
+                 Stores results in experiment_NNN_classifier_NNN_full_verification_results
+                 Supports filtering by dec/dtype/amp/fs
+                 ~500 lines of code
+
+Changes in previous version (18.17):
 1. BUG FIX - classifier-build-features decimation factor query
    - v2.0.18.17: Fixed decimation factor query - removed incorrect JOIN
                  Config table stores actual values (0,7,15,31,63,127), not IDs
@@ -771,7 +782,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.17"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.18"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -985,6 +996,8 @@ class MLDPCompleter(Completer):
                                             '--feature-set', '--force', '--help'],
             'classifier-clean-features': ['--amplitude-method', '--decimation-factor', '--data-type',
                                          '--feature-set', '--force', '--help'],
+            'classifier-full-test': ['--force', '--batch-size', '--decimation-factor', '--data-type',
+                                    '--amplitude-method', '--feature-set', '--help'],
 
             # Utilities
             'verify': [],
@@ -1747,6 +1760,7 @@ class MLDPShell:
             'classifier-plot-results': self.cmd_plot_classifier_results,
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
+            'classifier-full-test': self.cmd_classifier_full_test,
             # Noise floor amplitude normalization commands
             'noise-floor-init': self.cmd_noise_floor_init,
             'noise-floor-show': self.cmd_noise_floor_show,
@@ -3557,6 +3571,14 @@ REFERENCE SELECTION (Phase 2):
     [--data-type <id>]           Delete only this data type
     [--feature-set <id>]         Delete only this feature set
     [--force]                    Required to confirm deletion (REQUIRED)
+
+  classifier-full-test           Test classifier on ALL non-training segments
+    [--force]                    Regenerate features and rerun predictions
+    [--decimation-factor <n>]    Test only this decimation factor
+    [--data-type <id>]           Test only this data type
+    [--amplitude-method <id>]    Test only this amplitude method
+    [--feature-set <id>]         Test only this feature set
+    [--batch-size <n>]           Segments per batch (default: 100)
 
   Examples:
     classifier-train-svm-init
@@ -17757,6 +17779,507 @@ SETTINGS:
             import traceback
             print(f"[ERROR] {e}")
             print(traceback.format_exc())
+
+    def cmd_classifier_full_test(self, args):
+        """
+        Test trained classifier on ALL segments not in training data
+
+        Usage: classifier-full-test [OPTIONS]
+
+        Generates features and runs predictions on all segments that:
+        - Match the experiment's segment size
+        - Are NOT in the training/test/verify splits
+        - Are NOT from trash/voltage_only/other files
+        - Includes segments from classes not in the training set
+
+        Features are stored in: full_verification_features/
+        Results are stored in: experiment_NNN_classifier_NNN_full_verification_results
+
+        Options:
+            --force                   Regenerate features and rerun predictions
+            --decimation-factor <n>   Test only this decimation factor
+            --data-type <id>          Test only this data type
+            --amplitude-method <id>   Test only this amplitude method
+            --feature-set <id>        Test only this feature set
+            --batch-size <n>          Segments per batch (default: 100)
+
+        Examples:
+            classifier-full-test
+            classifier-full-test --decimation-factor 0 --data-type 2
+            classifier-full-test --force
+        """
+        if not self.db_conn:
+            print("[ERROR] Not connected to database. Use 'connect' first.")
+            return
+
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'set classifier <id>' first.")
+            return
+
+        # Parse arguments
+        force = False
+        batch_size = 100
+        filter_dec = None
+        filter_dtype = None
+        filter_amp = None
+        filter_efs = None
+
+        i = 0
+        while args and i < len(args):
+            if args[i] == '--force':
+                force = True
+                i += 1
+            elif args[i] == '--batch-size':
+                if i + 1 < len(args):
+                    batch_size = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --batch-size requires a number")
+                    return
+            elif args[i] == '--decimation-factor':
+                if i + 1 < len(args):
+                    filter_dec = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --decimation-factor requires a number")
+                    return
+            elif args[i] == '--data-type':
+                if i + 1 < len(args):
+                    filter_dtype = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --data-type requires an ID")
+                    return
+            elif args[i] == '--amplitude-method':
+                if i + 1 < len(args):
+                    filter_amp = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --amplitude-method requires an ID")
+                    return
+            elif args[i] == '--feature-set':
+                if i + 1 < len(args):
+                    filter_efs = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --feature-set requires an ID")
+                    return
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        try:
+            import numpy as np
+            import pickle
+            import time
+
+            cursor = self.db_conn.cursor()
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            print(f"\n[INFO] Full Verification Test for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Testing on ALL segments not in training data...")
+
+            # Get global_classifier_id
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+            global_classifier_id = result[0]
+
+            # Get active configuration
+            cursor.execute("""
+                SELECT config_id, config_name
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            config_row = cursor.fetchone()
+            if not config_row:
+                print("[ERROR] No active configuration found")
+                return
+            config_id, config_name = config_row
+
+            print(f"[INFO] Using configuration: {config_name}")
+
+            # Get feature builder settings
+            cursor.execute("""
+                SELECT include_original_feature,
+                       compute_baseline_distances_inter,
+                       compute_baseline_distances_intra
+                FROM ml_classifier_feature_builder
+                WHERE config_id = %s
+            """, (config_id,))
+            fb_row = cursor.fetchone()
+            if not fb_row:
+                print("[ERROR] No feature builder configuration found")
+                return
+
+            include_original, compute_inter, compute_intra = fb_row
+            needs_references = compute_inter or compute_intra
+
+            # Get experiment segment size
+            cursor.execute("""
+                SELECT segment_size
+                FROM ml_experiments
+                WHERE experiment_id = %s
+            """, (exp_id,))
+            segment_size = cursor.fetchone()[0]
+
+            print(f"[INFO] Segment size: {segment_size}")
+
+            # Query all segments NOT in training data, excluding trash/voltage_only/other
+            print(f"[INFO] Querying verification segments...")
+            cursor.execute(f"""
+                SELECT DISTINCT ds.segment_id, ds.segment_label_id, fl.file_label
+                FROM data_segments ds
+                JOIN file_labels_lut fl ON ds.file_label_id = fl.file_label_id
+                WHERE ds.segment_size = %s
+                  AND ds.segment_id NOT IN (
+                      SELECT segment_id
+                      FROM experiment_{exp_id:03d}_segment_training_data
+                  )
+                  AND fl.file_label NOT ILIKE '%%trash%%'
+                  AND fl.file_label NOT ILIKE '%%voltage_only%%'
+                  AND fl.file_label NOT ILIKE '%%voltage only%%'
+                  AND fl.file_label NOT ILIKE '%%other%%'
+                ORDER BY ds.segment_id
+            """, (segment_size,))
+
+            verification_segments = cursor.fetchall()
+            total_verification = len(verification_segments)
+
+            print(f"[INFO] Found {total_verification} verification segments")
+
+            if total_verification == 0:
+                print("[WARNING] No verification segments found")
+                return
+
+            # Create results table if needed
+            results_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_full_verification_results"
+
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_tables
+                    WHERE schemaname = 'public'
+                    AND tablename = %s
+                )
+            """, (results_table_name,))
+
+            if not cursor.fetchone()[0]:
+                print(f"[INFO] Creating results table: {results_table_name}")
+
+                create_sql = f"""
+                CREATE TABLE {results_table_name} (
+                    result_id BIGSERIAL PRIMARY KEY,
+                    segment_id INTEGER NOT NULL,
+                    actual_label_id INTEGER NOT NULL,
+                    actual_label_name TEXT,
+                    decimation_factor INTEGER NOT NULL,
+                    data_type_id INTEGER NOT NULL,
+                    amplitude_processing_method_id INTEGER NOT NULL,
+                    experiment_feature_set_id BIGINT NOT NULL,
+                    predicted_label_id INTEGER,
+                    predicted_label_name TEXT,
+                    confidence DOUBLE PRECISION,
+                    prediction_probabilities DOUBLE PRECISION[],
+                    feature_file_path TEXT,
+                    model_file_path TEXT,
+                    prediction_time_seconds DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE (segment_id, decimation_factor, data_type_id,
+                            amplitude_processing_method_id, experiment_feature_set_id),
+
+                    FOREIGN KEY (segment_id)
+                        REFERENCES data_segments(segment_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (actual_label_id)
+                        REFERENCES segment_labels(label_id),
+                    FOREIGN KEY (data_type_id)
+                        REFERENCES ml_data_types_lut(data_type_id),
+                    FOREIGN KEY (amplitude_processing_method_id)
+                        REFERENCES ml_amplitude_normalization_lut(method_id),
+                    FOREIGN KEY (experiment_feature_set_id)
+                        REFERENCES ml_experiments_feature_sets(experiment_feature_set_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_segment
+                    ON {results_table_name}(segment_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_actual
+                    ON {results_table_name}(actual_label_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_predicted
+                    ON {results_table_name}(predicted_label_id);
+                """
+
+                cursor.execute(create_sql)
+                self.db_conn.commit()
+                print(f"[SUCCESS] Created table: {results_table_name}")
+
+            # Query hyperparameters
+            cursor.execute("""
+                SELECT DISTINCT cfg.decimation_factor
+                FROM ml_classifier_config_decimation_factors cfg
+                WHERE cfg.config_id = %s
+                ORDER BY cfg.decimation_factor
+            """, (config_id,))
+            decimation_factors = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT data_type_id
+                FROM ml_classifier_config_data_types
+                WHERE config_id = %s
+                ORDER BY data_type_id
+            """, (config_id,))
+            data_type_ids = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT amplitude_processing_method_id
+                FROM ml_classifier_config_amplitude_methods
+                WHERE config_id = %s
+                ORDER BY amplitude_processing_method_id
+            """, (config_id,))
+            amplitude_methods = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT DISTINCT cefs.experiment_feature_set_id, mefs.feature_set_id
+                FROM ml_classifier_config_experiment_feature_sets cefs
+                JOIN ml_experiments_feature_sets mefs ON cefs.experiment_feature_set_id = mefs.experiment_feature_set_id
+                WHERE cefs.config_id = %s
+                ORDER BY mefs.feature_set_id
+            """, (config_id,))
+            feature_set_rows = cursor.fetchall()
+            experiment_feature_sets = [row[0] for row in feature_set_rows]
+            efs_to_fs_map = {row[0]: row[1] for row in feature_set_rows}
+
+            # Apply filters
+            if filter_dec is not None:
+                decimation_factors = [d for d in decimation_factors if d == filter_dec]
+            if filter_dtype is not None:
+                data_type_ids = [d for d in data_type_ids if d == filter_dtype]
+            if filter_amp is not None:
+                amplitude_methods = [a for a in amplitude_methods if a == filter_amp]
+            if filter_efs is not None:
+                experiment_feature_sets = [e for e in experiment_feature_sets if e == filter_efs]
+
+            print(f"[INFO] Hyperparameters:")
+            print(f"  Decimation factors: {decimation_factors}")
+            print(f"  Data types: {data_type_ids}")
+            print(f"  Amplitude methods: {amplitude_methods}")
+            print(f"  Feature sets: {len(experiment_feature_sets)}")
+
+            # Get label mapping
+            cursor.execute("SELECT label_id, label_name FROM segment_labels ORDER BY label_id")
+            label_map = {row[0]: row[1] for row in cursor.fetchall()}
+
+            # Process each configuration
+            total_predictions = 0
+            total_errors = 0
+            start_time = time.time()
+
+            for dec in decimation_factors:
+                for dtype in data_type_ids:
+                    for amp in amplitude_methods:
+                        for efs in experiment_feature_sets:
+                            actual_fs_id = efs_to_fs_map[efs]
+
+                            print(f"\n{'='*60}")
+                            print(f"Processing: dec={dec}, dtype={dtype}, amp={amp}, fs={actual_fs_id}")
+                            print(f"{'='*60}")
+
+                            # Load trained SVM model
+                            model_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/trained_models"
+                            classifier_dir = f"classifier_{cls_id:03d}"
+                            dec_dir = f"D{dec:06d}"
+                            dtype_name = f"TADC{dtype}"
+                            amp_name = f"A{amp}"
+                            fs_dir = f"FS{actual_fs_id:04d}"
+
+                            model_path = os.path.join(model_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir, "svm_model.pkl")
+
+                            if not os.path.exists(model_path):
+                                print(f"[WARNING] Model not found: {model_path}")
+                                print(f"[SKIP] Skipping this configuration")
+                                continue
+
+                            try:
+                                with open(model_path, 'rb') as f:
+                                    model_data = pickle.load(f)
+                                svm_model = model_data['model']
+                                print(f"[INFO] Loaded model: {model_path}")
+                            except Exception as e:
+                                print(f"[ERROR] Failed to load model: {e}")
+                                continue
+
+                            # Query features in this feature_set
+                            cursor.execute("""
+                                SELECT f.feature_id, f.feature_name, fsf.feature_order
+                                FROM ml_experiments_feature_sets efs_tbl
+                                JOIN ml_feature_set_features fsf ON efs_tbl.feature_set_id = fsf.feature_set_id
+                                JOIN ml_features_lut f ON fsf.feature_id = f.feature_id
+                                WHERE efs_tbl.experiment_feature_set_id = %s
+                                ORDER BY fsf.feature_order
+                            """, (efs,))
+                            features_in_set = cursor.fetchall()
+                            feature_ids = [row[0] for row in features_in_set]
+
+                            # Process each verification segment
+                            segments_processed = 0
+                            predictions_made = 0
+
+                            for segment_id, segment_label_id, file_label in verification_segments:
+                                segments_processed += 1
+
+                                if segments_processed % 100 == 0:
+                                    elapsed = time.time() - start_time
+                                    rate = segments_processed / elapsed if elapsed > 0 else 0
+                                    print(f"  Progress: {segments_processed}/{total_verification} ({rate:.1f} seg/sec)", end='\r')
+
+                                try:
+                                    # Check if already exists
+                                    if not force:
+                                        cursor.execute(f"""
+                                            SELECT 1 FROM {results_table_name}
+                                            WHERE segment_id = %s
+                                              AND decimation_factor = %s
+                                              AND data_type_id = %s
+                                              AND amplitude_processing_method_id = %s
+                                              AND experiment_feature_set_id = %s
+                                        """, (segment_id, dec, dtype, amp, efs))
+                                        if cursor.fetchone():
+                                            continue
+
+                                    pred_start_time = time.time()
+
+                                    # Load segment features
+                                    segment_feature_parts = []
+                                    for feature_id in feature_ids:
+                                        cursor.execute(f"""
+                                            SELECT feature_file_path
+                                            FROM experiment_{exp_id:03d}_feature_fileset
+                                            WHERE segment_id = %s
+                                              AND decimation_factor = %s
+                                              AND data_type_id = %s
+                                              AND amplitude_processing_method_id = %s
+                                              AND experiment_feature_set_id = %s
+                                              AND feature_set_feature_id = %s
+                                        """, (segment_id, dec, dtype, amp, efs, feature_id))
+
+                                        result = cursor.fetchone()
+                                        if result:
+                                            feature_file_path = result[0]
+                                            features = np.load(feature_file_path)
+                                            column_idx = amp - 1
+                                            if features.ndim == 1:
+                                                features_1d = features
+                                            else:
+                                                features_1d = features[:, column_idx]
+                                            segment_feature_parts.append(features_1d)
+                                        else:
+                                            raise ValueError(f"Missing feature for segment {segment_id}, feature {feature_id}")
+
+                                    if len(segment_feature_parts) != len(feature_ids):
+                                        raise ValueError(f"Incomplete features for segment {segment_id}")
+
+                                    # Concatenate features
+                                    segment_features = np.concatenate(segment_feature_parts)
+
+                                    # Generate full verification feature file
+                                    feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
+                                    feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
+                                    os.makedirs(feature_dir, exist_ok=True)
+
+                                    feature_filename = f"SID{segment_id:08d}_VERIF_{len(segment_features):03d}.npy"
+                                    feature_path = os.path.join(feature_dir, feature_filename)
+                                    np.save(feature_path, segment_features)
+
+                                    # Run prediction
+                                    feature_vector = segment_features.reshape(1, -1)
+                                    predicted_label_id = svm_model.predict(feature_vector)[0]
+                                    probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
+                                    confidence = probabilities[predicted_label_id] if probabilities is not None else None
+
+                                    prediction_time = time.time() - pred_start_time
+
+                                    # Get label names
+                                    actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
+                                    predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
+
+                                    # Store result
+                                    cursor.execute(f"""
+                                        INSERT INTO {results_table_name} (
+                                            segment_id, actual_label_id, actual_label_name,
+                                            decimation_factor, data_type_id, amplitude_processing_method_id,
+                                            experiment_feature_set_id, predicted_label_id, predicted_label_name,
+                                            confidence, prediction_probabilities, feature_file_path,
+                                            model_file_path, prediction_time_seconds
+                                        ) VALUES (
+                                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                        )
+                                        ON CONFLICT (segment_id, decimation_factor, data_type_id,
+                                                     amplitude_processing_method_id, experiment_feature_set_id)
+                                        DO UPDATE SET
+                                            predicted_label_id = EXCLUDED.predicted_label_id,
+                                            predicted_label_name = EXCLUDED.predicted_label_name,
+                                            confidence = EXCLUDED.confidence,
+                                            prediction_probabilities = EXCLUDED.prediction_probabilities,
+                                            feature_file_path = EXCLUDED.feature_file_path,
+                                            model_file_path = EXCLUDED.model_file_path,
+                                            prediction_time_seconds = EXCLUDED.prediction_time_seconds,
+                                            created_at = NOW()
+                                    """, (
+                                        segment_id, segment_label_id, actual_label_name,
+                                        dec, dtype, amp, efs, predicted_label_id, predicted_label_name,
+                                        confidence, probabilities.tolist() if probabilities is not None else None,
+                                        feature_path, model_path, prediction_time
+                                    ))
+
+                                    predictions_made += 1
+                                    total_predictions += 1
+
+                                    # Commit every batch
+                                    if predictions_made % batch_size == 0:
+                                        self.db_conn.commit()
+
+                                except Exception as e:
+                                    total_errors += 1
+                                    if total_errors < 10:  # Only print first 10 errors
+                                        print(f"\n[ERROR] Segment {segment_id}: {e}")
+
+                            # Final commit for this configuration
+                            self.db_conn.commit()
+                            print(f"\n  Predictions: {predictions_made}")
+
+            # Final summary
+            elapsed_total = time.time() - start_time
+            print(f"\n{'='*60}")
+            print(f"Full Verification Test Summary")
+            print(f"{'='*60}")
+            print(f"Total predictions: {total_predictions}")
+            print(f"Total errors: {total_errors}")
+            print(f"Total time: {elapsed_total/60:.1f} minutes ({elapsed_total/3600:.2f} hours)")
+            if total_predictions > 0:
+                print(f"Average time per prediction: {elapsed_total/total_predictions:.3f} seconds")
+            print(f"Results table: {results_table_name}")
+            print(f"{'='*60}")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Missing required package: {e}")
+            print("Install with: pip install numpy scikit-learn")
+        except Exception as e:
+            self.db_conn.rollback()
+            print(f"\n[ERROR] Failed to run full verification test: {e}")
+            import traceback
+            traceback.print_exc()
 
     def cmd_classifier_train_rf(self, args):
         """
