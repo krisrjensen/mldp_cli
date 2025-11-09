@@ -3,8 +3,8 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251107_000000
-File version: 2.0.17.16
+Date Revised: 20251108_171500
+File version: 2.0.17.17
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
@@ -9368,10 +9368,10 @@ SETTINGS:
                         eta_minutes = eta_seconds // 60
                         eta_seconds_remainder = eta_seconds % 60
 
-                        # Clear previous output (move cursor up and clear lines)
+                        # Clear previous output (use carriage return for same-line updates)
                         if last_status is not None:
-                            # Move cursor up 7 lines and clear to end of screen
-                            print('\033[7A\033[J', end='')
+                            # Move cursor up to overwrite previous output
+                            print('\r' + '\033[K' + '\033[1A' * 6, end='')
 
                         # Display progress
                         print(f"Status: {status}")
@@ -9381,7 +9381,7 @@ SETTINGS:
                         if 'files_per_second' in prog:
                             print(f"Rate: {prog.get('files_per_second', 0):.1f} files/sec")
                         print(f"ETA: {eta_minutes} min {eta_seconds_remainder} sec")
-                        print(f"Workers: {state.get('workers_count', 0)}")
+                        print(f"Workers: {state.get('workers', 0)}")
 
                         last_status = status
 
