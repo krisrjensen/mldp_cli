@@ -3,12 +3,12 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_133000
-File version: 2.1.0.8
+Date Revised: 20251110_133500
+File version: 2.1.0.9
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
-             CRITICAL FIX: Changed original_segment_size to segment_length
-             - Column original_segment_size does not exist in data_segments table
-             - Correct column name is segment_length
+             CRITICAL FIX: Changed data_type_string to data_type_name
+             - Column data_type_string does not exist in ml_data_types_lut table
+             - Correct column name is data_type_name
 
 ARCHITECTURE:
 - Manager process runs in background (daemon)
@@ -205,11 +205,11 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
 
                 # Get data_type string (e.g., TADC8)
                 cursor.execute("""
-                    SELECT data_type_string
+                    SELECT data_type_name
                     FROM ml_data_types_lut
                     WHERE data_type_id = %s
                 """, (dtype,))
-                data_type_string = cursor.fetchone()['data_type_string']
+                data_type_string = cursor.fetchone()['data_type_name']
 
                 # Get amplitude method string
                 cursor.execute("""

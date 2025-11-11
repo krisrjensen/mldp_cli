@@ -3,23 +3,23 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251110_133000
-File version: 2.0.18.68
+Date Revised: 20251110_133500
+File version: 2.0.18.69
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             CRITICAL FIX: Changed original_segment_size to segment_length
+             CRITICAL FIX: Changed data_type_string to data_type_name
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 68)
+- CHANGE: Tracks changes within current commit cycle (currently 69)
 
-Changes in this version (18.68):
-1. CRITICAL FIX - mpcctl SVM feature builder segment size query
-   - v2.0.18.68: Fixed original_segment_size column error
-                 Column original_segment_size does not exist in data_segments table
-                 Correct column name is segment_length
-                 Query: SELECT segment_label_id, segment_length FROM data_segments
+Changes in this version (18.69):
+1. CRITICAL FIX - mpcctl SVM feature builder data type query
+   - v2.0.18.69: Fixed data_type_string column error
+                 Column data_type_string does not exist in ml_data_types_lut table
+                 Correct column name is data_type_name
+                 Query: SELECT data_type_name FROM ml_data_types_lut
 
 2. ENHANCEMENT - Added mpcctl parallel processing to classifier-build-features
    - v2.0.18.60+: Added --workers flag for parallel SVM feature building
@@ -1014,7 +1014,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.68"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.69"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
