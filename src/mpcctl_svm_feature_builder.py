@@ -3,12 +3,13 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_133500
-File version: 2.1.0.9
+Date Revised: 20251111_134000
+File version: 2.1.0.10
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
-             CRITICAL FIX: Changed data_type_string to data_type_name
-             - Column data_type_string does not exist in ml_data_types_lut table
-             - Correct column name is data_type_name
+             CRITICAL FIX: Use decimated segment size and add classifier folder
+             - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
+             - Decimated size: original_size / (dec + 1)
+             - Example: svm_features/classifier{cls_id:03d}/S008192/TADC6/D000000/FS0025/
 
 ARCHITECTURE:
 - Manager process runs in background (daemon)
@@ -201,7 +202,12 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                 """, (segment_id,))
                 seg_info = cursor.fetchone()
                 segment_label_id = seg_info['segment_label_id']
-                segment_size = seg_info['segment_length']
+                original_segment_size = seg_info['segment_length']
+
+                # Calculate decimated segment size
+                # Decimation: dec=0 means no decimation (divide by 1)
+                #            dec=7 means divide by 8, dec=15 means divide by 16, etc.
+                decimated_size = original_segment_size // (dec + 1)
 
                 # Get data_type string (e.g., TADC8)
                 cursor.execute("""
@@ -219,9 +225,10 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                 """, (amp,))
                 amp_method = cursor.fetchone()['method_name']
 
-                # Build proper directory structure: classifier_files/svm_features/S{size}/{dtype}/D{dec}/FS{efs}/
+                # Build proper directory structure: classifier_files/svm_features/classifier{id}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
                 svm_feature_dir = (classifier_base_path / "svm_features" /
-                                  f"S{segment_size:06d}" / data_type_string /
+                                  f"classifier{classifier_id:03d}" /
+                                  f"S{decimated_size:06d}" / data_type_string /
                                   f"D{dec:06d}" / f"FS{efs:04d}")
                 svm_feature_dir.mkdir(parents=True, exist_ok=True)
 
