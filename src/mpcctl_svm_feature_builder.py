@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_120000
-File version: 2.1.0.2
+Date Revised: 20251110_121000
+File version: 2.1.0.3
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
 
 ARCHITECTURE:
@@ -213,6 +213,9 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                         """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
                               dec, dtype, amp, efs, str(svm_feature_file), num_classes, 0.0))
                         db_conn.commit()
+                        # Mark as done even though failed
+                        with open(done_file, 'a') as f:
+                            f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
                     # Get target segment features
@@ -243,6 +246,9 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                         """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
                               dec, dtype, amp, efs, str(svm_feature_file), num_classes, 0.0))
                         db_conn.commit()
+                        # Mark as done even though failed
+                        with open(done_file, 'a') as f:
+                            f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
                     # Build target feature array
@@ -308,6 +314,9 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                         """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
                               dec, dtype, amp, efs, str(svm_feature_file), num_classes, 0.0))
                         db_conn.commit()
+                        # Mark as done even though failed
+                        with open(done_file, 'a') as f:
+                            f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
                     feature_vector = np.array([[f['feature_value_mean'], f['feature_value_std'], f['feature_value_max']]
@@ -361,6 +370,10 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     db_conn.commit()
                 except:
                     pass
+
+                # CRITICAL: Mark as done even if failed, otherwise progress stalls
+                with open(done_file, 'a') as f:
+                    f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
 
         cursor.close()
         db_conn.close()
