@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_115000
-File version: 2.1.0.1
+Date Revised: 20251110_120000
+File version: 2.1.0.2
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
 
 ARCHITECTURE:
@@ -119,8 +119,8 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
             WHERE experiment_id = %s
         """, (experiment_id,))
         result = cursor.fetchone()
-        if result and result[0]:
-            feature_base_path = Path(result[0])
+        if result and result['feature_data_base_path']:
+            feature_base_path = Path(result['feature_data_base_path'])
         else:
             # Use default path
             feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/feature_files')
@@ -144,10 +144,10 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
 
         # Get number of classes
         cursor.execute("""
-            SELECT COUNT(DISTINCT segment_label_id)
+            SELECT COUNT(DISTINCT segment_label_id) as num_classes
             FROM experiment_{exp_id:03d}_segment_training_data
         """.format(exp_id=experiment_id))
-        num_classes = cursor.fetchone()[0]
+        num_classes = cursor.fetchone()['num_classes']
 
         # Process each work unit
         for work_unit in work_units:
@@ -176,7 +176,7 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     FROM data_segments
                     WHERE segment_id = %s
                 """, (segment_id,))
-                segment_label_id = cursor.fetchone()[0]
+                segment_label_id = cursor.fetchone()['segment_label_id']
 
                 # Build feature vector path
                 svm_feature_dir = feature_base_path / "svm_features" / f"S{segment_id:08d}"
