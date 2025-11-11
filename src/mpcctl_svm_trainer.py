@@ -3,9 +3,10 @@
 Filename: mpcctl_svm_trainer.py
 Author(s): Kristophor Jensen
 Date Created: 20251027_163000
-Date Revised: 20251028_152200
-File version: 1.0.0.20
+Date Revised: 20251111_143500
+File version: 1.0.0.21
 Description: MPCCTL-based SVM training with summary generation and file export
+             FIX: Check extraction_status_id=3 (SUCCESS) instead of 2 (FAILED)
 
 ARCHITECTURE (follows mpcctl_cli_distance_calculator.py pattern):
 - Manager creates .mpcctl/ directory with {PID}_todo.dat files
@@ -214,7 +215,7 @@ def worker_process(worker_id: int, pause_flag: mp.Event, stop_flag: mp.Event,
                       AND sf.amplitude_processing_method_id = %s
                       AND sf.experiment_feature_set_id = %s
                       AND ds.split_type = %s
-                      AND sf.extraction_status_id = 2
+                      AND sf.extraction_status_id = 3
                     ORDER BY sf.segment_id
                 """, (dec, dtype, amp, efs, split_type))
 
