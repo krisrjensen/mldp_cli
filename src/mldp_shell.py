@@ -3,21 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_134500
-File version: 2.0.18.71
+Date Revised: 20251111_142000
+File version: 2.0.18.72
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             FIX: Removed svm_ prefix from SVM feature filenames
+             FIX: SVM trainer checks for SUCCESS (status=3) instead of FAILED (status=2)
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 71)
+- CHANGE: Tracks changes within current commit cycle (currently 72)
 
-Changes in this version (18.71):
-1. FIX - mpcctl SVM feature builder filename
-   - v2.0.18.71: Removed svm_ prefix from filenames
-                 File: SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy
+Changes in this version (18.72):
+1. FIX - SVM trainer extraction_status_id check (CRITICAL)
+   - v2.0.18.72: Changed lines 17411 and 18144 to check extraction_status_id = 3 (SUCCESS)
+                 instead of extraction_status_id = 2 (FAILED)
+                 This was causing "No feature vectors found" error despite 12M successful features
                  No longer: svm_SID{segment_id}...
 
 2. ENHANCEMENT - Added mpcctl parallel processing to classifier-build-features
@@ -17408,7 +17409,7 @@ SETTINGS:
             features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
             cursor.execute(f"""
                 SELECT COUNT(*) FROM {features_table_name}
-                WHERE extraction_status_id = 2
+                WHERE extraction_status_id = 3
             """)
             feature_count = cursor.fetchone()[0]
             if feature_count == 0:
@@ -18141,7 +18142,7 @@ SETTINGS:
             features_table_name = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_features"
             cursor.execute(f"""
                 SELECT COUNT(*) FROM {features_table_name}
-                WHERE extraction_status_id = 2
+                WHERE extraction_status_id = 3
             """)
             feature_count = cursor.fetchone()[0]
             if feature_count == 0:
