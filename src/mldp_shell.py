@@ -3,23 +3,22 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_134000
-File version: 2.0.18.70
+Date Revised: 20251111_134500
+File version: 2.0.18.71
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             CRITICAL FIX: Corrected SVM folder structure with decimated size and classifier folder
+             FIX: Removed svm_ prefix from SVM feature filenames
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 70)
+- CHANGE: Tracks changes within current commit cycle (currently 71)
 
-Changes in this version (18.70):
-1. CRITICAL FIX - mpcctl SVM feature builder path structure
-   - v2.0.18.70: Fixed folder structure to use decimated size and add classifier folder
-                 Path: svm_features/classifier{cls_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
-                 Decimated size calculation: original_size / (dec + 1)
-                 Uses classifier_id parameter (not hardcoded)
+Changes in this version (18.71):
+1. FIX - mpcctl SVM feature builder filename
+   - v2.0.18.71: Removed svm_ prefix from filenames
+                 File: SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy
+                 No longer: svm_SID{segment_id}...
 
 2. ENHANCEMENT - Added mpcctl parallel processing to classifier-build-features
    - v2.0.18.60+: Added --workers flag for parallel SVM feature building
@@ -1014,7 +1013,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.70"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.71"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory

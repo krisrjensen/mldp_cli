@@ -3,13 +3,12 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251111_134000
-File version: 2.1.0.10
+Date Revised: 20251111_134500
+File version: 2.1.0.11
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
-             CRITICAL FIX: Use decimated segment size and add classifier folder
+             FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
-             - Decimated size: original_size / (dec + 1)
-             - Example: svm_features/classifier{cls_id:03d}/S008192/TADC6/D000000/FS0025/
+             - File: SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy (no svm_ prefix)
 
 ARCHITECTURE:
 - Manager process runs in background (daemon)
@@ -232,8 +231,8 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                                   f"D{dec:06d}" / f"FS{efs:04d}")
                 svm_feature_dir.mkdir(parents=True, exist_ok=True)
 
-                # File naming: svm_SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy
-                svm_feature_file = svm_feature_dir / f"svm_SID{segment_id:08d}_D{dec:06d}_{data_type_string}_A{amp:02d}_FS{efs:04d}.npy"
+                # File naming: SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy
+                svm_feature_file = svm_feature_dir / f"SID{segment_id:08d}_D{dec:06d}_{data_type_string}_A{amp:02d}_FS{efs:04d}.npy"
 
                 # Build feature vector
                 if needs_references:
