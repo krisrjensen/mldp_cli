@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_114000
-File version: 2.1.0.0
+Date Revised: 20251110_115000
+File version: 2.1.0.1
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
 
 ARCHITECTURE:
@@ -114,11 +114,16 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
 
         # Get feature base path
         cursor.execute("""
-            SELECT feature_base_path
+            SELECT feature_data_base_path
             FROM ml_experiments
             WHERE experiment_id = %s
         """, (experiment_id,))
-        feature_base_path = Path(cursor.fetchone()[0])
+        result = cursor.fetchone()
+        if result and result[0]:
+            feature_base_path = Path(result[0])
+        else:
+            # Use default path
+            feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/feature_files')
 
         # Get table names
         features_table = f"experiment_{experiment_id:03d}_classifier_{classifier_id:03d}_svm_features"
