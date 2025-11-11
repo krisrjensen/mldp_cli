@@ -3,9 +3,12 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251110_121000
-File version: 2.1.0.3
+Date Revised: 20251110_133000
+File version: 2.1.0.8
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
+             CRITICAL FIX: Changed original_segment_size to segment_length
+             - Column original_segment_size does not exist in data_segments table
+             - Correct column name is segment_length
 
 ARCHITECTURE:
 - Manager process runs in background (daemon)
@@ -76,8 +79,17 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
     pid = os.getpid()
     todo_file = mpcctl_dir / f"{pid}_todo.dat"
     done_file = mpcctl_dir / f"{pid}_done.dat"
+    error_log = mpcctl_dir / f"{pid}_error.log"
 
-    # Silent worker - no output except errors
+    # Setup worker error logging
+    worker_logger = logging.getLogger(f"worker_{pid}")
+    worker_handler = logging.FileHandler(error_log)
+    worker_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    worker_logger.addHandler(worker_handler)
+    worker_logger.setLevel(logging.DEBUG)
+
+    worker_logger.info(f"Worker {worker_id} (PID {pid}) starting")
+
     try:
         # Connect to database
         db_conn = psycopg2.connect(**db_config)
@@ -92,7 +104,10 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     segment_id, dec, dtype, amp, efs = map(int, parts)
                     work_units.append((segment_id, dec, dtype, amp, efs))
 
+        worker_logger.info(f"Loaded {len(work_units)} work units from {todo_file}")
+
         if not work_units:
+            worker_logger.warning("No work units to process")
             return
 
         # Get feature builder configuration
@@ -112,7 +127,7 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
         compute_intra = fb_row['compute_baseline_distances_intra']
         needs_references = compute_inter or compute_intra
 
-        # Get feature base path
+        # Get feature base path and derive classifier path from it
         cursor.execute("""
             SELECT feature_data_base_path
             FROM ml_experiments
@@ -121,9 +136,11 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
         result = cursor.fetchone()
         if result and result['feature_data_base_path']:
             feature_base_path = Path(result['feature_data_base_path'])
+            # Classifier files are sibling to feature_files: .../experiment042/classifier_files
+            classifier_base_path = feature_base_path.parent / 'classifier_files'
         else:
-            # Use default path
-            feature_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/feature_files')
+            # Use default paths
+            classifier_base_path = Path(f'/Volumes/ArcData/V3_database/experiment{experiment_id:03d}/classifier_files')
 
         # Get table names
         features_table = f"experiment_{experiment_id:03d}_classifier_{classifier_id:03d}_svm_features"
@@ -150,8 +167,14 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
         num_classes = cursor.fetchone()['num_classes']
 
         # Process each work unit
+        processed_count = 0
         for work_unit in work_units:
             segment_id, dec, dtype, amp, efs = work_unit
+
+            # Periodic progress logging
+            processed_count += 1
+            if processed_count % 1000 == 0:
+                worker_logger.info(f"Processed {processed_count}/{len(work_units)} work units")
 
             try:
                 start_time = time.time()
@@ -170,18 +193,40 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                         f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                     continue
 
-                # Get segment label
+                # Get segment info (label and segment length)
                 cursor.execute("""
-                    SELECT segment_label_id
+                    SELECT segment_label_id, segment_length
                     FROM data_segments
                     WHERE segment_id = %s
                 """, (segment_id,))
-                segment_label_id = cursor.fetchone()['segment_label_id']
+                seg_info = cursor.fetchone()
+                segment_label_id = seg_info['segment_label_id']
+                segment_size = seg_info['segment_length']
 
-                # Build feature vector path
-                svm_feature_dir = feature_base_path / "svm_features" / f"S{segment_id:08d}"
+                # Get data_type string (e.g., TADC8)
+                cursor.execute("""
+                    SELECT data_type_string
+                    FROM ml_data_types_lut
+                    WHERE data_type_id = %s
+                """, (dtype,))
+                data_type_string = cursor.fetchone()['data_type_string']
+
+                # Get amplitude method string
+                cursor.execute("""
+                    SELECT method_name
+                    FROM ml_amplitude_normalization_lut
+                    WHERE method_id = %s
+                """, (amp,))
+                amp_method = cursor.fetchone()['method_name']
+
+                # Build proper directory structure: classifier_files/svm_features/S{size}/{dtype}/D{dec}/FS{efs}/
+                svm_feature_dir = (classifier_base_path / "svm_features" /
+                                  f"S{segment_size:06d}" / data_type_string /
+                                  f"D{dec:06d}" / f"FS{efs:04d}")
                 svm_feature_dir.mkdir(parents=True, exist_ok=True)
-                svm_feature_file = svm_feature_dir / f"svm_feature_{segment_id}_{dec}_{dtype}_{amp}_{efs}.npy"
+
+                # File naming: svm_SID{segment_id}_D{dec}_{dtype}_A{amp}_FS{efs}.npy
+                svm_feature_file = svm_feature_dir / f"svm_SID{segment_id:08d}_D{dec:06d}_{data_type_string}_A{amp:02d}_FS{efs:04d}.npy"
 
                 # Build feature vector
                 if needs_references:
@@ -218,18 +263,18 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                             f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
-                    # Get target segment features
+                    # Get target segment feature file paths
                     cursor.execute(f"""
-                        SELECT feature_value_mean, feature_value_std, feature_value_max
+                        SELECT feature_file_path
                         FROM {feature_fileset_table}
                         WHERE segment_id = %s AND decimation_factor = %s
                           AND data_type_id = %s AND amplitude_processing_method_id = %s
                           AND experiment_feature_set_id = %s
                         ORDER BY feature_set_feature_id
                     """, (segment_id, dec, dtype, amp, efs))
-                    target_features = cursor.fetchall()
+                    target_feature_files = cursor.fetchall()
 
-                    if not target_features:
+                    if not target_feature_files:
                         # No features, mark as failed
                         cursor.execute(f"""
                             INSERT INTO {features_table} (
@@ -251,31 +296,71 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                             f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
-                    # Build target feature array
-                    target_array = np.array([[f['feature_value_mean'], f['feature_value_std'], f['feature_value_max']]
-                                            for f in target_features]).flatten()
+                    # Load target feature arrays from files (each file contains [mean, std, max])
+                    target_features = []
+                    for row in target_feature_files:
+                        feature_path = Path(row['feature_file_path'])
+                        if feature_path.exists():
+                            feature_data = np.load(feature_path)
+                            target_features.append(feature_data)
+                        else:
+                            worker_logger.warning(f"Missing feature file: {feature_path}")
+
+                    if not target_features:
+                        # No valid feature files, mark as failed
+                        cursor.execute(f"""
+                            INSERT INTO {features_table} (
+                                global_classifier_id, classifier_id, segment_id, segment_label_id,
+                                decimation_factor, data_type_id, amplitude_processing_method_id,
+                                experiment_feature_set_id, svm_feature_file_path,
+                                feature_vector_dimensions, num_classes, num_distance_metrics,
+                                extraction_status_id, extraction_time_seconds
+                            ) VALUES (
+                                (SELECT global_classifier_id FROM ml_experiment_classifiers
+                                 WHERE experiment_id = %s AND classifier_id = %s),
+                                %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, 0, 2, %s
+                            )
+                        """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
+                              dec, dtype, amp, efs, str(svm_feature_file), num_classes, 0.0))
+                        db_conn.commit()
+                        with open(done_file, 'a') as f:
+                            f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
+                        continue
+
+                    # Build target feature array (flatten all [mean,std,max] triplets)
+                    target_array = np.concatenate(target_features).astype(np.float32)
 
                     # Compute distances to each reference
                     distance_vectors = []
                     for ref_row in references:
                         ref_seg_id = ref_row['reference_segment_id']
 
-                        # Get reference features
+                        # Get reference feature file paths
                         cursor.execute(f"""
-                            SELECT feature_value_mean, feature_value_std, feature_value_max
+                            SELECT feature_file_path
                             FROM {feature_fileset_table}
                             WHERE segment_id = %s AND decimation_factor = %s
                               AND data_type_id = %s AND amplitude_processing_method_id = %s
                               AND experiment_feature_set_id = %s
                             ORDER BY feature_set_feature_id
                         """, (ref_seg_id, dec, dtype, amp, efs))
-                        ref_features = cursor.fetchall()
+                        ref_feature_files = cursor.fetchall()
+
+                        if not ref_feature_files:
+                            continue
+
+                        # Load reference feature arrays from files
+                        ref_features = []
+                        for row in ref_feature_files:
+                            feature_path = Path(row['feature_file_path'])
+                            if feature_path.exists():
+                                feature_data = np.load(feature_path)
+                                ref_features.append(feature_data)
 
                         if not ref_features:
                             continue
 
-                        ref_array = np.array([[f['feature_value_mean'], f['feature_value_std'], f['feature_value_max']]
-                                             for f in ref_features]).flatten()
+                        ref_array = np.concatenate(ref_features).astype(np.float32)
 
                         # Compute distances using all metrics
                         for metric in distance_metrics:
@@ -287,18 +372,18 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     feature_dims = len(feature_vector)
 
                 else:
-                    # Just use raw features
+                    # Just use raw features (load from files)
                     cursor.execute(f"""
-                        SELECT feature_value_mean, feature_value_std, feature_value_max
+                        SELECT feature_file_path
                         FROM {feature_fileset_table}
                         WHERE segment_id = %s AND decimation_factor = %s
                           AND data_type_id = %s AND amplitude_processing_method_id = %s
                           AND experiment_feature_set_id = %s
                         ORDER BY feature_set_feature_id
                     """, (segment_id, dec, dtype, amp, efs))
-                    features = cursor.fetchall()
+                    feature_files = cursor.fetchall()
 
-                    if not features:
+                    if not feature_files:
                         cursor.execute(f"""
                             INSERT INTO {features_table} (
                                 global_classifier_id, classifier_id, segment_id, segment_label_id,
@@ -319,8 +404,35 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                             f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
                         continue
 
-                    feature_vector = np.array([[f['feature_value_mean'], f['feature_value_std'], f['feature_value_max']]
-                                              for f in features]).flatten().astype(np.float32)
+                    # Load feature arrays from files
+                    features = []
+                    for row in feature_files:
+                        feature_path = Path(row['feature_file_path'])
+                        if feature_path.exists():
+                            feature_data = np.load(feature_path)
+                            features.append(feature_data)
+
+                    if not features:
+                        cursor.execute(f"""
+                            INSERT INTO {features_table} (
+                                global_classifier_id, classifier_id, segment_id, segment_label_id,
+                                decimation_factor, data_type_id, amplitude_processing_method_id,
+                                experiment_feature_set_id, svm_feature_file_path,
+                                feature_vector_dimensions, num_classes, num_distance_metrics,
+                                extraction_status_id, extraction_time_seconds
+                            ) VALUES (
+                                (SELECT global_classifier_id FROM ml_experiment_classifiers
+                                 WHERE experiment_id = %s AND classifier_id = %s),
+                                %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, 0, 2, %s
+                            )
+                        """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
+                              dec, dtype, amp, efs, str(svm_feature_file), num_classes, 0.0))
+                        db_conn.commit()
+                        with open(done_file, 'a') as f:
+                            f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
+                        continue
+
+                    feature_vector = np.concatenate(features).astype(np.float32)
                     feature_dims = len(feature_vector)
 
                 # Save feature vector
@@ -351,6 +463,14 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     f.write(f"{segment_id},{dec},{dtype},{amp},{efs}\n")
 
             except Exception as e:
+                # ROLLBACK failed transaction to prevent error cascade
+                db_conn.rollback()
+
+                # LOG THE ERROR - this is critical for debugging
+                worker_logger.error(f"FAILED work unit ({segment_id},{dec},{dtype},{amp},{efs}): {e}")
+                import traceback
+                worker_logger.error(traceback.format_exc())
+
                 # Mark as failed (status 2)
                 try:
                     cursor.execute(f"""
@@ -368,8 +488,9 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
                     """, (experiment_id, classifier_id, classifier_id, segment_id, segment_label_id,
                           dec, dtype, amp, efs, "", num_classes))
                     db_conn.commit()
-                except:
-                    pass
+                except Exception as insert_error:
+                    db_conn.rollback()
+                    worker_logger.error(f"Failed to insert error record: {insert_error}")
 
                 # CRITICAL: Mark as done even if failed, otherwise progress stalls
                 with open(done_file, 'a') as f:
@@ -377,8 +498,12 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
 
         cursor.close()
         db_conn.close()
+        worker_logger.info(f"Worker {worker_id} (PID {pid}) completed successfully")
 
     except Exception as e:
+        worker_logger.error(f"Worker {worker_id} (PID {pid}) fatal error: {e}")
+        import traceback
+        worker_logger.error(traceback.format_exc())
         logger.error(f"Worker {worker_id} (PID {pid}) error: {e}")
 
 

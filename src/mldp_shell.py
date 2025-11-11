@@ -3,17 +3,30 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_171000
-File version: 2.0.18.57
+Date Revised: 20251110_133000
+File version: 2.0.18.68
 Description: Advanced interactive shell for MLDP with prompt_toolkit
+             CRITICAL FIX: Changed original_segment_size to segment_length
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 54)
+- CHANGE: Tracks changes within current commit cycle (currently 68)
 
-Changes in this version (18.54):
+Changes in this version (18.68):
+1. CRITICAL FIX - mpcctl SVM feature builder segment size query
+   - v2.0.18.68: Fixed original_segment_size column error
+                 Column original_segment_size does not exist in data_segments table
+                 Correct column name is segment_length
+                 Query: SELECT segment_label_id, segment_length FROM data_segments
+
+2. ENHANCEMENT - Added mpcctl parallel processing to classifier-build-features
+   - v2.0.18.60+: Added --workers flag for parallel SVM feature building
+                  Routes to mpcctl_svm_feature_builder.py when workers > 1
+                  20 workers: ~3-4 hours vs 138+ hours single-threaded
+
+Changes in previous version (18.54):
 1. BUG FIX - Fixed numpy type conversion for PostgreSQL
    - v2.0.18.49: Converted all numpy types to Python types before database insertion
                  Error: "schema np does not exist" - PostgreSQL interpreted numpy.int64/float64 as schema
@@ -1001,7 +1014,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.63"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.68"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
