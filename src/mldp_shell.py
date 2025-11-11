@@ -3,17 +3,151 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251109_030002
-File version: 2.0.18.28
+Date Revised: 20251109_171000
+File version: 2.0.18.57
 Description: Advanced interactive shell for MLDP with prompt_toolkit
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 28)
+- CHANGE: Tracks changes within current commit cycle (currently 54)
 
-Changes in this version (18.28):
+Changes in this version (18.54):
+1. BUG FIX - Fixed numpy type conversion for PostgreSQL
+   - v2.0.18.49: Converted all numpy types to Python types before database insertion
+                 Error: "schema np does not exist" - PostgreSQL interpreted numpy.int64/float64 as schema
+                 Added explicit int(), float() conversions in INSERT statement
+
+2. CLEANUP - Removed unicode folder icons from output
+   - v2.0.18.50: Removed all 📁 emoji from print statements across all source files
+                 Updated segment_processor.py, experiment_query_pg.py, experiment_query.py, cli.py, mldp_shell.py
+                 User requested: "also, remove the unicode icons!"
+
+3. FEATURE - Replaced plotting with EXACT trainer plots
+   - v2.0.18.52: Copied exact plotting code from mpcctl_svm_trainer.py
+                 Output directory: svm_results/classifier_NNN/D000000/TADCN/AN/FSNNNN/linear_CVALUE/
+                 5 plots matching training exactly:
+                   1. confusion_matrix_13class_verify.png (Blues colormap, numeric labels)
+                   2. confusion_matrix_binary_verify.png (Oranges colormap, Arc/Non-arc labels)
+                   3. roc_curve_binary_verify.png (orange solid, navy dashed diagonal)
+                   4. pr_curve_binary_verify.png (blue solid)
+                   5. f1_threshold_curve_binary_verify.png (green line, red dot at best)
+                 User demanded: "I WANT THESE SAME EXACT PLOTS!"
+                 Removed all custom multiclass plotting code
+
+4. BUG FIX - Fixed probability validation using wrong label set
+   - v2.0.18.54: CRITICAL FIX - Used svm_model.classes_ instead of unique_label_ids
+                 Error: "Some probabilities are invalid: 0/33633" - ALL probabilities rejected
+                 Root cause: unique_label_ids was built from test data labels only
+                 But predict_proba() outputs probabilities for ALL trained classes (model.classes_)
+                 If test data has fewer classes than model, validation failed
+                 Model trained on 7 classes, but test might only have 5, causing length mismatch
+                 Fixed by using model_label_ids (from model.classes_) for validation
+                 Also fixed arc_label_indices to use model_label_ids for correct indexing
+                 User: "WHY ARE THERE NO ARC PROBABILITIES???"
+
+5. FIX - Changed output directory to verification_plots
+   - v2.0.18.55: Changed from svm_results/ to verification_plots/
+                 Output now: classifier_files/verification_plots/classifier_NNN/...
+                 User: "fuck you! you are using the wrong directory still!"
+                 User: "THESE NEED TO GO TO THE VERIFICATION_PLOTS/"
+
+6. CRITICAL FIX - LinearSVC has no predict_proba, use decision_function
+   - v2.0.18.56: ALL probabilities were None (33633/33633)
+                 Root cause: LinearSVC does NOT have predict_proba() method
+                 Worker checked hasattr(svm_model, 'predict_proba') → False → probabilities = None
+                 Fixed by using decision_function() and converting to probabilities via softmax
+                 decision_values → exp(values - max) → normalize to sum=1
+                 This matches what sklearn does internally for SVC with probability=True
+                 Now ROC/PR/F1 curves will work correctly
+
+7. FIX - Store actual feature_set_id instead of experiment_feature_set_id
+   - v2.0.18.57: Database was storing wrong feature set ID
+                 Column experiment_feature_set_id was storing efs (experiment feature set id)
+                 Should store actual_fs_id (actual feature set id from efs_to_fs_map)
+                 Changed line 19251: int(efs) → int(actual_fs_id)
+                 User: "experiment_feature_set_id field is storing the wrong value!"
+                 User: "this needs to be storing the actual feature set id value!"
+                 New design doesn't store individual predictions, only confusion matrix summaries
+                 Workers now always process all segments without checking for duplicates
+                 Eliminates database query per segment (33K queries avoided)
+                 Fixed transaction abort errors caused by failed segment_id query
+
+Changes in previous version (18.47):
+1. FEATURE - Store confusion matrix summaries for feature set comparison
+   - v2.0.18.47: Redesigned results table to store confusion matrix summaries (lines 18404-18454)
+                 New schema: Configuration (dec, dtype, amp, efs, C) + Metrics + Confusion Matrices
+                 Stores: multiclass/binary accuracy, confusion matrices as JSONB, label IDs/names
+                 Stores: ROC-AUC, PR-AUC, best F1 score, best F1 threshold
+                 Stores: plot directory and model path
+                 Added confusion matrix insertion after plotting (lines 19126-19193)
+                 Calculates multiclass and binary accuracy from confusion matrices
+                 Converts numpy arrays to JSON for storage
+                 Added indexes for searching by F1 score and accuracy (DESC)
+                 RESULT: 1 record per configuration instead of 33K+ individual predictions
+                 Perfect for comparing feature sets to find best performance
+
+Changes in previous version (18.46):
+1. MAJOR CHANGE - Store only confusion matrices, not individual predictions
+   - v2.0.18.46: Removed individual prediction storage to database (lines 18574, 18660-18670, 18684, 18902-18909)
+                 Initialize all_predictions = [] list to accumulate in memory
+                 Changed worker result handling to append to all_predictions list
+                 Removed INSERT INTO database statements (was storing 33K+ records)
+                 Removed database commit after each batch
+                 Changed plotting to read from all_predictions (in-memory) instead of database query
+                 RESULT: Drastically reduced database storage (0 records vs 33K+ per test)
+                 Plots are generated from in-memory data only
+                 Database table still exists but remains empty
+                 Only confusion matrix plots are persisted to disk
+
+Changes in previous version (18.45):
+1. FIX - Replaced F1 bar charts with F1 vs Threshold curve
+   - v2.0.18.45: Fixed F1 plot to show F1 score vs decision threshold curve (lines 19093-19140)
+                 Calculates F1 at 100 different thresholds (0.0 to 1.0)
+                 Finds and marks optimal threshold with maximum F1 score
+                 Shows F1 curve with optimal threshold as vertical line
+                 Prints best F1 score and optimal threshold to console
+                 Plot saved as: f1_vs_threshold.png
+                 Complete metrics suite: Confusion matrices, ROC-AUC, PR-AP, F1-Threshold
+
+Changes in previous version (18.43):
+1. FEATURE - Exclude specific arc labels from verification testing
+   - v2.0.18.43: Added exclusion of 6 arc labels from verification segments (lines 18315-18331)
+                 Excluded labels:
+                   24: restriking_arc
+                   28: restriking_arc_transient
+                   43: weak_arc_initiation
+                   44: parallel_motor_restriking_arc_transient
+                   45: parallel_motor_restriking_arc
+                   47: parallel_motor_weak_arc_initiation
+                 These segments will not appear in verification results
+                 Query: AND ds.segment_label_id NOT IN (24, 28, 43, 44, 45, 47)
+
+Changes in previous version (18.42):
+1. BUG FIX - Fix data type name lookup in verification worker
+   - v2.0.18.42: Fixed "Unknown data type: ADC4" error
+                 Worker was creating data_type_name = f"ADC{dtype}" where dtype is data_type_id (e.g., 4)
+                 But apply_data_type_conversion expects actual name like "ADC12"
+                 Added database lookup in batch creation to get data_type_name from ml_data_types_lut
+                 data_type_id 4 -> 'adc12' -> 'ADC12'
+                 data_type_id 6 -> 'adc6' -> 'ADC6'
+                 Passes data_type_name in batch_info to workers (lines 18559-18569, 18583)
+                 Worker extracts and uses data_type_name from batch_info (lines 1704, 1770)
+
+Changes in previous version (18.41):
+1. CRITICAL BUG FIX - Apply amplitude processing (zscore) in verification worker
+   - v2.0.18.41: Modified _process_verification_batch to apply zscore normalization
+                 Previous code saved raw decimated data as 2-column format
+                 _extract_feature_set_from_segment incorrectly treated this as zscore data
+                 Features extracted from raw data instead of normalized data
+                 This caused model to predict almost everything as one class (negative_load_transient)
+                 Now applies StandardScaler.fit_transform() to decimated data (lines 1774-1780)
+                 Saves multi-column format: [raw_V, raw_I, zscore_V, zscore_I]
+                 Feature extractor now correctly extracts from zscore columns
+                 Matches training data format where amplitude method 2 (zscore) was used
+
+Changes in previous version (18.28):
 1. BUG FIX - classifier-full-test column name error in data_segments query
    - v2.0.18.28: Fixed query to use experiment_file_id instead of file_id (line 18298)
                  data_segments table uses experiment_file_id, not file_id
@@ -867,7 +1001,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.40"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.60"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -987,6 +1121,7 @@ class MLDPCompleter(Completer):
             'clone-feature-set': ['--name'],
             'link-feature-set': ['--n-value', '--channel', '--priority', 'load_voltage', 'source_current'],
             'bulk-link-feature-sets': ['--sets', '--n-values'],
+            'link-feature-sets-range': ['--start', '--end', '--n-value'],
             'update-feature-link': ['--n-value', '--priority', '--active'],
             'show-feature-config': [],
             'update-selection-config': ['--max-files', '--seed', '--strategy', '--balanced', '10', '25', '50', '100'],
@@ -1068,7 +1203,7 @@ class MLDPCompleter(Completer):
                                                    '--amplitude-method', '--feature-set', '--help'],
 
             # Classifier Feature Construction (Phase 3)
-            'classifier-build-features': ['--force', '--batch-size', '--decimation-factor', '--data-type',
+            'classifier-build-features': ['--force', '--workers', '--batch-size', '--decimation-factor', '--data-type',
                                          '--amplitude-method', '--feature-set', '--help'],
 
             # Classifier SVM Training (Phase 4)
@@ -1689,6 +1824,7 @@ def _process_verification_batch(batch_info):
     exp_id = batch_info['exp_id']
     dec = batch_info['dec']
     dtype = batch_info['dtype']
+    data_type_name = batch_info['data_type_name']
     amp = batch_info['amp']
     efs = batch_info['efs']
     feature_set_id = batch_info['feature_set_id']
@@ -1725,20 +1861,6 @@ def _process_verification_batch(batch_info):
         temp_file_path = None
 
         try:
-            # Check if already exists (unless force=True)
-            if not force:
-                cursor.execute(f"""
-                    SELECT 1 FROM {results_table_name}
-                    WHERE segment_id = %s
-                      AND decimation_factor = %s
-                      AND data_type_id = %s
-                      AND amplitude_processing_method_id = %s
-                      AND experiment_feature_set_id = %s
-                      AND svm_c_parameter = %s
-                """, (segment_id, dec, dtype, amp, efs, c_val))
-                if cursor.fetchone():
-                    continue
-
             pred_start_time = time.time()
 
             # Get segment info from data_segments
@@ -1753,9 +1875,8 @@ def _process_verification_batch(batch_info):
 
             file_id, beginning_index, seg_length = seg_info
 
-            # Load ADC data (dtype specifies bit depth, but we load full ADC data)
-            # load_file_data expects "RAW" or any non-RAW string (loads from adc_data)
-            data_type_name = f"ADC{dtype}"
+            # Load ADC data from adc_data directory
+            # data_type_name is passed from batch_info (e.g., 'ADC12', 'ADC6')
             raw_data = segment_processor.load_file_data(file_id, "ADC")  # Load from adc_data directory
 
             if raw_data is None:
@@ -1771,13 +1892,25 @@ def _process_verification_batch(batch_info):
             # Apply decimation
             decimated_data = segment_processor.apply_decimation(converted_data, dec)
 
+            # Apply amplitude processing (zscore normalization for method 2)
+            # Import StandardScaler for zscore normalization
+            from sklearn.preprocessing import StandardScaler
+
+            # Apply zscore normalization (zero mean, unit variance per channel)
+            scaler = StandardScaler()
+            zscore_data = scaler.fit_transform(decimated_data.astype(np.float64))
+
+            # Create multi-column format: [raw_V, raw_I, zscore_V, zscore_I]
+            # This matches the format expected by _extract_feature_set_from_segment
+            multi_column_data = np.column_stack([decimated_data, zscore_data])
+
             # Create temporary file for feature extraction
             temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False)
             temp_file_path = temp_file.name
             temp_file.close()
 
-            # Save transformed segment to temp file
-            np.save(temp_file_path, decimated_data)
+            # Save multi-column segment to temp file (raw + amplitude processed)
+            np.save(temp_file_path, multi_column_data)
 
             # Get feature set configuration
             feature_set_config = feature_extractor._get_feature_set_with_overrides(
@@ -1823,8 +1956,21 @@ def _process_verification_batch(batch_info):
             # Run prediction
             feature_vector = segment_features.reshape(1, -1)
             predicted_label_id = svm_model.predict(feature_vector)[0]
-            probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
-            confidence = probabilities[predicted_label_id] if probabilities is not None else None
+
+            # LinearSVC doesn't have predict_proba, use decision_function instead
+            if hasattr(svm_model, 'predict_proba'):
+                probabilities = svm_model.predict_proba(feature_vector)[0]
+            elif hasattr(svm_model, 'decision_function'):
+                # Convert decision function to probabilities using softmax
+                decision_values = svm_model.decision_function(feature_vector)[0]
+                # Apply softmax to convert to probabilities
+                import numpy as np
+                exp_vals = np.exp(decision_values - np.max(decision_values))  # Numerical stability
+                probabilities = exp_vals / np.sum(exp_vals)
+            else:
+                probabilities = None
+
+            confidence = probabilities[list(svm_model.classes_).index(predicted_label_id)] if probabilities is not None else None
 
             prediction_time = time.time() - pred_start_time
 
@@ -1964,6 +2110,7 @@ class MLDPShell:
             'clone-feature-set': self.cmd_clone_feature_set,
             'link-feature-set': self.cmd_link_feature_set,
             'bulk-link-feature-sets': self.cmd_bulk_link_feature_sets,
+            'link-feature-sets-range': self.cmd_link_feature_sets_range,
             'update-feature-link': self.cmd_update_feature_link,
             'show-feature-config': self.cmd_show_feature_config,
             'update-selection-config': self.cmd_update_selection_config,
@@ -2547,7 +2694,7 @@ class MLDPShell:
                             labels = cursor.fetchall()
 
                             if labels:
-                                print("\n📁 FILE TRAINING DATA:")
+                                print("\nFILE TRAINING DATA:")
                                 print("=" * 60)
 
                                 # Get total counts using the correct column
@@ -2941,7 +3088,7 @@ class MLDPShell:
             
             print(f"\nConfiguration validated")
             print(f"Will create experiment: {config.experiment_name}")
-            print(f"📁 Target: {len(config.target_labels)} labels × {config.instances_per_label} instances")
+            print(f"Target: {len(config.target_labels)} labels × {config.instances_per_label} instances")
             print(f"🎲 Selection: {config.selection_strategy} (seed={config.random_seed})")
             
             if dry_run:
@@ -2965,7 +3112,7 @@ class MLDPShell:
                     print(f"  • Decimations: {len(info.get('decimations', []))}")
                     print(f"  • Distance Functions: {len(info.get('distance_functions', []))}")
                     
-                    print(f"\n📁 Next steps:")
+                    print(f"\nNext steps:")
                     print(f"  1. Run segment selection: experiment-select {experiment_id}")
                     print(f"  2. Generate segment files: experiment-generate-files {experiment_id}")
                     print(f"  3. Calculate distances: experiment-calculate-distances {experiment_id}")
@@ -5952,6 +6099,89 @@ SETTINGS:
         except Exception as e:
             print(f"Error linking feature sets: {e}")
 
+    def cmd_link_feature_sets_range(self, args):
+        """Link a range of feature sets to an experiment"""
+        if not args or len(args) < 2 or '--start' not in args or '--end' not in args:
+            print("Usage: link-feature-sets-range <experiment_id> --start <start_id> --end <end_id> [--n-value <n>]")
+            print("\nExample: link-feature-sets-range 42 --start 25 --end 584")
+            print("         link-feature-sets-range 42 --start 25 --end 584 --n-value 64")
+            return
+
+        try:
+            experiment_id = int(args[0])
+
+            start_idx = args.index('--start')
+            start_id = int(args[start_idx + 1])
+
+            end_idx = args.index('--end')
+            end_id = int(args[end_idx + 1])
+
+            if start_id > end_id:
+                print(f"Error: start_id ({start_id}) must be <= end_id ({end_id})")
+                return
+
+            n_value = None
+            if '--n-value' in args:
+                idx = args.index('--n-value')
+                if idx + 1 < len(args):
+                    val = args[idx + 1]
+                    n_value = None if val.lower() == 'null' else int(val)
+
+            import psycopg2
+            conn = psycopg2.connect(
+                host='localhost',
+                database='arc_detection',
+                user='kjensen'
+            )
+            cursor = conn.cursor()
+
+            # Get next experiment_feature_set_id
+            cursor.execute("SELECT COALESCE(MAX(experiment_feature_set_id), 0) + 1 FROM ml_experiments_feature_sets")
+            next_efs_id = cursor.fetchone()[0]
+
+            # Get next priority_order for this experiment
+            cursor.execute("""
+                SELECT COALESCE(MAX(priority_order), 0) + 1
+                FROM ml_experiments_feature_sets
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            next_priority = cursor.fetchone()[0]
+
+            success = 0
+            failed = 0
+            total = end_id - start_id + 1
+
+            print(f"Linking feature sets {start_id} through {end_id} to experiment {experiment_id}...")
+            print(f"Total to link: {total}")
+
+            for fs_id in range(start_id, end_id + 1):
+                try:
+                    cursor.execute("""
+                        INSERT INTO ml_experiments_feature_sets
+                        (experiment_feature_set_id, experiment_id, feature_set_id, n_value, priority_order, is_active, data_channel)
+                        VALUES (%s, %s, %s, %s, %s, true, 'load_voltage')
+                    """, (next_efs_id, experiment_id, fs_id, n_value, next_priority))
+
+                    next_efs_id += 1
+                    next_priority += 1
+                    success += 1
+                    conn.commit()
+                except psycopg2.IntegrityError:
+                    failed += 1
+                    conn.rollback()
+
+            print(f"\nLinked {success}/{total} feature sets to experiment {experiment_id}")
+            if failed > 0:
+                print(f"   {failed} feature sets were already linked or don't exist")
+
+            cursor.close()
+            conn.close()
+
+        except ValueError:
+            print("Invalid experiment ID or feature set IDs")
+        except Exception as e:
+            print(f"Error linking feature sets: {e}")
+
     def cmd_update_feature_link(self, args):
         """Update properties of an experiment-feature set link"""
         if not args or len(args) < 2:
@@ -7377,7 +7607,7 @@ SETTINGS:
 
             all_tables = [row[0] for row in cursor.fetchall()]
 
-            print(f"📁 Found {len(all_tables)} total distance tables in database")
+            print(f"Found {len(all_tables)} total distance tables in database")
 
             # Find unconfigured tables (case-insensitive comparison)
             unconfigured_tables = [t for t in all_tables if t.lower() not in configured_tables_lower]
@@ -7505,7 +7735,7 @@ SETTINGS:
             feature_path = base_path / 'feature_files'
             using_custom = False
 
-        print(f"\n📁 Data paths for experiment {experiment_id}:")
+        print(f"\nData paths for experiment {experiment_id}:")
         if using_custom:
             print(f"   Using CUSTOM paths from database")
         else:
@@ -7718,7 +7948,7 @@ SETTINGS:
             size_mb = 0
             size_gb = 0
 
-        print(f"\n📁 Segment files for experiment {experiment_id}:")
+        print(f"\nSegment files for experiment {experiment_id}:")
         print(f"   Path: {segment_path}")
         print(f"   Files: {file_count:,}")
         if npy_count > 0:
@@ -7930,7 +8160,7 @@ SETTINGS:
         size_mb = total_size / (1024 * 1024)
         size_gb = size_mb / 1024
 
-        print(f"\n📁 Feature files for experiment {experiment_id}:")
+        print(f"\nFeature files for experiment {experiment_id}:")
         print(f"   Path: {feature_path}")
         print(f"   Files on disk: {file_count:,}")
         print(f"   Database records: {db_count:,}")
@@ -9149,7 +9379,7 @@ SETTINGS:
             else:
                 print(f"   Feature sets: All configured sets")
 
-            print(f"\n📁 Input:")
+            print(f"\nInput:")
             print(f"   Total pairs: {total_pairs:,}")
             print(f"   Feature files: {feature_file_count:,}")
 
@@ -9708,7 +9938,7 @@ SETTINGS:
             else:
                 print(f"   Distance functions: All configured")
 
-            print(f"\n📁 Input (.processed directory):")
+            print(f"\nInput (.processed directory):")
             if distance_file_counts:
                 for func_name, count in sorted(distance_file_counts.items()):
                     print(f"   {func_name}: {count:,} files")
@@ -10517,9 +10747,9 @@ SETTINGS:
             print("  3. generate-training-data - Create training data tables (DB)")
             print("  4. generate-segment-fileset - Create physical segment files (Disk)")
             print("  5. generate-feature-fileset - Extract features from segments (Disk)")
-            print("\n📁 Input Structure:")
+            print("\nInput Structure:")
             print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
-            print("\n📁 Output Structure:")
+            print("\nOutput Structure:")
             print("  experiment{NNN}/feature_files/S{size}/T{type}/D{decimation}/*_FS{id}[_N_{n}].npy")
             print("\nProcessing Details:")
             print("  - Processes ALL decimation levels (S000512 to S524288)")
@@ -16291,16 +16521,17 @@ SETTINGS:
 
         Options:
             --force                   Overwrite existing feature vectors
-            --batch-size <n>          Segments per batch (default: 100)
+            --workers <n>             Number of parallel workers (uses mpcctl, default: 1)
+            --batch-size <n>          Segments per batch (default: 100, single-threaded only)
             --decimation-factor <n>   Process only this decimation factor
             --data-type <id>          Process only this data type
             --amplitude-method <id>   Process only this amplitude method
             --feature-set <id>        Process only this feature set
 
         Examples:
-            classifier-build-features
+            classifier-build-features --workers 20
             classifier-build-features --decimation-factor 0 --data-type 4
-            classifier-build-features --force
+            classifier-build-features --force --workers 20
         """
         if not self.db_conn:
             print("[ERROR] Not connected to database. Use 'connect' first.")
@@ -16316,6 +16547,7 @@ SETTINGS:
 
         # Parse arguments
         force = False
+        workers = 1
         batch_size = 100
         filter_dec = None
         filter_dtype = None
@@ -16327,6 +16559,13 @@ SETTINGS:
             if args[i] == '--force':
                 force = True
                 i += 1
+            elif args[i] == '--workers':
+                if i + 1 < len(args):
+                    workers = int(args[i + 1])
+                    i += 2
+                else:
+                    print("[ERROR] --workers requires a number")
+                    return
             elif args[i] == '--batch-size':
                 if i + 1 < len(args):
                     batch_size = int(args[i + 1])
@@ -16365,6 +16604,71 @@ SETTINGS:
             else:
                 i += 1
 
+        # USE MPCCTL for parallel processing if workers > 1
+        if workers > 1:
+            import subprocess
+            from pathlib import Path
+
+            exp_id = self.current_experiment
+            cls_id = self.current_classifier_id
+
+            # Get config_id
+            cursor = self.db_conn.cursor()
+            cursor.execute("""
+                SELECT global_classifier_id
+                FROM ml_experiment_classifiers
+                WHERE experiment_id = %s AND classifier_id = %s
+            """, (exp_id, cls_id))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[ERROR] Classifier {cls_id} not found for experiment {exp_id}")
+                return
+            global_classifier_id = result[0]
+
+            cursor.execute("""
+                SELECT config_id
+                FROM ml_classifier_configs
+                WHERE global_classifier_id = %s AND is_active = TRUE
+            """, (global_classifier_id,))
+            config_row = cursor.fetchone()
+            if not config_row:
+                print("[ERROR] No active configuration found")
+                return
+            config_id = config_row[0]
+
+            # Create .mpcctl directory
+            mpcctl_dir = Path(f"/tmp/mldp_svm_features_exp{exp_id:03d}_cls{cls_id:03d}")
+            mpcctl_dir.mkdir(parents=True, exist_ok=True)
+
+            print(f"\n[INFO] Building SVM feature vectors for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Using {workers} parallel workers via mpcctl...")
+            print(f"[INFO] MPCCTL directory: {mpcctl_dir}\n")
+
+            # Call mpcctl module
+            mpcctl_script = Path(__file__).parent / "mpcctl_svm_feature_builder.py"
+
+            cmd = [
+                "python3",
+                str(mpcctl_script),
+                "--experiment-id", str(exp_id),
+                "--classifier-id", str(cls_id),
+                "--config-id", str(config_id),
+                "--workers", str(workers),
+                "--mpcctl-dir", str(mpcctl_dir)
+            ]
+
+            try:
+                subprocess.run(cmd, check=True)
+                print(f"\n[SUCCESS] SVM feature building completed")
+                return
+            except subprocess.CalledProcessError as e:
+                print(f"\n[ERROR] MPCCTL process failed: {e}")
+                return
+            except Exception as e:
+                print(f"\n[ERROR] Failed to launch mpcctl: {e}")
+                return
+
+        # SINGLE-THREADED mode (original implementation)
         try:
             import numpy as np
             from sklearn.metrics.pairwise import pairwise_distances
@@ -16375,6 +16679,7 @@ SETTINGS:
             cls_id = self.current_classifier_id
 
             print(f"\n[INFO] Building SVM feature vectors for Experiment {exp_id}, Classifier {cls_id}")
+            print(f"[INFO] Single-threaded mode (use --workers N for parallel processing)")
             print(f"[INFO] This process may take several hours depending on data size...\n")
 
             # Get global_classifier_id
@@ -18277,6 +18582,11 @@ SETTINGS:
 
             # Query all segments NOT in training data, excluding trash/voltage_only/other
             print(f"[INFO] Querying verification segments...")
+            # Exclude specific labels from verification:
+            # 24=restriking_arc, 28=restriking_arc_transient, 43=weak_arc_initiation,
+            # 44=parallel_motor_restriking_arc_transient, 45=parallel_motor_restriking_arc,
+            # 47=parallel_motor_weak_arc_initiation
+            excluded_labels = [24, 28, 43, 44, 45, 47]
             cursor.execute(f"""
                 SELECT DISTINCT ds.segment_id, ds.segment_label_id, el.experiment_label
                 FROM data_segments ds
@@ -18288,6 +18598,7 @@ SETTINGS:
                       SELECT segment_id
                       FROM experiment_{exp_id:03d}_segment_training_data
                   )
+                  AND ds.segment_label_id NOT IN ({','.join(map(str, excluded_labels))})
                   AND el.experiment_label NOT ILIKE '%%trash%%'
                   AND el.experiment_label NOT ILIKE '%%voltage_only%%'
                   AND el.experiment_label NOT ILIKE '%%voltage only%%'
@@ -18326,31 +18637,39 @@ SETTINGS:
                 create_sql = f"""
                 CREATE TABLE {results_table_name} (
                     result_id BIGSERIAL PRIMARY KEY,
-                    segment_id INTEGER NOT NULL,
-                    actual_label_id INTEGER NOT NULL,
-                    actual_label_name TEXT,
                     decimation_factor INTEGER NOT NULL,
                     data_type_id INTEGER NOT NULL,
                     amplitude_processing_method_id INTEGER NOT NULL,
                     experiment_feature_set_id BIGINT NOT NULL,
                     svm_c_parameter DOUBLE PRECISION NOT NULL,
-                    predicted_label_id INTEGER,
-                    predicted_label_name TEXT,
-                    confidence DOUBLE PRECISION,
-                    prediction_probabilities DOUBLE PRECISION[],
-                    feature_file_path TEXT,
+
+                    -- Summary metrics
+                    total_predictions INTEGER NOT NULL,
+                    total_errors INTEGER NOT NULL,
+                    multiclass_accuracy DOUBLE PRECISION,
+                    binary_accuracy DOUBLE PRECISION,
+
+                    -- Confusion matrices (stored as JSON)
+                    confusion_matrix_multiclass JSONB,
+                    confusion_matrix_binary JSONB,
+                    label_ids INTEGER[],
+                    label_names TEXT[],
+
+                    -- ROC and PR metrics
+                    roc_auc DOUBLE PRECISION,
+                    pr_auc DOUBLE PRECISION,
+                    best_f1_score DOUBLE PRECISION,
+                    best_f1_threshold DOUBLE PRECISION,
+
+                    -- Paths
+                    plot_directory TEXT,
                     model_file_path TEXT,
-                    prediction_time_seconds DOUBLE PRECISION,
+
                     created_at TIMESTAMP DEFAULT NOW(),
 
-                    UNIQUE (segment_id, decimation_factor, data_type_id,
+                    UNIQUE (decimation_factor, data_type_id,
                             amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter),
 
-                    FOREIGN KEY (segment_id)
-                        REFERENCES data_segments(segment_id)
-                        ON DELETE CASCADE,
-                    FOREIGN KEY (actual_label_id)
-                        REFERENCES segment_labels(label_id),
                     FOREIGN KEY (data_type_id)
                         REFERENCES ml_data_types_lut(data_type_id),
                     FOREIGN KEY (amplitude_processing_method_id)
@@ -18360,12 +18679,12 @@ SETTINGS:
                         ON DELETE CASCADE
                 );
 
-                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_segment
-                    ON {results_table_name}(segment_id);
-                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_actual
-                    ON {results_table_name}(actual_label_id);
-                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_predicted
-                    ON {results_table_name}(predicted_label_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_config
+                    ON {results_table_name}(decimation_factor, data_type_id, amplitude_processing_method_id, experiment_feature_set_id);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_f1
+                    ON {results_table_name}(best_f1_score DESC);
+                CREATE INDEX idx_exp{exp_id:03d}_cls{cls_id:03d}_full_verif_accuracy
+                    ON {results_table_name}(binary_accuracy DESC);
                 """
 
                 cursor.execute(create_sql)
@@ -18507,6 +18826,7 @@ SETTINGS:
                                 # Process each verification segment
                                 segments_processed = 0
                                 predictions_made = 0
+                                all_predictions = []  # Accumulate predictions in memory
 
                                 # Use parallel processing if workers > 1
                                 if workers > 1:
@@ -18532,6 +18852,18 @@ SETTINGS:
                                         continue
                                     feature_set_id = fs_row[0]
 
+                                    # Get data type name from database
+                                    cursor.execute("""
+                                        SELECT data_type_name
+                                        FROM ml_data_types_lut
+                                        WHERE data_type_id = %s
+                                    """, (dtype,))
+                                    dtype_row = cursor.fetchone()
+                                    if not dtype_row:
+                                        print(f"[ERROR] Data type {dtype} not found")
+                                        continue
+                                    data_type_name = dtype_row[0].upper()  # Convert to uppercase (e.g., 'adc12' -> 'ADC12')
+
                                     # Split segments into batches for workers
                                     batch_size_per_worker = max(1, len(verification_segments) // workers)
                                     batches = []
@@ -18544,6 +18876,7 @@ SETTINGS:
                                             'cls_id': cls_id,
                                             'dec': dec,
                                             'dtype': dtype,
+                                            'data_type_name': data_type_name,
                                             'amp': amp,
                                             'efs': efs,
                                             'feature_set_id': feature_set_id,
@@ -18580,34 +18913,16 @@ SETTINGS:
 
                                                 # Insert results into database
                                                 if batch_results:
-                                                    # Create feature directories
-                                                    feature_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_features"
-                                                    feature_dir = os.path.join(feature_base_dir, classifier_dir, dec_dir, dtype_name, amp_name, fs_dir)
-                                                    os.makedirs(feature_dir, exist_ok=True)
-
+                                                    # Accumulate predictions in memory (don't insert to DB)
+                                                    # Store only: (actual_label_id, predicted_label_id, probabilities)
                                                     for result_tuple in batch_results:
-                                                        cursor.execute(f"""
-                                                            INSERT INTO {results_table_name} (
-                                                                segment_id, actual_label_id, actual_label_name,
-                                                                decimation_factor, data_type_id, amplitude_processing_method_id,
-                                                                experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
-                                                                confidence, prediction_probabilities, feature_file_path,
-                                                                model_file_path, prediction_time_seconds
-                                                            ) VALUES (
-                                                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                                                            )
-                                                            ON CONFLICT (segment_id, decimation_factor, data_type_id,
-                                                                         amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
-                                                            DO UPDATE SET
-                                                                predicted_label_id = EXCLUDED.predicted_label_id,
-                                                                predicted_label_name = EXCLUDED.predicted_label_name,
-                                                                confidence = EXCLUDED.confidence,
-                                                                prediction_probabilities = EXCLUDED.prediction_probabilities,
-                                                                feature_file_path = EXCLUDED.feature_file_path,
-                                                                model_file_path = EXCLUDED.model_file_path,
-                                                                prediction_time_seconds = EXCLUDED.prediction_time_seconds,
-                                                                created_at = NOW()
-                                                        """, result_tuple)
+                                                        seg_id, actual_label_id, actual_label_name, dec_val, dtype_val, amp_val, efs_val, c_val_tuple, predicted_label_id, predicted_label_name, confidence, probabilities, feature_path, model_path_tuple, pred_time = result_tuple
+
+                                                        all_predictions.append({
+                                                            'actual_label_id': actual_label_id,
+                                                            'predicted_label_id': predicted_label_id,
+                                                            'probabilities': probabilities
+                                                        })
 
                                                     predictions_made += len(batch_results)
                                                     total_predictions += len(batch_results)
@@ -18620,9 +18935,6 @@ SETTINGS:
                                                 rate = segments_processed / elapsed if elapsed > 0 else 0
                                                 pct = (segments_processed / total_verification * 100) if total_verification > 0 else 0
                                                 print(f"  Progress: {segments_processed}/{total_verification} ({pct:.1f}%) - {rate:.2f} seg/sec - Predictions: {predictions_made}", end='\r')
-
-                                                # Commit batch
-                                                self.db_conn.commit()
 
                                             except Exception as e:
                                                 print(f"\n[ERROR] Batch {batch_idx} failed: {e}")
@@ -18842,178 +19154,286 @@ SETTINGS:
                                     import seaborn as sns
                                     from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score
 
-                                    # Query all predictions for this configuration
-                                    cursor.execute(f"""
-                                        SELECT
-                                            actual_label_id,
-                                            actual_label_name,
-                                            predicted_label_id,
-                                            predicted_label_name,
-                                            prediction_probabilities
-                                        FROM {results_table_name}
-                                        WHERE decimation_factor = %s
-                                          AND data_type_id = %s
-                                          AND amplitude_processing_method_id = %s
-                                          AND experiment_feature_set_id = %s
-                                          AND svm_c_parameter = %s
-                                    """, (dec, dtype, amp, efs, c_val))
-
-                                    results = cursor.fetchall()
-
-                                    if len(results) == 0:
-                                        print(f"[WARNING] No results found for plotting")
+                                    # Use predictions from memory (not database)
+                                    if len(all_predictions) == 0:
+                                        print(f"[WARNING] No predictions found for plotting")
                                     else:
-                                        # Extract data
-                                        actual_label_ids = [r[0] for r in results]
-                                        actual_label_names = [r[1] for r in results]
-                                        predicted_label_ids = [r[2] for r in results]
-                                        predicted_label_names = [r[3] for r in results]
-                                        prediction_probs = [r[4] for r in results]
+                                        # Extract data from in-memory predictions
+                                        actual_label_ids = [p['actual_label_id'] for p in all_predictions]
+                                        predicted_label_ids = [p['predicted_label_id'] for p in all_predictions]
+                                        prediction_probs = [p['probabilities'] for p in all_predictions]
 
-                                        # Get unique labels (ordered by label_id)
+                                        # Get model classes (ALL classes the model was trained on)
+                                        # This is critical - probabilities from predict_proba correspond to model.classes_, not just labels in test data
+                                        model_label_ids = svm_model.classes_.tolist()
+                                        model_label_names = [label_map.get(int(lid), f"Unknown_{lid}") for lid in model_label_ids]
+
+                                        print(f"[DEBUG] Model has {len(model_label_ids)} classes: {model_label_ids}")
+                                        print(f"[DEBUG] Total predictions: {len(prediction_probs)}")
+                                        print(f"[DEBUG] First 5 probs: {prediction_probs[:5]}")
+                                        none_count = sum(1 for p in prediction_probs if p is None)
+                                        print(f"[DEBUG] None probabilities: {none_count}/{len(prediction_probs)}")
+
+                                        # Get unique labels that appear in test data (for confusion matrix)
                                         unique_label_ids = sorted(list(set(actual_label_ids + predicted_label_ids)))
                                         unique_label_names = [label_map.get(lid, f"Unknown_{lid}") for lid in unique_label_ids]
 
-                                        # Create label category mapping (arc vs non-arc)
-                                        cursor.execute("""
-                                            SELECT label_id, label_name, category
-                                            FROM segment_labels
-                                            WHERE label_id = ANY(%s)
-                                            ORDER BY label_id
-                                        """, (unique_label_ids,))
-                                        label_category_map = {row[0]: row[2] for row in cursor.fetchall()}
+                                        # Define arc labels explicitly by name
+                                        arc_label_names = [
+                                            'arc_continuous',
+                                            'arc_initiation',
+                                            'parallel_motor_arc_continuous',
+                                            'parallel_motor_arc_transient'
+                                        ]
+
+                                        # Identify which label IDs are arc labels (use model classes, not just test data)
+                                        arc_label_ids = [lid for lid in model_label_ids if label_map.get(int(lid)) in arc_label_names]
 
                                         # Map to binary (arc=1, non-arc=0)
-                                        actual_binary = [1 if label_category_map.get(lid, 'non-arc') == 'arc' else 0
-                                                        for lid in actual_label_ids]
-                                        predicted_binary = [1 if label_category_map.get(lid, 'non-arc') == 'arc' else 0
-                                                           for lid in predicted_label_ids]
+                                        actual_binary = [1 if lid in arc_label_ids else 0 for lid in actual_label_ids]
+                                        predicted_binary = [1 if lid in arc_label_ids else 0 for lid in predicted_label_ids]
 
-                                        # Create output directory
-                                        plot_base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files/full_verification_plots"
-                                        plot_dir = os.path.join(
-                                            plot_base_dir,
-                                            f"classifier_{cls_id:03d}",
-                                            f"D{dec:06d}",
-                                            f"TADC{dtype}",
-                                            f"A{amp}",
-                                            f"FS{actual_fs_id:04d}",
-                                            f"C{c_val}"
-                                        )
+                                        # Create output directory for verification plots
+                                        base_dir = f"/Volumes/ArcData/V3_database/experiment{exp_id:03d}/classifier_files"
+                                        viz_dir = f"{base_dir}/verification_plots/classifier_{cls_id:03d}/D{dec:06d}/TADC{dtype}/A{amp}/FS{actual_fs_id:04d}"
+                                        plot_dir = f"{viz_dir}/linear_C{c_val}"
                                         os.makedirs(plot_dir, exist_ok=True)
 
-                                        # 1. Multi-class confusion matrix
+                                        # 1. 13-Class Confusion Matrix
                                         try:
-                                            cm_multiclass = confusion_matrix(actual_label_ids, predicted_label_ids, labels=unique_label_ids)
+                                            cm_multiclass = confusion_matrix(actual_label_ids, predicted_label_ids)
 
-                                            plt.figure(figsize=(max(10, len(unique_label_ids)), max(8, len(unique_label_ids) * 0.8)))
-                                            sns.heatmap(cm_multiclass, annot=True, fmt='d', cmap='Blues',
-                                                       xticklabels=unique_label_names, yticklabels=unique_label_names)
-                                            plt.title(f'Multi-class Confusion Matrix\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
-                                            plt.ylabel('Actual Label')
+                                            plt.figure(figsize=(12, 10))
+                                            sns.heatmap(cm_multiclass, annot=True, fmt='d', cmap='Blues')
+                                            plt.title('13-Class Confusion Matrix (Verify)')
+                                            plt.ylabel('True Label')
                                             plt.xlabel('Predicted Label')
-                                            plt.xticks(rotation=45, ha='right')
-                                            plt.yticks(rotation=0)
-                                            plt.tight_layout()
 
-                                            cm_multiclass_path = os.path.join(plot_dir, 'confusion_matrix_multiclass.png')
+                                            cm_multiclass_path = os.path.join(plot_dir, 'confusion_matrix_13class_verify.png')
                                             plt.savefig(cm_multiclass_path, dpi=150, bbox_inches='tight')
                                             plt.close()
                                             print(f"[SUCCESS] Saved: {cm_multiclass_path}")
                                         except Exception as e:
-                                            print(f"[WARNING] Failed to create multi-class confusion matrix: {e}")
+                                            print(f"[WARNING] Failed to create 13-class confusion matrix: {e}")
 
-                                        # 2. Binary confusion matrix (arc vs non-arc)
+                                        # 2. Binary Confusion Matrix
                                         try:
-                                            cm_binary = confusion_matrix(actual_binary, predicted_binary, labels=[0, 1])
+                                            cm_binary = confusion_matrix(actual_binary, predicted_binary)
 
-                                            plt.figure(figsize=(8, 6))
-                                            sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Blues',
-                                                       xticklabels=['Non-Arc', 'Arc'], yticklabels=['Non-Arc', 'Arc'])
-                                            plt.title(f'Binary Confusion Matrix (Arc vs Non-Arc)\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
-                                            plt.ylabel('Actual Category')
-                                            plt.xlabel('Predicted Category')
-                                            plt.tight_layout()
+                                            plt.figure(figsize=(6, 5))
+                                            sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Oranges',
+                                                       xticklabels=['Non-arc', 'Arc'], yticklabels=['Non-arc', 'Arc'])
+                                            plt.title('Binary Arc Detection (Verify)')
+                                            plt.ylabel('True Label')
+                                            plt.xlabel('Predicted Label')
 
-                                            cm_binary_path = os.path.join(plot_dir, 'confusion_matrix_binary.png')
+                                            cm_binary_path = os.path.join(plot_dir, 'confusion_matrix_binary_verify.png')
                                             plt.savefig(cm_binary_path, dpi=150, bbox_inches='tight')
                                             plt.close()
                                             print(f"[SUCCESS] Saved: {cm_binary_path}")
                                         except Exception as e:
                                             print(f"[WARNING] Failed to create binary confusion matrix: {e}")
 
+                                        # Calculate arc probabilities once for all binary curves
+                                        # Use model_label_ids for indexing - probabilities correspond to model.classes_, not test data labels
+                                        arc_label_indices = [i for i, lid in enumerate(model_label_ids) if lid in arc_label_ids]
+                                        y_proba_arc = None
+
+                                        if len(arc_label_indices) > 0 and len(prediction_probs) > 0:
+                                            # Convert to numpy array and ensure proper shape
+                                            # Filter out any None values and ensure all probs match model's output size
+                                            valid_probs = [p for p in prediction_probs if p is not None and len(p) == len(model_label_ids)]
+
+                                            if len(valid_probs) == len(prediction_probs):
+                                                prob_matrix = np.array(valid_probs)
+
+                                                # Verify shape
+                                                if prob_matrix.ndim == 2 and prob_matrix.shape[1] == len(model_label_ids):
+                                                    # Sum probabilities of all arc classes
+                                                    y_proba_arc = np.sum(prob_matrix[:, arc_label_indices], axis=1)
+                                                else:
+                                                    print(f"[WARNING] Probability matrix shape issue: {prob_matrix.shape}, expected {len(model_label_ids)} columns")
+                                            else:
+                                                print(f"[WARNING] Some probabilities are invalid: {len(valid_probs)}/{len(prediction_probs)}")
+
                                         # 3. ROC curve for binary classification
                                         try:
-                                            # Get arc probabilities (sum of all arc class probabilities)
-                                            arc_label_ids = [lid for lid, cat in label_category_map.items() if cat == 'arc']
-
-                                            if len(arc_label_ids) > 0 and any(p is not None for p in prediction_probs):
-                                                # Calculate arc probability for each prediction
-                                                arc_probs = []
-                                                for probs, lid_list in zip(prediction_probs, [unique_label_ids] * len(prediction_probs)):
-                                                    if probs is not None and len(probs) == len(unique_label_ids):
-                                                        # Sum probabilities of all arc classes
-                                                        arc_prob = sum(probs[i] for i, lid in enumerate(unique_label_ids)
-                                                                      if lid in arc_label_ids)
-                                                        arc_probs.append(arc_prob)
-                                                    else:
-                                                        arc_probs.append(0.0)
-
+                                            if y_proba_arc is not None:
                                                 # Compute ROC curve
-                                                fpr, tpr, thresholds = roc_curve(actual_binary, arc_probs)
-                                                roc_auc = auc(fpr, tpr)
+                                                if len(np.unique(actual_binary)) > 1:  # Need both classes present
+                                                    fpr, tpr, _ = roc_curve(actual_binary, y_proba_arc)
+                                                    roc_auc_val = auc(fpr, tpr)
 
-                                                plt.figure(figsize=(8, 6))
-                                                plt.plot(fpr, tpr, color='darkorange', lw=2,
-                                                        label=f'ROC curve (AUC = {roc_auc:.3f})')
-                                                plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random')
-                                                plt.xlim([0.0, 1.0])
-                                                plt.ylim([0.0, 1.05])
-                                                plt.xlabel('False Positive Rate')
-                                                plt.ylabel('True Positive Rate')
-                                                plt.title(f'ROC Curve - Binary Arc Detection\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
-                                                plt.legend(loc="lower right")
-                                                plt.grid(alpha=0.3)
-                                                plt.tight_layout()
+                                                    plt.figure(figsize=(8, 6))
+                                                    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc_val:.3f})')
+                                                    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Classifier')
+                                                    plt.xlim([0.0, 1.0])
+                                                    plt.ylim([0.0, 1.05])
+                                                    plt.xlabel('False Positive Rate')
+                                                    plt.ylabel('True Positive Rate')
+                                                    plt.title('ROC Curve - Arc Detection (Verify)')
+                                                    plt.legend(loc="lower right")
+                                                    plt.grid(True, alpha=0.3)
 
-                                                roc_path = os.path.join(plot_dir, 'roc_curve_binary.png')
-                                                plt.savefig(roc_path, dpi=150, bbox_inches='tight')
-                                                plt.close()
-                                                print(f"[SUCCESS] Saved: {roc_path}")
+                                                    roc_path = os.path.join(plot_dir, 'roc_curve_binary_verify.png')
+                                                    plt.savefig(roc_path, dpi=150, bbox_inches='tight')
+                                                    plt.close()
+                                                    print(f"[SUCCESS] Saved: {roc_path}")
+                                                else:
+                                                    print(f"[WARNING] Need both arc and non-arc classes for ROC curve")
                                             else:
-                                                print(f"[WARNING] No arc labels or probabilities for ROC curve")
+                                                print(f"[WARNING] No arc probabilities for ROC curve")
                                         except Exception as e:
                                             print(f"[WARNING] Failed to create ROC curve: {e}")
 
                                         # 4. Precision-Recall curve for binary classification
                                         try:
-                                            if len(arc_label_ids) > 0 and any(p is not None for p in prediction_probs):
-                                                # Use same arc_probs calculated above
-                                                precision, recall, thresholds_pr = precision_recall_curve(actual_binary, arc_probs)
-                                                avg_precision = average_precision_score(actual_binary, arc_probs)
+                                            if y_proba_arc is not None:
+                                                # Use same y_proba_arc from above
+                                                precision, recall, _ = precision_recall_curve(actual_binary, y_proba_arc)
+                                                pr_auc_val = auc(recall, precision)
 
                                                 plt.figure(figsize=(8, 6))
-                                                plt.plot(recall, precision, color='darkorange', lw=2,
-                                                        label=f'PR curve (AP = {avg_precision:.3f})')
+                                                plt.plot(recall, precision, color='blue', lw=2, label=f'PR curve (AUC = {pr_auc_val:.3f})')
                                                 plt.xlim([0.0, 1.0])
                                                 plt.ylim([0.0, 1.05])
                                                 plt.xlabel('Recall')
                                                 plt.ylabel('Precision')
-                                                plt.title(f'Precision-Recall Curve - Binary Arc Detection\nDec={dec}, DType={dtype}, Amp={amp}, FS={actual_fs_id}, C={c_val}')
+                                                plt.title('Precision-Recall Curve - Arc Detection (Verify)')
                                                 plt.legend(loc="lower left")
-                                                plt.grid(alpha=0.3)
-                                                plt.tight_layout()
+                                                plt.grid(True, alpha=0.3)
 
-                                                pr_path = os.path.join(plot_dir, 'pr_curve_binary.png')
+                                                pr_path = os.path.join(plot_dir, 'pr_curve_binary_verify.png')
                                                 plt.savefig(pr_path, dpi=150, bbox_inches='tight')
                                                 plt.close()
                                                 print(f"[SUCCESS] Saved: {pr_path}")
                                             else:
-                                                print(f"[WARNING] No arc labels or probabilities for PR curve")
+                                                print(f"[WARNING] No arc probabilities for PR curve")
                                         except Exception as e:
                                             print(f"[WARNING] Failed to create PR curve: {e}")
 
+                                        # 5. F1 Score vs Threshold curve
+                                        try:
+                                            if y_proba_arc is not None:
+                                                from sklearn.metrics import precision_recall_fscore_support
+
+                                                # Calculate F1 scores at different thresholds
+                                                thresholds = np.linspace(0, 1, 101)  # 101 points from 0.0 to 1.0
+                                                f1_scores = []
+
+                                                for threshold in thresholds:
+                                                    y_pred_threshold = (y_proba_arc >= threshold).astype(int)
+                                                    # Calculate F1 for this threshold
+                                                    if len(np.unique(y_pred_threshold)) > 1:  # At least 2 classes predicted
+                                                        prec, rec, f1, _ = precision_recall_fscore_support(
+                                                            actual_binary, y_pred_threshold, average='binary', zero_division=0
+                                                        )
+                                                        f1_scores.append(f1)
+                                                    else:
+                                                        f1_scores.append(0.0)
+
+                                                f1_scores = np.array(f1_scores)
+                                                best_threshold_idx = np.argmax(f1_scores)
+                                                best_threshold = thresholds[best_threshold_idx]
+                                                best_f1 = f1_scores[best_threshold_idx]
+
+                                                plt.figure(figsize=(8, 6))
+                                                plt.plot(thresholds, f1_scores, color='green', lw=2, label=f'F1 Score')
+                                                plt.scatter([best_threshold], [best_f1], color='red', s=100, zorder=5,
+                                                           label=f'Best: F1={best_f1:.3f} @ threshold={best_threshold:.3f}')
+                                                plt.xlim([0.0, 1.0])
+                                                plt.ylim([0.0, 1.05])
+                                                plt.xlabel('Classification Threshold')
+                                                plt.ylabel('F1 Score')
+                                                plt.title('F1 Score vs Threshold - Arc Detection (Verify)')
+                                                plt.legend(loc="best")
+                                                plt.grid(True, alpha=0.3)
+
+                                                f1_path = os.path.join(plot_dir, 'f1_threshold_curve_binary_verify.png')
+                                                plt.savefig(f1_path, dpi=150, bbox_inches='tight')
+                                                plt.close()
+                                                print(f"[SUCCESS] Saved: {f1_path}")
+                                            else:
+                                                print(f"[WARNING] No arc probabilities for F1 curve")
+
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to create F1 vs threshold curve: {e}")
+                                            import traceback
+                                            traceback.print_exc()
+
                                         print(f"[INFO] Plotting complete for C={c_val}")
+
+                                        # Store confusion matrix summary in database
+                                        try:
+                                            import json
+
+                                            # Calculate metrics (convert numpy types to Python types)
+                                            multiclass_correct = int(cm_multiclass.diagonal().sum())
+                                            multiclass_total = int(cm_multiclass.sum())
+                                            multiclass_acc = float(multiclass_correct / multiclass_total) if multiclass_total > 0 else 0.0
+
+                                            binary_correct = int(cm_binary.diagonal().sum())
+                                            binary_total = int(cm_binary.sum())
+                                            binary_acc = float(binary_correct / binary_total) if binary_total > 0 else 0.0
+
+                                            # Convert confusion matrices to JSON
+                                            cm_multiclass_json = json.dumps(cm_multiclass.tolist())
+                                            cm_binary_json = json.dumps(cm_binary.tolist())
+
+                                            # Convert label IDs to Python list of ints
+                                            label_ids_list = [int(lid) for lid in unique_label_ids]
+
+                                            # Insert summary into database
+                                            cursor.execute(f"""
+                                                INSERT INTO {results_table_name} (
+                                                    decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                    experiment_feature_set_id, svm_c_parameter,
+                                                    total_predictions, total_errors,
+                                                    multiclass_accuracy, binary_accuracy,
+                                                    confusion_matrix_multiclass, confusion_matrix_binary,
+                                                    label_ids, label_names,
+                                                    roc_auc, pr_auc, best_f1_score, best_f1_threshold,
+                                                    plot_directory, model_file_path
+                                                ) VALUES (
+                                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                                )
+                                                ON CONFLICT (decimation_factor, data_type_id, amplitude_processing_method_id,
+                                                             experiment_feature_set_id, svm_c_parameter)
+                                                DO UPDATE SET
+                                                    total_predictions = EXCLUDED.total_predictions,
+                                                    total_errors = EXCLUDED.total_errors,
+                                                    multiclass_accuracy = EXCLUDED.multiclass_accuracy,
+                                                    binary_accuracy = EXCLUDED.binary_accuracy,
+                                                    confusion_matrix_multiclass = EXCLUDED.confusion_matrix_multiclass,
+                                                    confusion_matrix_binary = EXCLUDED.confusion_matrix_binary,
+                                                    label_ids = EXCLUDED.label_ids,
+                                                    label_names = EXCLUDED.label_names,
+                                                    roc_auc = EXCLUDED.roc_auc,
+                                                    pr_auc = EXCLUDED.pr_auc,
+                                                    best_f1_score = EXCLUDED.best_f1_score,
+                                                    best_f1_threshold = EXCLUDED.best_f1_threshold,
+                                                    plot_directory = EXCLUDED.plot_directory,
+                                                    model_file_path = EXCLUDED.model_file_path,
+                                                    created_at = NOW()
+                                            """, (
+                                                int(dec), int(dtype), int(amp), int(actual_fs_id), float(c_val),
+                                                int(predictions_made), int(total_errors),
+                                                multiclass_acc, binary_acc,
+                                                cm_multiclass_json, cm_binary_json,
+                                                label_ids_list, unique_label_names,
+                                                float(roc_auc) if 'roc_auc' in locals() and roc_auc is not None else None,
+                                                float(avg_precision) if 'avg_precision' in locals() and avg_precision is not None else None,
+                                                float(best_f1) if 'best_f1' in locals() and best_f1 is not None else None,
+                                                float(best_threshold) if 'best_threshold' in locals() and best_threshold is not None else None,
+                                                plot_dir, model_path
+                                            ))
+
+                                            self.db_conn.commit()
+                                            print(f"[SUCCESS] Stored confusion matrix summary in database")
+                                        except Exception as e:
+                                            print(f"[WARNING] Failed to store confusion matrix summary: {e}")
+                                            import traceback
+                                            traceback.print_exc()
 
                                 except Exception as e:
                                     print(f"[ERROR] Failed to generate plots: {e}")
@@ -21403,7 +21823,7 @@ SETTINGS:
                     print(f"  • {log_file.stem}")
         else:
             # Show available log files
-            print("\n📁 Available log files:")
+            print("\nAvailable log files:")
             print("=" * 60)
             if logs_path.exists():
                 log_files = list(logs_path.glob("*.log"))
@@ -21547,7 +21967,7 @@ SETTINGS:
             print("  3. generate-training-data - Create training data tables (DB)")
             print("  4. generate-segment-fileset - Create physical segment files (Disk)")
             print("  5. generate-feature-fileset - Extract features from segments (Disk)")
-            print("\n📁 Output Structure:")
+            print("\nOutput Structure:")
             print("  experiment{NNN}/segment_files/S{size}/T{type}/D{decimation}/*.npy")
             return
 
@@ -21778,7 +22198,7 @@ SETTINGS:
             print(f"   Data types ({num_data_types}): {', '.join(data_types)}")
             print(f"   Decimation factors ({num_decimations}): {', '.join(map(str, decimations))}")
 
-            print(f"\n📁 Output Structure:")
+            print(f"\nOutput Structure:")
             print(f"   Directory pattern: S{segment_size:06d}/T{{type}}/D{{decimation:06d}}/")
             print(f"   Total directories to create: {total_directories:,}")
             print(f"      ({num_data_types} data types × {num_decimations} decimations)")
