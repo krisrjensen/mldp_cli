@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251111_210000
-File version: 2.1.0.14
+Date Revised: 20251111_210500
+File version: 2.1.0.15
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
              FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
@@ -25,6 +25,7 @@ import sys
 import time
 import json
 import logging
+import itertools
 import psycopg2
 import psycopg2.extras
 import numpy as np
@@ -541,29 +542,51 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
         if segment_type == 'verification':
             # Query verification segments: all segments from experiment files NOT in training table
             file_table = f"experiment_{experiment_id:03d}_file_training_data"
-            logger.info("Generating verification work units (this may take a few minutes)...")
+            logger.info("Querying verification segments...")
             cursor.execute(f"""
-                SELECT DISTINCT
-                    ds.segment_id,
-                    cdec.decimation_factor,
-                    cdt.data_type_id,
-                    cam.amplitude_processing_method_id,
-                    cefs.experiment_feature_set_id
+                SELECT DISTINCT ds.segment_id
                 FROM data_segments ds
                 JOIN {file_table} eftd ON ds.experiment_file_id = eftd.file_id
-                CROSS JOIN ml_classifier_config_decimation_factors cdec
-                CROSS JOIN ml_classifier_config_data_types cdt
-                CROSS JOIN ml_classifier_config_amplitude_methods cam
-                CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
                 WHERE eftd.experiment_id = %s
                   AND NOT EXISTS (SELECT 1 FROM {segment_table} st WHERE st.segment_id = ds.segment_id)
-                  AND cdec.config_id = %s
-                  AND cdt.config_id = %s
-                  AND cam.config_id = %s
-                  AND cefs.config_id = %s
-                ORDER BY ds.segment_id, cdec.decimation_factor, cdt.data_type_id,
-                         cam.amplitude_processing_method_id, cefs.experiment_feature_set_id
-            """, (experiment_id, config_id, config_id, config_id, config_id))
+                ORDER BY ds.segment_id
+            """, (experiment_id,))
+            segments = [row['segment_id'] for row in cursor.fetchall()]
+            logger.info(f"Found {len(segments)} verification segments")
+
+            # Get configurations (much faster than CROSS JOIN)
+            logger.info("Querying configurations...")
+            cursor.execute("""
+                SELECT decimation_factor FROM ml_classifier_config_decimation_factors WHERE config_id = %s
+            """, (config_id,))
+            decimations = [row['decimation_factor'] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT data_type_id FROM ml_classifier_config_data_types WHERE config_id = %s
+            """, (config_id,))
+            data_types = [row['data_type_id'] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT amplitude_processing_method_id FROM ml_classifier_config_amplitude_methods WHERE config_id = %s
+            """, (config_id,))
+            amps = [row['amplitude_processing_method_id'] for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT experiment_feature_set_id FROM ml_classifier_config_experiment_feature_sets WHERE config_id = %s
+            """, (config_id,))
+            feature_sets = [row['experiment_feature_set_id'] for row in cursor.fetchall()]
+
+            # Generate work units using Python itertools (much faster than SQL CROSS JOIN)
+            logger.info(f"Generating work units: {len(segments)} segments × {len(decimations)} dec × {len(data_types)} dtypes × {len(amps)} amps × {len(feature_sets)} fs...")
+            work_units = []
+            for combo in itertools.product(segments, decimations, data_types, amps, feature_sets):
+                work_units.append({
+                    'segment_id': combo[0],
+                    'decimation_factor': combo[1],
+                    'data_type_id': combo[2],
+                    'amplitude_processing_method_id': combo[3],
+                    'experiment_feature_set_id': combo[4]
+                })
         else:
             # Query training segments
             cursor.execute(f"""
@@ -585,8 +608,7 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
                 ORDER BY std.segment_id, cdec.decimation_factor, cdt.data_type_id,
                          cam.amplitude_processing_method_id, cefs.experiment_feature_set_id
             """, (config_id, config_id, config_id, config_id))
-
-        work_units = cursor.fetchall()
+            work_units = cursor.fetchall()
         total_work = len(work_units)
 
         logger.info(f"Total work units: {total_work:,}")
