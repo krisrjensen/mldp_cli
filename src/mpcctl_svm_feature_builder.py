@@ -4,7 +4,7 @@ Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
 Date Revised: 20251111_134500
-File version: 2.1.0.12
+File version: 2.1.0.13
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
              FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
@@ -539,7 +539,8 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
         segment_table = f"experiment_{experiment_id:03d}_segment_training_data"
 
         if segment_type == 'verification':
-            # Query verification segments: all segments NOT in training table
+            # Query verification segments: all segments from experiment files NOT in training table
+            file_table = f"experiment_{experiment_id:03d}_file_training_data"
             cursor.execute(f"""
                 SELECT DISTINCT
                     ds.segment_id,
@@ -548,11 +549,12 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
                     cam.amplitude_processing_method_id,
                     cefs.experiment_feature_set_id
                 FROM data_segments ds
+                JOIN {file_table} eftd ON ds.experiment_file_id = eftd.file_id
                 CROSS JOIN ml_classifier_config_decimation_factors cdec
                 CROSS JOIN ml_classifier_config_data_types cdt
                 CROSS JOIN ml_classifier_config_amplitude_methods cam
                 CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
-                WHERE ds.experiment_id = %s
+                WHERE eftd.experiment_id = %s
                   AND ds.segment_id NOT IN (SELECT segment_id FROM {segment_table})
                   AND cdec.config_id = %s
                   AND cdt.config_id = %s
