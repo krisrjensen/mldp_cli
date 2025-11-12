@@ -4,7 +4,7 @@ Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
 Date Revised: 20251111_134500
-File version: 2.1.0.11
+File version: 2.1.0.12
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
              FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
@@ -514,7 +514,8 @@ def worker_function(worker_id: int, experiment_id: int, classifier_id: int,
 
 
 def manager_process(experiment_id: int, classifier_id: int, config_id: int,
-                   workers_count: int, db_config: Dict, mpcctl_dir: Path):
+                   workers_count: int, db_config: Dict, mpcctl_dir: Path,
+                   segment_type: str = 'training'):
     """
     Manager process that coordinates worker processes and monitors progress.
 
@@ -525,8 +526,9 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
         workers_count: Number of worker processes
         db_config: Database configuration dictionary
         mpcctl_dir: Path to .mpcctl directory
+        segment_type: 'training' or 'verification' (default: 'training')
     """
-    logger.info(f"Manager process starting for experiment {experiment_id}, classifier {classifier_id}")
+    logger.info(f"Manager process starting for experiment {experiment_id}, classifier {classifier_id}, segment_type={segment_type}")
 
     try:
         # Connect to database
@@ -536,25 +538,50 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
         # Get all work units (segment_id, dec, dtype, amp, efs combinations)
         segment_table = f"experiment_{experiment_id:03d}_segment_training_data"
 
-        cursor.execute(f"""
-            SELECT DISTINCT
-                std.segment_id,
-                cdec.decimation_factor,
-                cdt.data_type_id,
-                cam.amplitude_processing_method_id,
-                cefs.experiment_feature_set_id
-            FROM {segment_table} std
-            CROSS JOIN ml_classifier_config_decimation_factors cdec
-            CROSS JOIN ml_classifier_config_data_types cdt
-            CROSS JOIN ml_classifier_config_amplitude_methods cam
-            CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
-            WHERE cdec.config_id = %s
-              AND cdt.config_id = %s
-              AND cam.config_id = %s
-              AND cefs.config_id = %s
-            ORDER BY std.segment_id, cdec.decimation_factor, cdt.data_type_id,
-                     cam.amplitude_processing_method_id, cefs.experiment_feature_set_id
-        """, (config_id, config_id, config_id, config_id))
+        if segment_type == 'verification':
+            # Query verification segments: all segments NOT in training table
+            cursor.execute(f"""
+                SELECT DISTINCT
+                    ds.segment_id,
+                    cdec.decimation_factor,
+                    cdt.data_type_id,
+                    cam.amplitude_processing_method_id,
+                    cefs.experiment_feature_set_id
+                FROM data_segments ds
+                CROSS JOIN ml_classifier_config_decimation_factors cdec
+                CROSS JOIN ml_classifier_config_data_types cdt
+                CROSS JOIN ml_classifier_config_amplitude_methods cam
+                CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
+                WHERE ds.experiment_id = %s
+                  AND ds.segment_id NOT IN (SELECT segment_id FROM {segment_table})
+                  AND cdec.config_id = %s
+                  AND cdt.config_id = %s
+                  AND cam.config_id = %s
+                  AND cefs.config_id = %s
+                ORDER BY ds.segment_id, cdec.decimation_factor, cdt.data_type_id,
+                         cam.amplitude_processing_method_id, cefs.experiment_feature_set_id
+            """, (experiment_id, config_id, config_id, config_id, config_id))
+        else:
+            # Query training segments
+            cursor.execute(f"""
+                SELECT DISTINCT
+                    std.segment_id,
+                    cdec.decimation_factor,
+                    cdt.data_type_id,
+                    cam.amplitude_processing_method_id,
+                    cefs.experiment_feature_set_id
+                FROM {segment_table} std
+                CROSS JOIN ml_classifier_config_decimation_factors cdec
+                CROSS JOIN ml_classifier_config_data_types cdt
+                CROSS JOIN ml_classifier_config_amplitude_methods cam
+                CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
+                WHERE cdec.config_id = %s
+                  AND cdt.config_id = %s
+                  AND cam.config_id = %s
+                  AND cefs.config_id = %s
+                ORDER BY std.segment_id, cdec.decimation_factor, cdt.data_type_id,
+                         cam.amplitude_processing_method_id, cefs.experiment_feature_set_id
+            """, (config_id, config_id, config_id, config_id))
 
         work_units = cursor.fetchall()
         total_work = len(work_units)
@@ -658,6 +685,8 @@ def main():
     parser.add_argument('--config-id', type=int, required=True)
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--mpcctl-dir', type=str, required=True)
+    parser.add_argument('--segment-type', type=str, default='training', choices=['training', 'verification'],
+                        help='Segment type: training or verification (default: training)')
     parser.add_argument('--db-host', type=str, default='localhost')
     parser.add_argument('--db-port', type=int, default=5432)
     parser.add_argument('--db-name', type=str, default='arc_detection')
@@ -681,7 +710,8 @@ def main():
         config_id=args.config_id,
         workers_count=args.workers,
         db_config=db_config,
-        mpcctl_dir=mpcctl_dir
+        mpcctl_dir=mpcctl_dir,
+        segment_type=args.segment_type
     )
 
 
