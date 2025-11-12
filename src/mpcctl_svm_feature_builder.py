@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251111_210500
-File version: 2.1.0.15
+Date Revised: 20251111_211500
+File version: 2.1.0.16
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
              FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
@@ -587,6 +587,25 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
                     'amplitude_processing_method_id': combo[3],
                     'experiment_feature_set_id': combo[4]
                 })
+
+            # Filter out already-processed features to avoid duplicates
+            features_table = f"experiment_{experiment_id:03d}_classifier_{classifier_id:03d}_svm_features"
+            logger.info(f"Checking for existing features in {features_table}...")
+            cursor.execute(f"""
+                SELECT segment_id, decimation_factor, data_type_id,
+                       amplitude_processing_method_id, experiment_feature_set_id
+                FROM {features_table}
+                WHERE extraction_status_id IN (2, 3)
+            """)
+            existing = set((row['segment_id'], row['decimation_factor'], row['data_type_id'],
+                           row['amplitude_processing_method_id'], row['experiment_feature_set_id'])
+                          for row in cursor.fetchall())
+
+            original_count = len(work_units)
+            work_units = [wu for wu in work_units
+                         if (wu['segment_id'], wu['decimation_factor'], wu['data_type_id'],
+                             wu['amplitude_processing_method_id'], wu['experiment_feature_set_id']) not in existing]
+            logger.info(f"Filtered out {original_count - len(work_units):,} already-processed features, {len(work_units):,} remaining")
         else:
             # Query training segments
             cursor.execute(f"""
