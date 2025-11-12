@@ -19136,11 +19136,11 @@ SETTINGS:
 
                                             # Accumulate predictions in memory (don't insert individual predictions to DB)
                                             # full_verification_results table stores aggregate metrics only
-                                            all_predictions.append((
-                                                segment_label_id,      # actual_label_id
-                                                predicted_label_id,    # predicted_label_id
-                                                probabilities.tolist() if probabilities is not None else None  # probabilities
-                                            ))
+                                            all_predictions.append({
+                                                'actual_label_id': segment_label_id,
+                                                'predicted_label_id': predicted_label_id,
+                                                'probabilities': probabilities.tolist() if probabilities is not None else None
+                                            })
 
                                             predictions_made += 1
                                             total_predictions += 1
