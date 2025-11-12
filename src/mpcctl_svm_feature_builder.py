@@ -3,8 +3,8 @@
 Filename: mpcctl_svm_feature_builder.py
 Author(s): Kristophor Jensen
 Date Created: 20251110_114000
-Date Revised: 20251111_134500
-File version: 2.1.0.13
+Date Revised: 20251111_210000
+File version: 2.1.0.14
 Description: MPCCTL-based SVM feature vector builder with parallel worker processing
              FIX: Removed svm_ prefix from filenames
              - Path: svm_features/classifier{classifier_id:03d}/S{decimated_size}/{dtype}/D{dec}/FS{efs}/
@@ -541,6 +541,7 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
         if segment_type == 'verification':
             # Query verification segments: all segments from experiment files NOT in training table
             file_table = f"experiment_{experiment_id:03d}_file_training_data"
+            logger.info("Generating verification work units (this may take a few minutes)...")
             cursor.execute(f"""
                 SELECT DISTINCT
                     ds.segment_id,
@@ -555,7 +556,7 @@ def manager_process(experiment_id: int, classifier_id: int, config_id: int,
                 CROSS JOIN ml_classifier_config_amplitude_methods cam
                 CROSS JOIN ml_classifier_config_experiment_feature_sets cefs
                 WHERE eftd.experiment_id = %s
-                  AND ds.segment_id NOT IN (SELECT segment_id FROM {segment_table})
+                  AND NOT EXISTS (SELECT 1 FROM {segment_table} st WHERE st.segment_id = ds.segment_id)
                   AND cdec.config_id = %s
                   AND cdt.config_id = %s
                   AND cam.config_id = %s
