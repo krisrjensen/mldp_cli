@@ -3,18 +3,26 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_145000
-File version: 2.0.18.74
+Date Revised: 20251111_150000
+File version: 2.0.18.75
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             FIX: classifier-full-test converts numpy types to Python types for PostgreSQL
+             FIX: classifier-full-test removes incorrect per-segment database insertion
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 74)
+- CHANGE: Tracks changes within current commit cycle (currently 75)
 
-Changes in this version (18.74):
+Changes in this version (18.75):
+1. FIX - classifier-full-test table schema mismatch (CRITICAL)
+   - v2.0.18.75: Removed incorrect per-segment INSERT at lines 19130-19163
+                 full_verification_results table stores AGGREGATE metrics, not individual predictions
+                 Replaced with in-memory accumulation matching parallel processing path
+                 Predictions accumulated in all_predictions list for aggregate calculation
+                 Fixes "column segment_id does not exist" database error
+
+Changes in previous version (18.74):
 1. FIX - classifier-full-test numpy type conversion (CRITICAL)
    - v2.0.18.74: Convert numpy.int64/float64 to Python int/float before database insertion
                  Lines 19112 and 19114: wrap predictions and confidence in int() and float()
@@ -19126,41 +19134,16 @@ SETTINGS:
                                             actual_label_name = label_map.get(segment_label_id, f"Unknown_{segment_label_id}")
                                             predicted_label_name = label_map.get(predicted_label_id, f"Unknown_{predicted_label_id}")
 
-                                            # Store result
-                                            cursor.execute(f"""
-                                                INSERT INTO {results_table_name} (
-                                                    segment_id, actual_label_id, actual_label_name,
-                                                    decimation_factor, data_type_id, amplitude_processing_method_id,
-                                                    experiment_feature_set_id, svm_c_parameter, predicted_label_id, predicted_label_name,
-                                                    confidence, prediction_probabilities, feature_file_path,
-                                                    model_file_path, prediction_time_seconds
-                                                ) VALUES (
-                                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                                                )
-                                                ON CONFLICT (segment_id, decimation_factor, data_type_id,
-                                                             amplitude_processing_method_id, experiment_feature_set_id, svm_c_parameter)
-                                                DO UPDATE SET
-                                                    predicted_label_id = EXCLUDED.predicted_label_id,
-                                                    predicted_label_name = EXCLUDED.predicted_label_name,
-                                                    confidence = EXCLUDED.confidence,
-                                                    prediction_probabilities = EXCLUDED.prediction_probabilities,
-                                                    feature_file_path = EXCLUDED.feature_file_path,
-                                                    model_file_path = EXCLUDED.model_file_path,
-                                                    prediction_time_seconds = EXCLUDED.prediction_time_seconds,
-                                                    created_at = NOW()
-                                            """, (
-                                                segment_id, segment_label_id, actual_label_name,
-                                                dec, dtype, amp, efs, c_val, predicted_label_id, predicted_label_name,
-                                                confidence, probabilities.tolist() if probabilities is not None else None,
-                                                feature_path, model_path, prediction_time
+                                            # Accumulate predictions in memory (don't insert individual predictions to DB)
+                                            # full_verification_results table stores aggregate metrics only
+                                            all_predictions.append((
+                                                segment_label_id,      # actual_label_id
+                                                predicted_label_id,    # predicted_label_id
+                                                probabilities.tolist() if probabilities is not None else None  # probabilities
                                             ))
 
                                             predictions_made += 1
                                             total_predictions += 1
-
-                                            # Commit every batch
-                                            if predictions_made % batch_size == 0:
-                                                self.db_conn.commit()
 
                                         except Exception as e:
                                             total_errors += 1
