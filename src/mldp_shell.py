@@ -3,18 +3,25 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_143000
-File version: 2.0.18.73
+Date Revised: 20251111_145000
+File version: 2.0.18.74
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             FIX: classifier-full-test queries database for data type names instead of concatenation
+             FIX: classifier-full-test converts numpy types to Python types for PostgreSQL
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 73)
+- CHANGE: Tracks changes within current commit cycle (currently 74)
 
-Changes in this version (18.73):
+Changes in this version (18.74):
+1. FIX - classifier-full-test numpy type conversion (CRITICAL)
+   - v2.0.18.74: Convert numpy.int64/float64 to Python int/float before database insertion
+                 Lines 19112 and 19114: wrap predictions and confidence in int() and float()
+                 Fixes "can't adapt type 'numpy.int64'" PostgreSQL adapter error
+                 psycopg2 requires native Python types, not numpy types
+
+Changes in previous version (18.73):
 1. FIX - classifier-full-test data type mapping (CRITICAL)
    - v2.0.18.73: Changed line 19001 to query ml_data_types_lut for proper data type names
                  instead of string concatenation f"ADC{dtype}"
@@ -19109,9 +19116,9 @@ SETTINGS:
 
                                             # Run prediction
                                             feature_vector = segment_features.reshape(1, -1)
-                                            predicted_label_id = svm_model.predict(feature_vector)[0]
+                                            predicted_label_id = int(svm_model.predict(feature_vector)[0])  # Convert numpy.int64 to Python int
                                             probabilities = svm_model.predict_proba(feature_vector)[0] if hasattr(svm_model, 'predict_proba') else None
-                                            confidence = probabilities[predicted_label_id] if probabilities is not None else None
+                                            confidence = float(probabilities[predicted_label_id]) if probabilities is not None else None  # Convert numpy.float64 to Python float
 
                                             prediction_time = time.time() - pred_start_time
 
