@@ -3,23 +3,23 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_142000
-File version: 2.0.18.72
+Date Revised: 20251111_143000
+File version: 2.0.18.73
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             FIX: SVM trainer checks for SUCCESS (status=3) instead of FAILED (status=2)
+             FIX: classifier-full-test queries database for data type names instead of concatenation
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 72)
+- CHANGE: Tracks changes within current commit cycle (currently 73)
 
-Changes in this version (18.72):
-1. FIX - SVM trainer extraction_status_id check (CRITICAL)
-   - v2.0.18.72: Changed lines 17411 and 18144 to check extraction_status_id = 3 (SUCCESS)
-                 instead of extraction_status_id = 2 (FAILED)
-                 This was causing "No feature vectors found" error despite 12M successful features
-                 No longer: svm_SID{segment_id}...
+Changes in this version (18.73):
+1. FIX - classifier-full-test data type mapping (CRITICAL)
+   - v2.0.18.73: Changed line 19001 to query ml_data_types_lut for proper data type names
+                 instead of string concatenation f"ADC{dtype}"
+                 Was creating "ADC2" (invalid) instead of "ADC8" (correct)
+                 segment_processor.apply_data_type_conversion() requires actual bit depth names
 
 2. ENHANCEMENT - Added mpcctl parallel processing to classifier-build-features
    - v2.0.18.60+: Added --workers flag for parallel SVM feature building
@@ -18997,8 +18997,16 @@ SETTINGS:
                                                 file_id, beginning_index, seg_length = seg_info
 
                                                 # Load ADC data (dtype specifies bit depth, but we load full ADC data)
-                                                # Data type mapping: 6->ADC6, 8->ADC8, 10->ADC10, 12->ADC12
-                                                data_type_name = f"ADC{dtype}"
+                                                # Get data type name from database
+                                                cursor.execute("""
+                                                    SELECT data_type_name
+                                                    FROM ml_data_types_lut
+                                                    WHERE data_type_id = %s
+                                                """, (dtype,))
+                                                dtype_row = cursor.fetchone()
+                                                if not dtype_row:
+                                                    raise ValueError(f"Data type {dtype} not found in ml_data_types_lut")
+                                                data_type_name = dtype_row[0].upper()  # Convert to uppercase (e.g., 'adc12' -> 'ADC12')
                                                 raw_data = segment_processor.load_file_data(file_id, "ADC")  # Load from adc_data directory
 
                                                 if raw_data is None:
