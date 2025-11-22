@@ -3,8 +3,8 @@
 Filename: segment_processor.py
 Author(s): Kristophor Jensen
 Date Created: 20250902_120000
-Date Revised: 20250902_120000
-File version: 0.0.0.1
+Date Revised: 20251112_120000
+File version: 0.0.0.2
 Description: Segment fileset processor for experiment 18
 """
 
@@ -41,7 +41,7 @@ class SegmentFilesetProcessor:
         self.adc_path = Path('/Volumes/ArcData/V3_database/adc_data')
         
         # Print output location
-        print(f"\n📁 Output directory: {self.base_path}")
+        # print(f"\nOutput directory: {self.base_path}")  # Suppressed to reduce worker output
         
         # Statistics
         self.stats = {
@@ -402,7 +402,7 @@ class SegmentFilesetProcessor:
         
         # Show example files created
         if self.stats['files_created'] > 0:
-            print(f"\n📁 Files were created in subdirectories like:")
+            print(f"\nFiles were created in subdirectories like:")
             print(f"  {self.base_path}/S{262144:06d}/TRAW/D{0:06d}/")
             print(f"  {self.base_path}/S{131072:06d}/TADC*/D{1:06d}/")
             print(f"  etc.")

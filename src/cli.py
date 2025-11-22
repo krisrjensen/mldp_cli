@@ -693,7 +693,7 @@ def logs(ctx, service, lines):
             click.echo(f"Log file not found: {log_file}")
     else:
         # Show available log files
-        click.echo("\n📁 Available log files:")
+        click.echo("\nAvailable log files:")
         click.echo("=" * 60)
         if logs_path.exists():
             for log_file in sorted(logs_path.glob("*.log")):
@@ -1000,12 +1000,95 @@ def status(ctx, experiment_id):
             click.echo(f"  Decimation factors found: {sorted(decimations)}")
 
 
+@cli.group()
+def classifier():
+    """Classifier verification and feature matrix operations"""
+    pass
+
+
+@classifier.command(name='generate-verification-features')
+@click.option('--experiment-id', type=int, required=True, help='Experiment ID')
+@click.option('--data-type', type=str, required=True,
+              help='Comma-separated data type IDs or names (e.g., 2,6,8 or ADC2,ADC6,ADC8)')
+@click.option('--decimation', type=str, required=True,
+              help='Comma-separated decimation factors (e.g., 0,7,15,31,63,127)')
+@click.option('--segment-size', type=str, required=True,
+              help='Comma-separated segment sizes (e.g., 512,8192)')
+@click.option('--amplitude-method', type=str, required=True,
+              help='Comma-separated amplitude method IDs (e.g., 1,2 for raw,zscore)')
+@click.option('--feature-id', type=str, required=True,
+              help='Comma-separated list of feature IDs from ml_features_lut')
+@click.option('--output-folder', type=str, required=False,
+              help='Output folder (default: experiment/classifier_files/verification_features)')
+@click.option('--input-raw-data-folder', type=str, default='/Volumes/ArcData/V3_database/fileset',
+              help='Path to raw data folder')
+@click.option('--input-adc-data-folder', type=str, default='/Volumes/ArcData/V3_database/adc_data',
+              help='Path to ADC data folder')
+@click.option('--workers', type=int, default=4, help='Number of worker processes')
+@click.option('--batch-size-mb', type=float, default=100.0,
+              help='Maximum batch file size in MB (default: 100)')
+@click.option('--mpcctl-dir', type=str, required=True, help='Path to .mpcctl directory')
+@click.option('--db-host', type=str, default='localhost', help='Database host')
+@click.option('--db-port', type=int, default=5432, help='Database port')
+@click.option('--db-name', type=str, default='arc_detection', help='Database name')
+@click.option('--db-user', type=str, default='kjensen', help='Database user')
+@click.pass_context
+def generate_verification_features(ctx, experiment_id, data_type, decimation, segment_size,
+                                   amplitude_method, feature_id, output_folder,
+                                   input_raw_data_folder, input_adc_data_folder,
+                                   workers, batch_size_mb, mpcctl_dir,
+                                   db_host, db_port, db_name, db_user):
+    """Generate verification feature matrices using FeatureFunctionLoader (MPCCTL-based)"""
+
+    # Path to mpcctl_verification_feature_matrix.py
+    script_path = ctx.obj['mldp_root'] / "mldp_cli" / "src" / "mpcctl_verification_feature_matrix.py"
+
+    if not script_path.exists():
+        click.echo(f"Error: mpcctl_verification_feature_matrix.py not found at {script_path}")
+        sys.exit(1)
+
+    # Build command
+    cmd = [sys.executable, str(script_path)]
+    cmd.extend(['--experiment-id', str(experiment_id)])
+    cmd.extend(['--data-type', data_type])
+    cmd.extend(['--decimation', decimation])
+    cmd.extend(['--segment-size', segment_size])
+    cmd.extend(['--amplitude-method', amplitude_method])
+    cmd.extend(['--feature-id', feature_id])
+
+    if output_folder:
+        cmd.extend(['--output-folder', output_folder])
+
+    cmd.extend(['--input-raw-data-folder', input_raw_data_folder])
+    cmd.extend(['--input-adc-data-folder', input_adc_data_folder])
+    cmd.extend(['--workers', str(workers)])
+    cmd.extend(['--batch-size-mb', str(batch_size_mb)])
+    cmd.extend(['--mpcctl-dir', mpcctl_dir])
+    cmd.extend(['--db-host', db_host])
+    cmd.extend(['--db-port', str(db_port)])
+    cmd.extend(['--db-name', db_name])
+    cmd.extend(['--db-user', db_user])
+
+    # Execute
+    click.echo(f"Generating verification feature matrices for experiment {experiment_id}...")
+    click.echo(f"Command: {' '.join(cmd)}")
+    click.echo()
+
+    result = subprocess.run(cmd, capture_output=False, text=True)
+
+    if result.returncode != 0:
+        click.echo("\n❌ Feature matrix generation failed")
+        sys.exit(1)
+
+    click.echo("\n✅ Feature matrix generation complete!")
+
+
 @cli.command()
 def verify():
     """Verify all MLDP tools are accessible"""
-    
+
     click.echo("Verifying MLDP tools...")
-    
+
     tools_to_check = [
         ("mldp_exp18_distance/mpcctl_distance_calculator.py", "Distance Calculator"),
         ("mldp_distance_db_insert/mpcctl_distance_db_insert.py", "Distance DB Insert"),
@@ -1013,9 +1096,10 @@ def verify():
         ("database_browser/database_browser.py", "Database Browser"),
         ("experiment_generator", "Experiment Generator"),
         ("segment_verifier", "Segment Verifier"),
-        ("data_cleaning_tool", "Data Cleaning Tool")
+        ("data_cleaning_tool", "Data Cleaning Tool"),
+        ("mldp_cli/src/mpcctl_verification_feature_matrix.py", "Verification Feature Matrix")
     ]
-    
+
     all_found = True
     for tool_path, tool_name in tools_to_check:
         full_path = MLDP_ROOT / tool_path
@@ -1024,7 +1108,7 @@ def verify():
         else:
             click.echo(f"❌ {tool_name}: Not found at {full_path}")
             all_found = False
-    
+
     if all_found:
         click.echo("\n✅ All tools verified successfully!")
     else:

@@ -3,18 +3,160 @@
 Filename: mldp_shell.py
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20251111_150000
-File version: 2.0.18.75
+Date Revised: 20251122_000000
+File version: 2.0.18.89
 Description: Advanced interactive shell for MLDP with prompt_toolkit
-             FIX: classifier-full-test removes incorrect per-segment database insertion
+             NEW: Added classifier command group to CLI
 
 Version Format: MAJOR.MINOR.COMMIT.CHANGE
 - MAJOR: User-controlled major releases (currently 2)
 - MINOR: User-controlled minor releases (currently 0)
 - COMMIT: Increments on every git commit/push (currently 18)
-- CHANGE: Tracks changes within current commit cycle (currently 75)
+- CHANGE: Tracks changes within current commit cycle (currently 87)
 
-Changes in this version (18.75):
+Changes in this version (18.89):
+1. COMPREHENSIVE UPDATE - Advanced marker styling and gitignore improvements
+   - v2.0.18.89: Added advanced visualization scripts with three-dimensional visual encoding
+                 Added marker shape (arcing/non-arcing), fillstyle (steady/transient), edge color (class)
+                 Added run_dimreduction_visualization.py (v1.0.0.5) - PCA, LLE, t-SNE, UMAP
+                 Added run_scalar_3d_visualization.py (v1.0.0.5) - 10,080 3D plots
+                 Added run_feature_subset_dimreduction.py (v1.0.0.4) - 12,870 combinations
+                 Added documentation for advanced marker styling implementation
+                 Updated .gitignore to include __pycache__, .DS_Store, *.pyc
+                 Reduced marker size to 3 for better plot readability
+                 STATUS: Complete and tested
+
+Changes in previous version (18.88):
+1. NEW FEATURE - Verification Feature Visualization Suite
+   - v2.0.18.88: Added classifier-visualize-verification-features command
+                 Created visualize_verification_features.py (776 lines)
+                 3D scatter plots: 18 subplots (3 versions × 6 views: XY, YZ, XZ, 3 perspectives)
+                 PDF plots: 4 grouping levels × 3 versions × 9 features
+                 Outlier detection: IQR, Z-score, Modified Z-score, Isolation Forest
+                 Sigmoid squashing: Standard, Tanh, Adaptive IQR-based, Soft Clip
+                 Adaptive IQR-based sigmoid default (auto-scales to data distribution)
+                 Database label mapping for segment_label and file_label
+                 Metadata JSON export with statistics and configuration
+                 STATUS: Ready for testing
+
+Changes in previous version (18.87):
+1. CLI INTEGRATION - FeatureFunctionLoader migration complete
+   - v2.0.18.87: Integrated mpcctl_verification_feature_matrix.py (v1.0.0.8) into mldp_cli
+                 Added 'classifier' command group with 'generate-verification-features' subcommand
+                 Replaced 70 lines of hardcoded if/elif chains with FeatureFunctionLoader
+                 Database-driven feature extraction (NO hardcoded function names)
+                 Command: mldp classifier generate-verification-features
+                 All function names from ml_functions table (123/125 from database)
+                 Channel routing from ml_data_channels (0=voltage, 1=current)
+                 Add new features via database only (NO code changes required)
+                 Validated with 10 real segments (0 errors, 0.2ms per feature)
+                 Updated mldp_cli to version 2.1.0.17
+                 STATUS: Production ready, fully tested
+
+Changes in previous version (18.86):
+1. CHANNEL SELECTION FIX - classifier-full-test-generate-verification-data
+   - v2.0.18.86: Fixed channel selection in mpcctl_verification_feature_matrix.py (v1.0.0.7)
+                 Bug 6: Incorrect channel hardcoding - always used channel 0
+                 Fix 6: Implemented proper channel routing based on feature names
+                        Channel mapping: 0=voltage, 1=current
+                        "calc_voltage" or "voltage" in name → use voltage channel (0)
+                        "calc_current" or "current" in name → use current channel (1)
+                        Other features (e.g., volatility_dxdt_n1) → default to current (1)
+                 Result: Eliminates warnings about "Unknown computation for voltage/current"
+                 STATUS: Feature 31 and voltage/current features now extract correctly
+
+Changes in previous version (18.85):
+1. COMPLETE FIX SERIES - classifier-full-test-generate-verification-data
+   - v2.0.18.85: Fixed 5 critical bugs in mpcctl_verification_feature_matrix.py (v1.0.0.6)
+                 Bug 1: Race condition - workers starting before todo files created
+                 Fix 1: Added worker wait loop (up to 30s) for todo file creation
+                 Bug 2: Data type case mismatch - database lowercase vs code uppercase
+                 Fix 2: Added .upper() to data_type_map creation
+                 Bug 3: Missing feature extraction method - extract_single_feature() doesn't exist
+                 Fix 3: Implemented direct feature computation with metadata dict
+                 Bug 4: Import syntax error - "import *" not allowed in functions
+                 Fix 4: Moved feature function imports to module level
+                 Bug 5: Database query missing columns - computation_function and behavior_type
+                 Fix 5: Added missing columns to SELECT clause
+                 STATUS: Command now fully functional, workers processing successfully
+
+Changes in previous version (18.84):
+1. CRITICAL FIX - classifier-full-test-generate-verification-data argument parsing
+   - v2.0.18.84: Fixed argument parsing loop that caused "[ERROR] Unknown argument: 2"
+                 Root cause: Loop started at i=1 instead of i=0 (line 19632)
+                 Bug: args[0] (--data-type) was skipped, args[1] (2) was processed first
+                 Result: First value "2" was seen as unknown argument
+                 Fix: Changed "i = 1" to "i = 0" to process all arguments correctly
+                 This was the final blocker preventing command execution
+
+Changes in previous version (18.83):
+1. CRITICAL FIX - classifier-full-test-generate-verification-data architectural redesign
+   - v2.0.18.83: Fixed fundamental flaw in parallel processing architecture
+                 Previous: Sequential MPCCTL jobs (one per configuration)
+                 Now: Single MPCCTL job distributing all configurations across workers
+                 Work units: (segment_id, data_type_id, decimation, amplitude_method) tuples
+                 Proper parallel distribution: ALL configurations processed simultaneously
+                 Accepts comma-separated values for --data-type, --decimation, --amplitude-method
+                 Worker function handles varying configurations dynamically
+                 Post-processing groups results by configuration and stitches final files
+                 This fix enables true parallel processing across multiple configurations
+2. NEW FEATURE - classifier-full-test-generate-verification-data command
+   - v2.0.18.82: Added new MPCCTL-based command to pre-compute verification feature matrices
+                 Eliminates redundant on-the-fly feature calculations during classifier testing
+                 Creates mpcctl_verification_feature_matrix.py module
+                 Generates structured numpy arrays with named fields
+                 Supports batching for large datasets with --batch-size-mb
+                 Output format: features_S{size}_D{dec}_R{result}_{dtype}_A{amp}.npy
+                 Critical for reducing verification test time from days to hours
+
+Changes in previous version (18.81):
+1. PERF - Suppressed print() in segment_processor.py
+   - v2.0.18.81: Commented out print() statement at segment_processor.py:44
+                 Eliminates 20x "Output directory:" messages (one per worker)
+                 Updates segment_processor.py to v0.0.0.2
+                 CRITICAL: Further reduces I/O overhead during parallel processing
+
+Changes in previous version (18.80):
+1. PERF - Suppressed verbose logging from feature extractor
+   - v2.0.18.80: Added logging.setLevel(logging.ERROR) at lines 1908-1911 and 18686-18689
+                 Suppresses INFO messages from experiment_feature_extractor, segment_processor
+                 Eliminates repetitive "Output directory" and "Using DEFAULT data paths" messages
+                 Fixed by updating experiment_feature_extractor.py:
+                   - Added _feature_set_id_cache dictionary (lines 99-113)
+                   - Modified _get_experiment_feature_set_id to use cache (lines 243-264)
+                   - Eliminates tens of thousands of repeated database queries
+                 CRITICAL: Restores fast processing speed
+
+Changes in previous version (18.79):
+1. FIX - classifier-results-clean CASCADE for foreign keys
+   - v2.0.18.79: Added CASCADE to TRUNCATE statements at lines 19572 and 19596
+                 Handles foreign key constraints automatically
+                 Fixes error: "cannot truncate a table referenced in a foreign key constraint"
+                 Now properly cleans svm_per_class_results with svm_results table
+
+Changes in version (18.78):
+1. FIX - classifier-results-clean command registration
+   - v2.0.18.78: Registered command in dispatcher at line 2260
+                 Added autocomplete options at line 1263
+                 Added help text at lines 4081-4084
+                 Updated VERSION constant at line 1046
+                 Command now recognized by shell
+
+Changes in version (18.77):
+1. NEW - classifier-results-clean command
+   - v2.0.18.77: Added cmd_classifier_results_clean() at line 19484
+                 Cleans svm_results and/or full_verification_results tables
+                 Uses current experiment and classifier context
+                 Supports --table parameter to clean specific table
+                 Provides row count before/after for confirmation
+
+Changes in version (18.76):
+1. FIX - classifier-full-test feature_set_id vs experiment_feature_set_id (CRITICAL)
+   - v2.0.18.76: Fixed line 19430 to use experiment_feature_set_id (efs) instead of feature_set_id (actual_fs_id)
+                 Bug caused foreign key violation: feature_set_id 566 → experiment_feature_set_id 550
+                 Database INSERT was using 566 when table expects 550
+
+Changes in previous version (18.75):
 1. FIX - classifier-full-test table schema mismatch (CRITICAL)
    - v2.0.18.75: Removed incorrect per-segment INSERT at lines 19130-19163
                  full_verification_results table stores AGGREGATE metrics, not individual predictions
@@ -1029,7 +1171,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.76"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.87"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -1246,6 +1388,15 @@ class MLDPCompleter(Completer):
                                          '--feature-set', '--force', '--help'],
             'classifier-full-test': ['--force', '--batch-size', '--decimation-factor', '--data-type',
                                     '--amplitude-method', '--feature-set', '--help'],
+            'classifier-full-test-generate-verification-data': ['--data-type', '--decimation', '--segment-size',
+                                                                '--amplitude-method', '--feature-id', '--output-folder',
+                                                                '--input-raw-data-folder', '--input-adc-data-folder',
+                                                                '--workers', '--batch-size-mb', '--help'],
+            'classifier-visualize-verification-features': ['--matrix-file', '--feature', '--grouping',
+                                                          '--outlier-method', '--sigmoid-method',
+                                                          '--iqr-factor', '--sigmoid-k',
+                                                          '--output-dir', '--help'],
+            'classifier-results-clean': ['--table', '--help'],
 
             # Utilities
             'verify': [],
@@ -1874,6 +2025,12 @@ def _process_verification_batch(batch_info):
     # Load SVM model
     svm_model = joblib.load(model_path)
 
+    # Suppress verbose logging from feature extractor and segment processor
+    import logging
+    logging.getLogger('experiment_feature_extractor').setLevel(logging.ERROR)
+    logging.getLogger('segment_processor').setLevel(logging.ERROR)
+    logging.getLogger('experiment_segment_fileset_generator_v2').setLevel(logging.ERROR)
+
     # Initialize segment processor and feature extractor
     segment_processor = SegmentFilesetProcessor(experiment_id=exp_id)
     feature_extractor = ExperimentFeatureExtractor(exp_id, conn)
@@ -2243,6 +2400,9 @@ class MLDPShell:
             'classifier-clean-svm-results': self.cmd_classifier_clean_svm_results,
             'classifier-clean-features': self.cmd_classifier_clean_features,
             'classifier-full-test': self.cmd_classifier_full_test,
+            'classifier-full-test-generate-verification-data': self.cmd_classifier_full_test_generate_verification_data,
+            'classifier-visualize-verification-features': self.cmd_classifier_visualize_verification_features,
+            'classifier-results-clean': self.cmd_classifier_results_clean,
             # Noise floor amplitude normalization commands
             'noise-floor-init': self.cmd_noise_floor_init,
             'noise-floor-show': self.cmd_noise_floor_show,
@@ -4061,6 +4221,23 @@ REFERENCE SELECTION (Phase 2):
     [--amplitude-method <id>]    Test only this amplitude method
     [--feature-set <id>]         Test only this feature set
     [--batch-size <n>]           Segments per batch (default: 100)
+
+  classifier-full-test-generate-verification-data  Pre-compute verification feature matrices
+    --data-type <id|name,...>    Data type(s) - comma-separated (e.g., 2,6,8 or ADC2,ADC6)
+    --decimation <n,...>         Decimation factor(s) - comma-separated (e.g., 0,7,15,31)
+    --segment-size <n>           Original segment size (e.g., 512, 8192)
+    --amplitude-method <id,...>  Amplitude method(s) - comma-separated (e.g., 1,2)
+    --feature-id <id,id,...>     Comma-separated feature IDs from ml_features_lut
+    [--output-folder <path>]     Output directory (default: experiment/classifier_files/verification_features)
+    [--input-raw-data-folder]    Raw data folder (default: /Volumes/ArcData/V3_database/fileset)
+    [--input-adc-data-folder]    ADC data folder (default: /Volumes/ArcData/V3_database/adc_data)
+    [--workers <n>]              Number of parallel workers per job (default: 4)
+    [--batch-size-mb <n>]        Maximum batch file size in MB (default: 100)
+
+  classifier-results-clean       Clean classifier results tables
+    [--table svm_results]        Clean SVM results table only
+    [--table full_verification]  Clean full verification results table only
+                                 (default: clean both tables)
 
   Examples:
     classifier-train-svm-init
@@ -18645,6 +18822,13 @@ SETTINGS:
 
             # Initialize feature extractor and segment processor for on-the-fly feature generation
             print(f"[INFO] Initializing feature extractor and segment processor...")
+
+            # Suppress verbose logging from feature extractor and segment processor
+            import logging
+            logging.getLogger('experiment_feature_extractor').setLevel(logging.ERROR)
+            logging.getLogger('segment_processor').setLevel(logging.ERROR)
+            logging.getLogger('experiment_segment_fileset_generator_v2').setLevel(logging.ERROR)
+
             feature_extractor = ExperimentFeatureExtractor(exp_id, self.db_conn)
             segment_processor = SegmentFilesetProcessor(experiment_id=exp_id)
 
@@ -19427,7 +19611,7 @@ SETTINGS:
                                                     model_file_path = EXCLUDED.model_file_path,
                                                     created_at = NOW()
                                             """, (
-                                                int(dec), int(dtype), int(amp), int(actual_fs_id), float(c_val),
+                                                int(dec), int(dtype), int(amp), int(efs), float(c_val),
                                                 int(predictions_made), int(total_errors),
                                                 multiclass_acc, binary_acc,
                                                 cm_multiclass_json, cm_binary_json,
@@ -19474,6 +19658,281 @@ SETTINGS:
             print(f"\n[ERROR] Failed to run full verification test: {e}")
             import traceback
             traceback.print_exc()
+
+    def cmd_classifier_full_test_generate_verification_data(self, args):
+        """
+        Generate pre-computed verification feature matrices
+
+        Usage: classifier-full-test-generate-verification-data [OPTIONS]
+
+        Generates consolidated feature matrices for verification testing.
+        Reduces verification test time from days to hours by pre-computing features once.
+        Supports comma-separated values for multiple configurations.
+
+        Required Parameters:
+            --data-type <id|name,...>    Data type(s) - comma-separated (e.g., 2,6,8 or ADC2,ADC6,ADC8)
+            --decimation <n,...>         Decimation factor(s) - comma-separated (e.g., 0,7,15,31)
+            --segment-size <n>           Original segment size (e.g., 512, 8192)
+            --amplitude-method <id,...>  Amplitude method(s) - comma-separated (e.g., 1,2)
+            --feature-id <id,id,...>     Comma-separated feature IDs from ml_features_lut
+
+        Optional Parameters:
+            --output-folder <path>       Output directory (default: experiment/classifier_files/verification_features)
+            --input-raw-data-folder      Raw data folder (default: /Volumes/ArcData/V3_database/fileset)
+            --input-adc-data-folder      ADC data folder (default: /Volumes/ArcData/V3_database/adc_data)
+            --workers <n>                Number of parallel workers per job (default: 4)
+            --batch-size-mb <n>          Maximum batch file size in MB (default: 100)
+
+        Output:
+            features_S{size:06d}_D{dec:06d}_R{result:06d}_{dtype}_A{amp:02d}.npy
+            where result = size // (decimation + 1)
+
+        Examples:
+            classifier-full-test-generate-verification-data --data-type 2 --decimation 0,7,15,31 --segment-size 8192 --amplitude-method 2 --feature-id 1,2,3
+            classifier-full-test-generate-verification-data --data-type ADC2,ADC6,ADC8 --decimation 0,7 --segment-size 8192 --amplitude-method 1,2 --feature-id 1,2,3 --workers 10
+        """
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'set experiment <id>' first.")
+            return
+
+        # Parse required arguments
+        data_types = None
+        decimations = None
+        segment_size = None
+        amplitude_methods = None
+        feature_ids = None
+
+        # Optional arguments with defaults
+        output_folder = None
+        input_raw_folder = '/Volumes/ArcData/V3_database/fileset'
+        input_adc_folder = '/Volumes/ArcData/V3_database/adc_data'
+        workers = 4
+        batch_size_mb = 100.0
+
+        i = 0
+        while i < len(args):
+            arg = args[i]
+
+            if arg == '--data-type' and i + 1 < len(args):
+                data_types = args[i + 1]
+                i += 2
+            elif arg == '--decimation' and i + 1 < len(args):
+                decimations = args[i + 1]
+                i += 2
+            elif arg == '--segment-size' and i + 1 < len(args):
+                segment_size = int(args[i + 1])
+                i += 2
+            elif arg == '--amplitude-method' and i + 1 < len(args):
+                amplitude_methods = args[i + 1]
+                i += 2
+            elif arg == '--feature-id' and i + 1 < len(args):
+                feature_ids = args[i + 1]
+                i += 2
+            elif arg == '--output-folder' and i + 1 < len(args):
+                output_folder = args[i + 1]
+                i += 2
+            elif arg == '--input-raw-data-folder' and i + 1 < len(args):
+                input_raw_folder = args[i + 1]
+                i += 2
+            elif arg == '--input-adc-data-folder' and i + 1 < len(args):
+                input_adc_folder = args[i + 1]
+                i += 2
+            elif arg == '--workers' and i + 1 < len(args):
+                workers = int(args[i + 1])
+                i += 2
+            elif arg == '--batch-size-mb' and i + 1 < len(args):
+                batch_size_mb = float(args[i + 1])
+                i += 2
+            elif arg == '--help':
+                print(self.cmd_classifier_full_test_generate_verification_data.__doc__)
+                return
+            else:
+                print(f"[ERROR] Unknown argument: {arg}")
+                return
+
+        # Validate required parameters
+        if not data_types:
+            print("[ERROR] --data-type is required")
+            return
+        if not decimations:
+            print("[ERROR] --decimation is required")
+            return
+        if not segment_size:
+            print("[ERROR] --segment-size is required")
+            return
+        if not amplitude_methods:
+            print("[ERROR] --amplitude-method is required")
+            return
+        if not feature_ids:
+            print("[ERROR] --feature-id is required")
+            return
+
+        # Calculate expected configurations for display
+        import itertools
+        data_type_list = [dt.strip() for dt in data_types.split(',')]
+        decimation_list = [int(d.strip()) for d in decimations.split(',')]
+        amplitude_method_list = [int(am.strip()) for am in amplitude_methods.split(',')]
+        total_configs = len(data_type_list) * len(decimation_list) * len(amplitude_method_list)
+
+        print(f"\nGenerating verification feature matrices:")
+        print(f"  Experiment: {self.current_experiment}")
+        print(f"  Data types: {data_types}")
+        print(f"  Decimations: {decimations}")
+        print(f"  Segment size: {segment_size}")
+        print(f"  Amplitude methods: {amplitude_methods}")
+        print(f"  Feature IDs: {feature_ids}")
+        print(f"  Workers: {workers}")
+        print(f"  Batch size: {batch_size_mb} MB")
+        print(f"  Total configurations: {total_configs}")
+        print()
+
+        # Set MPCCTL directory (single shared directory for all workers)
+        mpcctl_dir = f'/Volumes/ArcData/V3_database/experiment{self.current_experiment:03d}/.mpcctl_verification_features'
+
+        # Build command - pass comma-separated values directly
+        import subprocess
+        cmd = [
+            sys.executable,
+            os.path.join(os.path.dirname(__file__), 'mpcctl_verification_feature_matrix.py'),
+            '--experiment-id', str(self.current_experiment),
+            '--data-type', data_types,
+            '--decimation', decimations,
+            '--segment-size', str(segment_size),
+            '--amplitude-method', amplitude_methods,
+            '--feature-id', feature_ids,
+            '--input-raw-data-folder', input_raw_folder,
+            '--input-adc-data-folder', input_adc_folder,
+            '--workers', str(workers),
+            '--batch-size-mb', str(batch_size_mb),
+            '--mpcctl-dir', mpcctl_dir
+        ]
+
+        if output_folder:
+            cmd.extend(['--output-folder', output_folder])
+
+        # Execute single MPCCTL job that processes all configurations in parallel
+        print(f"Launching MPCCTL job with {workers} workers...")
+        print(f"MPCCTL directory: {mpcctl_dir}")
+        print()
+
+        try:
+            result = subprocess.run(cmd, check=True)
+            print(f"\n{'='*80}")
+            print(f"Feature matrix generation complete")
+            print(f"  Status: SUCCESS")
+            print(f"  Total configurations processed: {total_configs}")
+            print(f"{'='*80}")
+        except subprocess.CalledProcessError as e:
+            print(f"\n{'='*80}")
+            print(f"Feature matrix generation failed")
+            print(f"  Status: FAILED (exit code {e.returncode})")
+            print(f"{'='*80}")
+        except Exception as e:
+            print(f"\n{'='*80}")
+            print(f"Feature matrix generation error")
+            print(f"  Status: ERROR ({e})")
+            print(f"{'='*80}")
+
+    def cmd_classifier_results_clean(self, args):
+        """
+        Clean classifier results tables for current experiment and classifier
+
+        Usage: classifier-results-clean [--table TABLE_NAME]
+
+        Cleans the specified results table or all results tables by default.
+        Requires current experiment and classifier to be set.
+
+        Options:
+            --table svm_results              Clean SVM results table only
+            --table full_verification        Clean full verification results table only
+            (default: clean both tables)
+
+        Examples:
+            classifier-results-clean
+            classifier-results-clean --table svm_results
+            classifier-results-clean --table full_verification
+        """
+        # Check session context
+        if not self.current_experiment:
+            print("[ERROR] No experiment selected. Use 'experiment <id>' first.")
+            return
+
+        if not self.current_classifier_id:
+            print("[ERROR] No classifier selected. Use 'classifier <id>' first.")
+            return
+
+        if not self.db_conn:
+            print("[ERROR] Not connected to database")
+            return
+
+        # Parse arguments
+        table_filter = None
+        i = 1
+        while i < len(args):
+            if args[i] == '--table' and i + 1 < len(args):
+                table_filter = args[i + 1]
+                i += 2
+            else:
+                print(f"[WARNING] Unknown option: {args[i]}")
+                i += 1
+
+        exp_id = self.current_experiment
+        cls_id = self.current_classifier_id
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # Clean SVM results table
+            if table_filter is None or table_filter == 'svm_results':
+                svm_results_table = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_svm_results"
+
+                # Check if table exists
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = %s
+                    )
+                """, (svm_results_table,))
+
+                if cursor.fetchone()[0]:
+                    cursor.execute(f"SELECT COUNT(*) FROM {svm_results_table}")
+                    count_before = cursor.fetchone()[0]
+
+                    cursor.execute(f"TRUNCATE TABLE {svm_results_table} CASCADE")
+                    self.db_conn.commit()
+
+                    print(f"[SUCCESS] Cleaned {svm_results_table}")
+                    print(f"          Removed {count_before} rows")
+                else:
+                    print(f"[INFO] Table {svm_results_table} does not exist")
+
+            # Clean full verification results table
+            if table_filter is None or table_filter == 'full_verification':
+                full_verif_table = f"experiment_{exp_id:03d}_classifier_{cls_id:03d}_full_verification_results"
+
+                # Check if table exists
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = %s
+                    )
+                """, (full_verif_table,))
+
+                if cursor.fetchone()[0]:
+                    cursor.execute(f"SELECT COUNT(*) FROM {full_verif_table}")
+                    count_before = cursor.fetchone()[0]
+
+                    cursor.execute(f"TRUNCATE TABLE {full_verif_table} CASCADE")
+                    self.db_conn.commit()
+
+                    print(f"[SUCCESS] Cleaned {full_verif_table}")
+                    print(f"          Removed {count_before} rows")
+                else:
+                    print(f"[INFO] Table {full_verif_table} does not exist")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to clean results tables: {e}")
+            self.db_conn.rollback()
 
     def cmd_classifier_train_rf(self, args):
         """
@@ -20496,6 +20955,161 @@ SETTINGS:
         except Exception as e:
             self.db_conn.rollback()
             print(f"\n[ERROR] Failed to clean features: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    def cmd_classifier_visualize_verification_features(self, args):
+        """
+        Generate visualizations for verification feature matrices
+
+        Usage: classifier-visualize-verification-features [options]
+
+        Options:
+            --matrix-file PATH          Path to verification feature .npy file (required)
+            --feature FEATURE_NAME      Generate PDFs for specific feature (optional)
+            --grouping LEVEL            Grouping level: file_segment, segment, file, population (default: all)
+            --outlier-method METHOD     Outlier detection: iqr, zscore, modified_zscore, isolation_forest (default: iqr)
+            --sigmoid-method METHOD     Sigmoid squashing: standard, tanh, adaptive, soft_clip (default: adaptive)
+            --iqr-factor FLOAT          IQR factor for outlier detection (default: 1.5)
+            --sigmoid-k FLOAT           Sigmoid steepness parameter (default: 1.0)
+            --output-dir PATH           Output directory (default: ./visualizations)
+            --help                      Show this help message
+
+        Examples:
+            # Generate all visualizations for a single file
+            classifier-visualize-verification-features --matrix-file features_S008192_D000000_R008192_ADC8_A02.npy
+
+            # Generate PDFs for specific feature at all grouping levels
+            classifier-visualize-verification-features --matrix-file features_S008192_D000000_R008192_ADC8_A02.npy --feature voltage
+
+            # Use z-score outlier detection with tanh sigmoid
+            classifier-visualize-verification-features --matrix-file features_S008192_D000000_R008192_ADC8_A02.npy --outlier-method zscore --sigmoid-method tanh
+        """
+        import argparse
+        import os
+        from pathlib import Path
+
+        parser = argparse.ArgumentParser(description='Generate visualizations for verification feature matrices')
+        parser.add_argument('--matrix-file', type=str, required=True, help='Path to verification feature .npy file')
+        parser.add_argument('--feature', type=str, help='Generate PDFs for specific feature')
+        parser.add_argument('--grouping', type=str, choices=['file_segment', 'segment', 'file', 'population'],
+                          help='Grouping level for PDFs (default: generate all)')
+        parser.add_argument('--outlier-method', type=str, default='iqr',
+                          choices=['iqr', 'zscore', 'modified_zscore', 'isolation_forest'],
+                          help='Outlier detection method (default: iqr)')
+        parser.add_argument('--sigmoid-method', type=str, default='adaptive',
+                          choices=['standard', 'tanh', 'adaptive', 'soft_clip'],
+                          help='Sigmoid squashing method (default: adaptive)')
+        parser.add_argument('--iqr-factor', type=float, default=1.5,
+                          help='IQR factor for outlier detection (default: 1.5)')
+        parser.add_argument('--sigmoid-k', type=float, default=1.0,
+                          help='Sigmoid steepness parameter (default: 1.0)')
+        parser.add_argument('--output-dir', type=str, default='./visualizations',
+                          help='Output directory (default: ./visualizations)')
+
+        try:
+            parsed_args = parser.parse_args(args)
+        except SystemExit:
+            return
+
+        # Validate matrix file exists
+        matrix_path = Path(parsed_args.matrix_file)
+        if not matrix_path.exists():
+            print(f"\n[ERROR] Matrix file not found: {matrix_path}")
+            return
+
+        if not matrix_path.suffix == '.npy':
+            print(f"\n[ERROR] Matrix file must be .npy format: {matrix_path}")
+            return
+
+        # Check for current experiment
+        if not self.current_experiment:
+            print("\n[ERROR] No experiment selected")
+            print("Use 'experiment-config-set --experiment-id <ID>' to select an experiment")
+            return
+
+        print(f"\n[INFO] Generating visualizations for verification features")
+        print(f"  Experiment ID: {self.current_experiment}")
+        print(f"  Matrix file: {matrix_path.name}")
+        print(f"  Outlier method: {parsed_args.outlier_method}")
+        print(f"  Sigmoid method: {parsed_args.sigmoid_method}")
+        print(f"  Output directory: {parsed_args.output_dir}")
+
+        try:
+            # Import visualizer
+            from visualize_verification_features import VerificationFeatureVisualizer
+
+            # Create output directory
+            output_dir = Path(parsed_args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Initialize visualizer
+            visualizer = VerificationFeatureVisualizer(
+                db_conn=self.db_conn,
+                output_dir=output_dir,
+                outlier_method=parsed_args.outlier_method,
+                sigmoid_method=parsed_args.sigmoid_method,
+                iqr_factor=parsed_args.iqr_factor,
+                sigmoid_k=parsed_args.sigmoid_k
+            )
+
+            print(f"\n[INFO] Initialized visualizer")
+            print(f"  Loaded {len(visualizer.label_map)} segment labels from database")
+
+            # Generate 3D scatter plots
+            print(f"\n[INFO] Generating 3D scatter plots...")
+            scatter_output = visualizer.plot_3d_scatter_multiversion(matrix_path)
+            print(f"[SUCCESS] 3D scatter plot saved: {scatter_output}")
+
+            # Generate PDF plots
+            if parsed_args.feature:
+                # Generate PDFs for specific feature
+                features_to_plot = [parsed_args.feature]
+            else:
+                # Generate PDFs for all features
+                import numpy as np
+                matrix = np.load(matrix_path)
+                features_to_plot = [name for name in matrix.dtype.names if name != 'segment_id']
+
+            grouping_levels = [parsed_args.grouping] if parsed_args.grouping else ['file_segment', 'segment', 'file', 'population']
+
+            print(f"\n[INFO] Generating PDF plots...")
+            print(f"  Features: {len(features_to_plot)}")
+            print(f"  Grouping levels: {grouping_levels}")
+
+            pdf_count = 0
+            for feature_name in features_to_plot:
+                for grouping in grouping_levels:
+                    try:
+                        pdf_output = visualizer.plot_pdf_multiversion(
+                            matrix_file=matrix_path,
+                            feature_name=feature_name,
+                            grouping_level=grouping
+                        )
+                        pdf_count += 1
+                        if pdf_count % 10 == 0:
+                            print(f"  Generated {pdf_count} PDFs...")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to generate PDF for {feature_name}/{grouping}: {e}")
+
+            print(f"[SUCCESS] Generated {pdf_count} PDF plots")
+
+            # Summary
+            print(f"\n[SUCCESS] Visualization complete")
+            print(f"  Output directory: {output_dir}")
+            print(f"  3D scatter plots: 1 file (18 subplots)")
+            print(f"  PDF plots: {pdf_count} files")
+            print(f"\n[INFO] All plots include 3 versions:")
+            print(f"  1. Original data (all points)")
+            print(f"  2. Outliers removed ({parsed_args.outlier_method})")
+            print(f"  3. Sigmoid squashed ({parsed_args.sigmoid_method})")
+
+        except ImportError as e:
+            print(f"\n[ERROR] Failed to import visualizer module: {e}")
+            print(f"[INFO] Ensure visualize_verification_features.py is in mldp_cli/src/")
+        except Exception as e:
+            print(f"\n[ERROR] Visualization failed: {e}")
             import traceback
             traceback.print_exc()
 

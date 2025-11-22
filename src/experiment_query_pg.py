@@ -939,7 +939,7 @@ class ExperimentQueryPG:
         # Labels
         file_labels = details.get('file_labels', [])
         if file_labels:
-            print(f"\n📁 File Labels:")
+            print(f"\nFile Labels:")
             for fl in file_labels:
                 print(f"  - {fl['experiment_label']} (ID: {fl['label_id']})")
         

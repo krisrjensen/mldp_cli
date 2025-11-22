@@ -520,7 +520,7 @@ class ExperimentQuery:
                    for item in details['segments']['by_position']]
             print(tabulate(data, headers=['Position', 'Count'], tablefmt='simple'))
         
-        print(f"\n📁 FILES")
+        print(f"\nFILES")
         print(f"Total: {details['files']['total']:,}")
         if details['files']['by_label']:
             print("\nBy Label:")

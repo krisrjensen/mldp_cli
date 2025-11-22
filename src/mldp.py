@@ -3,9 +3,15 @@
 Filename: mldp
 Author(s): Kristophor Jensen
 Date Created: 20250901_240000
-Date Revised: 20250901_240000
-File version: 0.0.0.1
+Date Revised: 20251116_000000
+File version: 2.1.0.17
 Description: Main launcher for MLDP CLI - supports both command and shell modes
+
+Changelog:
+v2.1.0.17 - Added classifier command group with generate-verification-features
+  - Integrated mpcctl_verification_feature_matrix.py with FeatureFunctionLoader
+  - Command: mldp classifier generate-verification-features
+  - Database-driven feature extraction for classifier verification
 """
 
 import sys

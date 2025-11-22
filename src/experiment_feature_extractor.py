@@ -95,6 +95,22 @@ class ExperimentFeatureExtractor:
             self.base_segment_path = Path("/Volumes/ArcData/V3_database")
             self.base_feature_path = Path("/Volumes/ArcData/V3_database")
             logger.info(f"Using DEFAULT data paths")
+
+        # Cache for feature_set_id -> experiment_feature_set_id mapping
+        # Pre-load all mappings at initialization to avoid repeated database queries
+        self._feature_set_id_cache = {}
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute("""
+                SELECT feature_set_id, experiment_feature_set_id
+                FROM ml_experiments_feature_sets
+                WHERE experiment_id = %s
+            """, (experiment_id,))
+            self._feature_set_id_cache = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.close()
+            logger.debug(f"Cached {len(self._feature_set_id_cache)} feature set ID mappings")
+        except Exception as e:
+            logger.warning(f"Could not pre-load feature set ID cache: {e}")
         
     def create_feature_fileset_table(self):
         """Create the feature fileset tracking table with normalized schema"""
@@ -227,6 +243,8 @@ class ExperimentFeatureExtractor:
     def _get_experiment_feature_set_id(self, feature_set_id: int) -> int:
         """Get experiment_feature_set_id from feature_set_id for current experiment
 
+        Uses cached mapping loaded at initialization to avoid repeated database queries.
+
         Args:
             feature_set_id: Feature set ID from ml_feature_sets_lut
 
@@ -236,23 +254,14 @@ class ExperimentFeatureExtractor:
         Raises:
             ValueError: If feature set not configured for this experiment
         """
-        cursor = self.db_conn.cursor()
-        try:
-            cursor.execute("""
-                SELECT experiment_feature_set_id
-                FROM ml_experiments_feature_sets
-                WHERE experiment_id = %s AND feature_set_id = %s
-            """, (self.experiment_id, feature_set_id))
+        # Use cached mapping instead of querying database
+        if feature_set_id in self._feature_set_id_cache:
+            return self._feature_set_id_cache[feature_set_id]
 
-            result = cursor.fetchone()
-            if not result:
-                raise ValueError(
-                    f"Feature set {feature_set_id} not configured for experiment {self.experiment_id}"
-                )
-
-            return result[0]
-        finally:
-            cursor.close()
+        # If not in cache, it's not configured for this experiment
+        raise ValueError(
+            f"Feature set {feature_set_id} not configured for experiment {self.experiment_id}"
+        )
 
     def _get_amplitude_method_ids(self) -> List[int]:
         """Get list of amplitude_processing_method_ids configured for this experiment
