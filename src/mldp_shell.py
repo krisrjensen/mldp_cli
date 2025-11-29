@@ -1171,7 +1171,7 @@ The pipeline is now perfect for automation:
 """
 
 # Version tracking
-VERSION = "2.0.18.87"  # MAJOR.MINOR.COMMIT.CHANGE
+VERSION = "2.0.18.88"  # MAJOR.MINOR.COMMIT.CHANGE
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -12761,24 +12761,27 @@ SETTINGS:
                     print("  You need to configure feature sets before creating classifier configs")
                     return
             else:
-                # Parse specific feature set IDs
+                # Parse specific feature set IDs (user provides feature_set_id, not experiment_feature_set_id)
                 try:
-                    feature_sets_list = [int(x.strip()) for x in feature_sets.split(',')]
+                    user_feature_set_ids = [int(x.strip()) for x in feature_sets.split(',')]
                 except ValueError:
                     print(f"[ERROR] Invalid feature sets: {feature_sets}")
                     return
 
-                # Validate feature sets exist for this experiment
-                for fs_id in feature_sets_list:
+                # Validate feature sets exist for this experiment and get experiment_feature_set_id
+                feature_sets_list = []
+                for fs_id in user_feature_set_ids:
                     cursor.execute("""
-                        SELECT 1
+                        SELECT experiment_feature_set_id
                         FROM ml_experiments_feature_sets
-                        WHERE experiment_id = %s AND experiment_feature_set_id = %s
+                        WHERE experiment_id = %s AND feature_set_id = %s
                     """, (self.current_experiment, fs_id))
 
-                    if not cursor.fetchone():
+                    result = cursor.fetchone()
+                    if not result:
                         print(f"[ERROR] Feature set {fs_id} not configured for experiment {self.current_experiment}")
                         return
+                    feature_sets_list.append(result[0])
 
             # STEP 7: If set_active, deactivate all other configs
             if set_active:
