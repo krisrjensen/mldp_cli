@@ -3,11 +3,15 @@
 Experiment Creator for MLDP CLI
 
 Filename: experiment_creator.py
-Author(s): Kristophor Jensen  
+Author(s): Kristophor Jensen
 Date Created: 20250907_191500
-Date Revised: 20250907_191500
-File version: 0.0.0.1
+Date Revised: 20251209_091500
+File version: 0.0.0.2
 Description: Creates experiments in ml_experiments table and populates junction tables
+
+Changes in v0.0.0.2:
+- Added _populate_segment_sizes() to populate ml_experiments_segment_sizes junction table
+- Fixed bug where segment sizes were not being saved, causing segment selector to ignore size filter
 """
 
 import psycopg2
@@ -57,6 +61,7 @@ class ExperimentCreator:
             self._populate_amplitude_methods(cursor, experiment_id, config)
             self._populate_decimations(cursor, experiment_id, config)
             self._populate_distance_functions(cursor, experiment_id, config)
+            self._populate_segment_sizes(cursor, experiment_id, config)
             
             # 3. Store segment selection config
             if hasattr(config, 'get_segment_selection_config'):
@@ -236,7 +241,38 @@ class ExperimentCreator:
                 ''', (next_id, experiment_id, function))
             
             logger.info(f"Added {len(distance_functions)} distance functions to experiment {experiment_id}")
-    
+
+    def _populate_segment_sizes(self, cursor, experiment_id: int, config):
+        """Populate ml_experiments_segment_sizes junction table"""
+
+        # Delete existing entries
+        cursor.execute(
+            'DELETE FROM ml_experiments_segment_sizes WHERE experiment_id = %s',
+            (experiment_id,)
+        )
+
+        # Get segment sizes from config
+        segment_sizes = config.segment_sizes if hasattr(config, 'segment_sizes') else [8192]
+
+        if segment_sizes:
+            # Get the next ID for this table
+            cursor.execute('SELECT COALESCE(MAX(experiment_segment_size_id), 0) FROM ml_experiments_segment_sizes')
+            next_id = cursor.fetchone()[0]
+
+            for segment_size in segment_sizes:
+                next_id += 1
+                # Validate and insert with explicit ID
+                cursor.execute('''
+                    INSERT INTO ml_experiments_segment_sizes (
+                        experiment_segment_size_id, experiment_id, segment_size_id, created_at
+                    )
+                    SELECT %s, %s, segment_size_id, NOW()
+                    FROM ml_segment_sizes_lut
+                    WHERE segment_size_n = %s
+                ''', (next_id, experiment_id, segment_size))
+
+            logger.info(f"Added {len(segment_sizes)} segment sizes to experiment {experiment_id}")
+
     def _update_segment_selection_config(self, cursor, experiment_id: int, config):
         """Update segment selection config if not already set"""
         
